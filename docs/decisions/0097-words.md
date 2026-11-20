@@ -1,9 +1,8 @@
 # 0097: Words — one truth, from every source to the files
 
-- Status: accepted (the owner, 2026-11-02, by question sets in 632's session: "We need a North Star. And we need a
-  robust road ahead"; earlier the same day in a5's session: mood is AudioMuse's, genre written back to the files,
-  style, mood and tags Cratarr's own, a Catalogue sheet for writing them). The server's parts are a5's, the page's
-  632's.
+- Status: accepted (the owner, 2026-11-02, by question sets: "We need a North Star. And we need a
+  robust road ahead"; earlier the same day: mood is AudioMuse's, genre written back to the files,
+  style, mood and tags Cratarr's own, a Catalogue sheet for writing them).
 - Date: 2026-11-02
 - Builds on: 0089 (facts set by hand), 0092 (one way to change files), 0.9.7's library words, 0.12's genre aliases,
   0095 (one way to say nothing)
@@ -54,11 +53,11 @@ switch (types and years, Settings › Libraries) and a second was planned for wo
 ## The road
 
 1. This decision (0.14).
-2. **The store** (a5, 0.14): each record's and track's words by kind, in layers with their sources; the files'
+2. **The store** (0.14): each record's and track's words by kind, in layers with their sources; the files'
    MOOD read again; the aliases folded.
 3. **Every reader on it** (0.14): crate conditions, search, the word crates, similarity, the filter, 0095's reasons;
    the two old stores gone.
-4. **The record's rows per kind** (632, 0.14).
+4. **The record's rows per kind** (0.14).
 5. **The controls** (0.15): the Catalogue sheet (writing, sources, aliases), Edit's style, mood and tags, a track's
    Edit, the words' menus; Health's differences per kind.
 

@@ -13,7 +13,7 @@
 </head>
 <body>
 <h1 style="font-size:1.2rem">Gapless lab (decision 0022)</h1>
-<p>Tap Start once and leave this page open in front. Tests then arrive from the ThinkBook, play silently and report
+<p>Tap Start once and leave this page open in front. Tests then arrive from the PC, play silently and report
 back by themselves.</p>
 <button id="start">Start</button>
 <pre id="log"></pre>
@@ -201,7 +201,7 @@ async function poll() {
         try { result = await run(job); } catch (e) { result = { error: String(e) }; }
         result.ua = navigator.userAgent;
         await fetch('/result?' + job.id, { method: 'POST', body: JSON.stringify(result) });
-        // The raw recording too (mono float32 at 44.1 kHz), for analysis on the ThinkBook.
+        // The raw recording too (mono float32 at 44.1 kHz), for analysis on the PC.
         const total = chunks.reduce((a, c) => a + c.length, 0), raw = new Float32Array(total);
         let off = 0;
         for (const c of chunks) { raw.set(c, off); off += c.length; }

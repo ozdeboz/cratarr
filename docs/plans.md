@@ -220,12 +220,12 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   (it knows a sound, not a track list), at most an amber hint where AcoustID knows nothing: a track that sounds
   unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
   miss too much. AudioMuse runs after import, so in Health, not on the intake card.
-- Mockups of the intake card first (632), then the server's checks and references (a5).
+- Mockups of the intake card first, then the server's checks and references.
 - *All of it in 0.14* (the owner, 2026-11-02): Discogs' and Bandcamp's track lists and lengths as references, not only
   MusicBrainz's; a record checked by hand its own reference for its type and year; references that disagree side by
   side, and one found by guessing confirmed once; where a record came from for Lidarr and Bandcamp too.
 
-**From SoulSync and DroppedNeedle (reviewed 2026-11-02, the HomeAssistant session, placed by 632).** The owner's rule:
+**From SoulSync and DroppedNeedle (reviewed 2026-11-02).** The owner's rule:
 0.14 stays light, only truly helpful bug fixes; the rest into 0.15 or 0.16, 0.17 only for a very good reason. Never
 anything in without the owner's tick (0080); never a chat room.
 

@@ -57,7 +57,7 @@ const undoing = (run: string | null | undefined) => !!run?.startsWith('r');
 export function runLine(r: FileRun): string {
   if (r.state === 'waiting') return undoing(r.id) ? 'Waiting to undo' : 'Waiting';
   if (r.state === 'writing') return `${undoing(r.id) ? 'Undoing' : 'Writing'} ${r.done.toLocaleString()} of ${r.of.toLocaleString()}`;
-  // A Keep's or a move's files moved, its library reading the record (a5, 2026-11-02): where to, as its title says it.
+  // A Keep's or a move's files moved, its library reading the record (2026-11-02): where to, as its title says it.
   if (r.state === 'adding') return `Adding to ${r.title.match(/ into (.+?):/)?.[1] ?? 'its library'}…`;
   const when = r.at ? time(r.at) : '';
   if (r.undone) return ['Undone', when].filter(Boolean).join(' · ');

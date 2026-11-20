@@ -1,5 +1,5 @@
 // Where a move goes by Cratarr's own handover (the owner, 2026-11-08: This device chosen on the phone, and the tablet and the
-// ThinkPad said nothing played, where showing the phone would be "seamless"): from the player the music plays on now to the one
+// laptop said nothing played, where showing the phone would be "seamless"): from the player the music plays on now to the one
 // chosen, both Cratarr's and connected. A handover tells every screen showing the one it left to follow it there; a stop there
 // and a play here tell none. Null where either end is not one of them: the page's own way then.
 

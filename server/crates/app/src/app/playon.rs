@@ -2635,7 +2635,7 @@ impl PlayOn {
         if !e.online() {
             tracing::warn!(target: "playon", player = name, command = command_name(&command).as_str(), reason = "offline", "command not delivered");
             // A pause or a stop while it is away is kept: back, its queue is given back paused, not playing on
-            // (2026-10-30: the ThinkPad started again playing what Home Assistant had paused while it was away).
+            // (2026-10-30: a laptop started again playing what Home Assistant had paused while it was away).
             if matches!(command, Command::Pause | Command::Stop { .. }) || (matches!(command, Command::Toggle) && e.report.playing) {
                 e.report.playing = false;
                 self.save.notify_one();
@@ -3880,14 +3880,14 @@ mod tests {
         let id = app.playlists.view(None).await.unwrap().into_iter().find(|p| p.name == "Restaurant de Lift").unwrap().id;
         assert!(id.starts_with("pl-"), "{id}");
         let p = &app.play_on;
-        let _page = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
+        let _page = p.connect_browser("Laptop", Some("tab-1")).unwrap();
         let play = |name: &str| Command::Play { from: PlayFrom { playlist: Some(name.into()), ..PlayFrom::default() }, tracks: None, index: 0, position_ms: 0, shuffle: false, paused: false, queue_id: None, queue_name: None };
         // Found and read, by its id: it holds nothing that plays (no library here), which is all it can say.
         for asked in ["Restaurant de Lift", "restaurant DE lift"] {
-            let r = p.command("ThinkPad", play(asked)).await;
+            let r = p.command("Laptop", play(asked)).await;
             assert!(matches!(&r, Err(ToggleError::Refused(_))), "{asked}: {r:?}");
         }
-        assert!(matches!(p.command("ThinkPad", play("Restaurant de Gare")).await, Err(ToggleError::UnknownPlaylist)));
+        assert!(matches!(p.command("Laptop", play("Restaurant de Gare")).await, Err(ToggleError::UnknownPlaylist)));
         assert_eq!(p.playlist_named("restaurant DE lift").await.unwrap(), id);
     }
 
@@ -3921,12 +3921,12 @@ mod tests {
     #[tokio::test]
     async fn a_page_quiet_past_a_heartbeat_gives_its_name_to_the_next() {
         let p = play_on().await;
-        let _page = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
-        assert!(matches!(p.connect_browser("ThinkPad", Some("tab-2")), Err(ToggleError::Refused(_))), "still heard from");
+        let _page = p.connect_browser("Laptop", Some("tab-1")).unwrap();
+        assert!(matches!(p.connect_browser("Laptop", Some("tab-2")), Err(ToggleError::Refused(_))), "still heard from");
         // The computer slept: the page before is quiet longer than its heartbeat.
-        p.entries().get_mut("ThinkPad").unwrap().heard = Instant::now().checked_sub(QUIET + Duration::from_secs(1)).unwrap();
-        let _woken = p.connect_browser("ThinkPad", Some("tab-2")).unwrap();
-        assert_eq!(p.entries()["ThinkPad"].page.as_deref(), Some("tab-2"));
+        p.entries().get_mut("Laptop").unwrap().heard = Instant::now().checked_sub(QUIET + Duration::from_secs(1)).unwrap();
+        let _woken = p.connect_browser("Laptop", Some("tab-2")).unwrap();
+        assert_eq!(p.entries()["Laptop"].page.as_deref(), Some("tab-2"));
     }
 
     /// The commands a player was told since last asked.
@@ -4119,15 +4119,15 @@ mod tests {
     async fn a_pause_while_away_gives_the_queue_back_paused() {
         let p = play_on().await;
         let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
-        let page = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
-        p.command("ThinkPad", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
-        p.report("ThinkPad", Report { index: 0, playing: true, ..Report::default() }).unwrap();
+        let page = p.connect_browser("Laptop", Some("tab-1")).unwrap();
+        p.command("Laptop", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
+        p.report("Laptop", Report { index: 0, playing: true, ..Report::default() }).unwrap();
         // The computer went away playing; Home Assistant paused it meanwhile.
         drop(page);
-        assert!(matches!(p.command("ThinkPad", Command::Pause).await, Err(ToggleError::Refused(_))));
-        let mut again = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
+        assert!(matches!(p.command("Laptop", Command::Pause).await, Err(ToggleError::Refused(_))));
+        let mut again = p.connect_browser("Laptop", Some("tab-1")).unwrap();
         said(&mut again);
-        p.report("ThinkPad", Report { index: -1, ..Report::default() }).unwrap();
+        p.report("Laptop", Report { index: -1, ..Report::default() }).unwrap();
         let back = told(&mut again);
         let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
         assert_eq!(play["paused"].as_bool(), Some(true), "paused, as it was told while away");

@@ -1,4 +1,4 @@
-// Sync play in a browser (decision 0037, amended 2026-10-23: the owner wanted the ThinkBook in the tablet's group): a
+// Sync play in a browser (decision 0037, amended 2026-10-23: the owner wanted the PC in the tablet's group): a
 // page follows a group, never leads one. It reads the group's sound as stamped records (`/api/groups/{leader}/
 // listen.pcm`, Snapcast::frames) and plays each at its moment on the browser's audio clock: the stamp, plus the group's
 // buffer, less its speaker delay, on Cratarr's time (a clock exchange with `/api/time`), at the moment the sound leaves

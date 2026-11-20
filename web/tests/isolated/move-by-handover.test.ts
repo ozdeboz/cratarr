@@ -1,5 +1,5 @@
 // A move between two of Cratarr's players goes by its own handover, so every screen showing the one it left follows the music
-// (the owner, 2026-11-08: This device chosen on the phone, and the tablet and the ThinkPad said nothing played, where showing the
+// (the owner, 2026-11-08: This device chosen on the phone, and the tablet and the laptop said nothing played, where showing the
 // phone would be "seamless"). lib/handoverEnds and lib/output's move, the real ones.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,16 +7,16 @@ import { readFileSync } from 'node:fs';
 
 const { handoverEnds } = await import('../../src/lib/handoverEnds.ts');
 const players = [
-  { name: 'ThinkPad', online: true },
+  { name: 'Laptop', online: true },
   { name: 'Phone', online: true },
   { name: 'Salon tablet', online: false },
 ];
 
 test('from the player driven or this device, to the one chosen or this device, both connected', () => {
-  assert.deepEqual(handoverEnds('local', 'ThinkPad', false, 'Phone', players), { from: 'ThinkPad', to: 'Phone' }, 'This device on the phone');
-  assert.deepEqual(handoverEnds('player:ThinkPad', null, true, 'Phone', players), { from: 'Phone', to: 'ThinkPad' }, 'from here to a player');
-  assert.equal(handoverEnds('player:Salon tablet', 'ThinkPad', false, 'Phone', players), null, 'one not connected: the page’s way');
-  assert.equal(handoverEnds('local', 'ThinkPad', false, null, players), null, 'this device no player of Cratarr’s');
+  assert.deepEqual(handoverEnds('local', 'Laptop', false, 'Phone', players), { from: 'Laptop', to: 'Phone' }, 'This device on the phone');
+  assert.deepEqual(handoverEnds('player:Laptop', null, true, 'Phone', players), { from: 'Phone', to: 'Laptop' }, 'from here to a player');
+  assert.equal(handoverEnds('player:Salon tablet', 'Laptop', false, 'Phone', players), null, 'one not connected: the page’s way');
+  assert.equal(handoverEnds('local', 'Laptop', false, null, players), null, 'this device no player of Cratarr’s');
   assert.equal(handoverEnds('player:Phone', null, true, 'Phone', players), null, 'to itself');
   assert.equal(handoverEnds('local', null, false, 'Phone', players), null, 'nothing plays anywhere it drives');
 });

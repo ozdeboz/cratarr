@@ -4,8 +4,7 @@
   being able to reason about why there are zero results … no streamlined way for managing the looks in a single place
   … not a unified way to offer users options … not a unified way in which the loading spinner or content visibility
   interact with each other, or the zero results message"; "popover element could have something to do with how we
-  should unify"; by question set: both, the errors fixed in 0.13 and this in 0.14). The page's parts are 632's, the
-  server's a5's.
+  should unify"; by question set: both, the errors fixed in 0.13 and this in 0.14).
 - Date: 2026-11-02
 - Builds on: 0.13's empty page search (the words' callout, "A2"); docs/ui-conventions.md (Loading, Empty); the truth
   principle (everything shows the truth)

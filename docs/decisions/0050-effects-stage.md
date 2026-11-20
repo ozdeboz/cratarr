@@ -164,7 +164,7 @@ lab); a new section may turn their way.
 
 ### Infinite zoom: the tunnel and the dive
 
-The owner tried both on the ThinkBook's preview (fc71f300: render.ts, fluid.ts and a page over
+The owner tried both on the PC's preview (fc71f300: render.ts, fluid.ts and a page over
 a made-up track) and wants both: "Basically, yes, I want both, so this is serious version 65 material."
 
 - **The tunnel**: the light kept from frame to frame is read a little nearer the middle each frame, so it streams

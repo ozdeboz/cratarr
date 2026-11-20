@@ -18,6 +18,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod sk4_upgrade;
+mod sk6_harness;
+use sk6_harness::*;
+
 const BIN: &str = env!("CARGO_BIN_EXE_cratarr-server");
 
 struct Server {
@@ -6013,6 +6017,530 @@ async fn a_want_of_an_album_whose_copy_went_is_fetched_end_to_end() {
     let r = mine["mine"].as_array().unwrap().iter().find(|r| r["id"] == request).cloned().expect("the request");
     assert!(!matches!(r["state"]["state"].as_str(), Some("done" | "delivered" | "arrived")), "{r}");
     assert_ne!(request_line(&data, request).as_deref(), Some("Already in the library"));
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Settings' Incoming library `incoming` set to take Soulseek's records (its fetcher `soulseek`), as an administrator sets it.
+fn soulseek_takes_incoming(data: &Path, incoming: &Path) {
+    let p = data.join("settings.json");
+    let mut s: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+    for l in s["sources"][0]["libraries"].as_array_mut().unwrap() {
+        if l["id"].as_str() == Some(&*incoming.to_string_lossy()) {
+            l["fetcher"] = json!("soulseek");
+        }
+    }
+    std::fs::write(&p, serde_json::to_vec_pretty(&s).unwrap()).unwrap();
+}
+
+/// What slskd at one address has seen (`OneAtATime`).
+#[derive(Default)]
+struct Seen {
+    in_flight: u32,
+    /// Each batch taken: its id, its user, how many reads it was given, whether it is done, in order.
+    batches: Vec<(String, String, u32, bool)>,
+    violations: Vec<String>,
+    /// Batches whose download the test let end (`OneAtATime::release`).
+    released: Vec<String>,
+    /// What a search is answered (`OneAtATime::answering`), and the searches made, by their text.
+    answers: Vec<Value>,
+    searches: Vec<String>,
+}
+
+const ONE_AT_A_TIME: &str = "Only one concurrent operation is permitted. Wait until the previous operation completes";
+
+/// slskd as it is (SK1.9, SK2.7: the `slskd_watching` of these scenarios, with their switches): it takes one operation at a time,
+/// each answered after `slow`; one that arrives while another is being answered gets 429, "Only one concurrent operation is
+/// permitted", and is a violation (Cratarr caused it); a batch asked of a user whose earlier batch still has a transfer not done is a
+/// violation too. A batch is done at its second read (`holding`: once the test releases it), its file then written into its folder
+/// under `completed`.
+#[derive(Clone)]
+struct OneAtATime {
+    url: String,
+    seen: Arc<std::sync::Mutex<Seen>>,
+}
+
+impl OneAtATime {
+    async fn start(completed: PathBuf, file: PathBuf, holding: bool, slow: u64) -> Self {
+        use axum::extract::Path as Part;
+        use axum::response::IntoResponse;
+        use axum::routing::{delete, get, post};
+        let seen: Arc<std::sync::Mutex<Seen>> = Arc::default();
+        fn busy(seen: &std::sync::Mutex<Seen>, what: String) -> bool {
+            let mut s = seen.lock().unwrap();
+            if s.in_flight > 0 {
+                s.violations.push(format!("an operation while another was answered: {what}"));
+                return true;
+            }
+            s.in_flight += 1;
+            false
+        }
+        let (a, b, c) = (seen.clone(), seen.clone(), seen.clone());
+        let take = move |axum::Json(body): axum::Json<Value>| {
+            let seen = a.clone();
+            async move {
+                let (user, batch) = (body["username"].as_str().unwrap_or_default().to_string(), body["id"].as_str().unwrap_or_default().to_string());
+                if busy(&seen, format!("a batch of {user}")) {
+                    return (axum::http::StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response();
+                }
+                tokio::time::sleep(Duration::from_millis(slow)).await;
+                let mut s = seen.lock().unwrap();
+                s.in_flight -= 1;
+                if s.batches.iter().any(|(_, u, _, done)| *u == user && !done) {
+                    s.violations.push(format!("a batch asked of {user} while their earlier one still has a transfer not done"));
+                }
+                s.batches.push((batch.clone(), user, 0, false));
+                axum::Json(json!({ "batch": { "id": batch, "transfers": [] }, "failures": [] })).into_response()
+            }
+        };
+        let read = move |Part(id): Part<String>| {
+            let (seen, completed, file) = (b.clone(), completed.clone(), file.clone());
+            async move {
+                let mut s = seen.lock().unwrap();
+                let released = s.released.contains(&id);
+                let Some(at) = s.batches.iter().position(|x| x.0 == id) else { return axum::http::StatusCode::NOT_FOUND.into_response() };
+                let x = &mut s.batches[at];
+                x.2 += 1;
+                if !x.3 && x.2 >= 2 && (!holding || released) {
+                    x.3 = true;
+                    let dir = completed.join("cratarr").join(&id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::copy(&file, dir.join(file.file_name().unwrap())).unwrap();
+                }
+                let (state, percent) = if x.3 { ("Completed, Succeeded", 100.0) } else { ("InProgress", 30.0) };
+                axum::Json(json!({ "id": id, "transfers": [{ "id": format!("{id}-0"), "filename": "x", "state": state, "percentComplete": percent }] })).into_response()
+            }
+        };
+        let dropped = move |Part((_user, _id)): Part<(String, String)>| {
+            let seen = c.clone();
+            async move {
+                if busy(&seen, "a transfer dropped".into()) {
+                    return (axum::http::StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response();
+                }
+                tokio::time::sleep(Duration::from_millis(slow)).await;
+                seen.lock().unwrap().in_flight -= 1;
+                axum::http::StatusCode::NO_CONTENT.into_response()
+            }
+        };
+        let (e, f, g) = (seen.clone(), seen.clone(), seen.clone());
+        let search = move |axum::Json(body): axum::Json<Value>| {
+            let seen = e.clone();
+            async move {
+                let text = body["searchText"].as_str().unwrap_or_default().to_string();
+                if busy(&seen, format!("a search for {text}")) {
+                    return (axum::http::StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response();
+                }
+                tokio::time::sleep(Duration::from_millis(slow)).await;
+                let mut s = seen.lock().unwrap();
+                s.in_flight -= 1;
+                s.searches.push(text);
+                axum::Json(json!({})).into_response()
+            }
+        };
+        let answered = move || {
+            let seen = f.clone();
+            async move { axum::Json(Value::Array(seen.lock().unwrap().answers.clone())) }
+        };
+        let forget = move || {
+            let seen = g.clone();
+            async move {
+                if busy(&seen, "a search forgotten".into()) {
+                    return (axum::http::StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response();
+                }
+                tokio::time::sleep(Duration::from_millis(slow)).await;
+                seen.lock().unwrap().in_flight -= 1;
+                axum::http::StatusCode::NO_CONTENT.into_response()
+            }
+        };
+        let app = axum::Router::new()
+            .route("/api/v0/searches", post(search))
+            .route("/api/v0/searches/{id}", get(|| async { axum::Json(json!({ "isComplete": true })) }).delete(forget))
+            .route("/api/v0/searches/{id}/responses", get(answered))
+            .route("/api/v0/transfers/downloads/batches", post(take))
+            .route("/api/v0/transfers/downloads/batches/{id}", get(read))
+            .route("/api/v0/transfers/downloads/{user}/{id}", delete(dropped))
+            .route("/api/v0/application", get(|| async { axum::Json(json!({ "server": { "isLoggedIn": true } })) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Self { url, seen }
+    }
+
+    /// The batches taken, in order: (batch, user, done).
+    fn batches(&self) -> Vec<(String, String, bool)> {
+        self.seen.lock().unwrap().batches.iter().map(|(b, u, _, d)| (b.clone(), u.clone(), *d)).collect()
+    }
+
+    fn violations(&self) -> Vec<String> {
+        self.seen.lock().unwrap().violations.clone()
+    }
+
+    /// Every search answered with `answers` (users' shares, as slskd gives them).
+    fn answering(&self, answers: Vec<Value>) {
+        self.seen.lock().unwrap().answers = answers;
+    }
+
+    /// `user`'s batch still going ends at its next read.
+    fn release(&self, user: &str) -> String {
+        let mut s = self.seen.lock().unwrap();
+        let batch = s.batches.iter().find(|(_, u, _, done)| u == user && !done).map(|x| x.0.clone()).unwrap_or_else(|| panic!("no batch of {user} going"));
+        s.released.push(batch.clone());
+        batch
+    }
+}
+
+/// A Want of root's for each of Tape Club's `albums`, on a running server (the Givens' approved requests):
+/// each request with its record, not had.
+async fn tape_club_wants(s: &Server, albums: &[String]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for album in albums {
+        out.push(s.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": album })).await["request"].clone());
+    }
+    out
+}
+
+/// Soulseek's list as the next start reads it: each request's record approved, picked for one folder of its user's (one file,
+/// `name`), judged by a list without recordings (Discogs' shape), so AcoustID is not asked.
+fn approved_items(data: &Path, requests: &[Value], users: &[String], name: &str) {
+    let items: Vec<Value> = requests
+        .iter()
+        .zip(users)
+        .enumerate()
+        .map(|(n, (r, user))| {
+            let folder = json!({ "user": user, "dir": "d", "format": "flac", "lossless": true, "free_slot": true, "queue": 0, "speed": 1, "extra": 0, "files": [{ "filename": format!("d\\{name}"), "size": 1 }] });
+            json!({ "id": format!("ss-{}", n + 1), "record": { "record": r["record"], "artist": "Tape Club", "album": r["album"], "request": r["id"] }, "state": "approved",
+                    "tracks": [{ "disc": 1, "position": 1, "title": "Slack Water" }], "folders": [folder], "chosen": 0 })
+        })
+        .collect();
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": items.len(), "items": items })).unwrap()).unwrap();
+}
+
+/// The e2e layout with Incoming taking Soulseek's records, slskd `OneAtATime` (`holding`, `slow`), root an administrator, Tape
+/// Club's `albums` wanted by root, the server stopped, and Soulseek's list holding them approved for `users`' folders: the server's
+/// data folder, Incoming's folder and the fake.
+async fn soulseek_upstream(root: &Path, albums: &[String], users: &[String], holding: bool, slow: u64) -> (PathBuf, PathBuf, OneAtATime) {
+    let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let incoming = library.join("incoming");
+    settings(&data, &[(&library.join("music"), "main"), (&incoming, "incoming")], &library.join("own"));
+    soulseek_takes_incoming(&data, &incoming);
+    let file = library.join("music/Glass Harbour/Tide Tables (2012)/01 Slack Water.flac");
+    let slskd = OneAtATime::start(completed.clone(), file.clone(), holding, slow).await;
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": slskd.url, "key": "k", "folder": completed, "enabled": true })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "root", "password": "root pw", "admin": true })).await;
+    s.act_as("root", "root pw").await;
+    let requests = tape_club_wants(&s, albums).await;
+    s.stop();
+    approved_items(&data, &requests, users, &file.file_name().unwrap().to_string_lossy());
+    (data, incoming, slskd)
+}
+
+/// SK1.9: on the real worker, picked records download at once (never two of one user at once) and are checked one at a time,
+/// each placed in Incoming in the order its download ended.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn picked_records_download_at_once_and_are_checked_one_at_a_time_end_to_end() {
+    let root = temp("sk19");
+    let albums: Vec<String> = ["Nowhere Fast", "Lost Tapes", "Late Shift", "Night Bus"].map(String::from).to_vec();
+    let users: Vec<String> = ["peer-a", "peer-a", "peer-b", "peer-c"].map(String::from).to_vec();
+    let (data, incoming, slskd) = soulseek_upstream(&root, &albums, &users, true, 0).await;
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    let state = |id: &'static str| {
+        let s = &s;
+        async move { s.get("/api/soulseek").await["items"].as_array().into_iter().flatten().find(|i| i["id"] == id).map(|i| i["state"].as_str().unwrap_or_default().to_string()) }
+    };
+    s.until("three downloads at once", Duration::from_secs(60), || async { slskd.batches().len() == 3 }).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let taken: Vec<String> = slskd.batches().into_iter().map(|b| b.1).collect();
+    assert_eq!(taken, ["peer-a", "peer-b", "peer-c"], "three POSTs before any release, peer-a's second waiting");
+    // Released in another order than the list's: each placed in the order its download ended.
+    let mut placed: Vec<&str> = Vec::new();
+    for (user, id) in [("peer-c", "ss-4"), ("peer-b", "ss-3"), ("peer-a", "ss-1"), ("peer-a", "ss-2")] {
+        if id == "ss-2" {
+            s.until("peer-a's second once its first ended", Duration::from_secs(60), || async { slskd.batches().len() == 4 }).await;
+        }
+        slskd.release(user);
+        s.until("its record placed", Duration::from_secs(90), || async { state(id).await.as_deref() == Some("placed") }).await;
+        for other in ["ss-1", "ss-2", "ss-3", "ss-4"] {
+            if other != id && !placed.contains(&other) {
+                assert_ne!(state(other).await.as_deref(), Some("placed"), "{other} placed before its download ended");
+            }
+        }
+        placed.push(id);
+    }
+    for album in &albums {
+        assert!(incoming.join("Tape Club").join(album).join("01 Slack Water.flac").exists(), "{album} in Incoming");
+    }
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// SK2.7: production's 20 approved records (17 peers, three of them twice) against a slskd that takes one operation at a time:
+/// all taken, the three second ones each after their peer's first ended, every one placed, and no `why` ever saying 429.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn twenty_picked_records_meet_no_429_end_to_end() {
+    let root = temp("sk27");
+    let albums: Vec<String> = (1..=20).map(|n| format!("Record {n:02}")).collect();
+    let mut users: Vec<String> = (1..=17).map(|n| format!("peer-{n:02}")).collect();
+    users.extend(["peer-01", "peer-03", "peer-05"].map(String::from));
+    let (data, _incoming, slskd) = soulseek_upstream(&root, &albums, &users, false, 300).await;
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    let mut whys: Vec<String> = Vec::new();
+    let started = Instant::now();
+    loop {
+        let items = s.get("/api/soulseek").await["items"].as_array().cloned().unwrap_or_default();
+        whys.extend(items.iter().filter_map(|i| i["why"].as_str().map(str::to_string)));
+        if items.len() == 20 && items.iter().all(|i| i["state"] == "placed") {
+            assert!(items.iter().all(|i| i["failed"] == json!([])), "nobody blamed");
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(300), "every item placed: {items:?}");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(!whys.iter().any(|w| w.contains("429") || w.contains("Too Many Requests")), "{whys:?}");
+    assert_eq!(slskd.batches().len(), 20, "20 batches taken, none twice");
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// SK3.11: a Want fetched from a certain folder with no tick. Alice wants Glass Harbour's "Tide Tables"; Soulseek's search finds
+/// peer-a's exact folder with a free slot; Cratarr starts it itself, checks it (a list without recordings: AcoustID not asked) and
+/// places it in Incoming; alice's request reads Arrived; nothing goes into Music. The Given as the round reads it (its fixes G4,
+/// G5): Music's copy of "Tide Tables" removed first, or the Want is had; the item's list written into Soulseek's queue
+/// between two starts, as the record's references cannot be read offline; the disk floor at 0.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_want_is_fetched_from_a_certain_folder_with_no_tick_end_to_end() {
+    use lofty::prelude::*;
+    let root = temp("sk311");
+    let (library, data, completed, served) = (root.join("library"), root.join("data"), root.join("slskd"), root.join("peer-a"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let music = library.join("music");
+    let tide = music.join("Glass Harbour").join("Tide Tables (2012)");
+    std::fs::create_dir_all(&served).unwrap();
+    let file = served.join("01 Slack Water.flac");
+    std::fs::copy(tide.join("01 Slack Water.flac"), &file).unwrap();
+    std::fs::remove_dir_all(&tide).unwrap();
+    let incoming = library.join("incoming");
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &library.join("own"));
+    soulseek_takes_incoming(&data, &incoming);
+    let secs = lofty::read_from_path(&file).unwrap().properties().duration().as_secs_f64();
+    let slskd = OneAtATime::start(completed.clone(), file.clone(), false, 0).await;
+    slskd.answering(vec![json!({ "username": "peer-a", "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 1_000_000,
+        "files": [{ "filename": r"Music\Glass Harbour\Tide Tables (2012)\01 Slack Water.flac", "size": std::fs::metadata(&file).unwrap().len(), "length": secs.round() as i64, "extension": "flac" }] })]);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": slskd.url, "key": "k", "folder": completed, "enabled": true })).await;
+    for (who, admin) in [("root", true), ("alice", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": who, "password": format!("{who} pw"), "admin": admin })).await;
+        if who == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let alice = s.sign_in("alice", "alice pw").await;
+    let want = alice.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Glass Harbour", "album": "Tide Tables" })).await["request"].clone();
+    s.stop();
+    // The item as the round makes it, its list (no recordings, as Discogs' and Bandcamp's) written in.
+    let item = json!({ "id": "ss-1", "record": { "record": want["record"], "artist": "Glass Harbour", "album": "Tide Tables", "year": 2012, "request": want["id"] },
+        "state": "waiting", "tracks": [{ "disc": 1, "position": 1, "title": "Slack Water", "length_ms": (secs * 1000.0).round() as i64 }] });
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": 1, "items": [item] })).unwrap()).unwrap();
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    let kept = || {
+        let s = &s;
+        async move { s.get("/api/soulseek").await["items"].as_array().into_iter().flatten().find(|i| i["id"] == "ss-1").cloned().unwrap_or(Value::Null) }
+    };
+    s.until("searched, found, started with no tick and placed", Duration::from_secs(120), || async { kept().await["state"] == "placed" }).await;
+    let i = kept().await;
+    assert_eq!((i["auto"].as_bool(), i["chosen"].as_i64(), &i["failed"]), (Some(true), Some(0), &json!([])), "Cratarr's own pick: {i}");
+    assert!(!slskd.seen.lock().unwrap().searches.is_empty(), "searched first");
+    assert!(incoming.join("Glass Harbour").join("Tide Tables (2012)").join("01 Slack Water.flac").exists(), "in Incoming");
+    assert!(!tide.exists() && !music.join("Glass Harbour").join("Tide Tables (2012) 2").exists(), "nothing in Music");
+    let alice = s.sign_in("alice", "alice pw").await;
+    s.until("alice's request arrived", Duration::from_secs(150), || async {
+        alice.get("/api/requests").await["mine"].as_array().into_iter().flatten().find(|r| r["id"] == want["id"]).is_some_and(|r| r["state"]["state"] == "arrived")
+    })
+    .await;
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// SK6's run: the e2e layout with Music's "Tide Tables" removed (the record not had), Incoming taking Soulseek's records, slskd sharing
+/// `shares`, root and alice, the floor at 0, alice's Wants of `wants` (album, year); then Soulseek's queue holding each as waiting
+/// with its list (no recordings), and the server started again acting as root. The server, its data folder, Music, Incoming,
+/// slskd's completed folder, the requests, Music's audio before, and when the second start began.
+async fn sk6_run(root: &Path, shares: &[&Share], busy: usize, wants: &[(&str, i32, &[(&str, u32)])]) -> (Server, PathBuf, PathBuf, PathBuf, PathBuf, Vec<Value>, Vec<String>, i64, Sharing) {
+    use reqwest::Method;
+    let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming) = (library.join("music"), library.join("incoming"));
+    std::fs::remove_dir_all(music.join(TIDE)).unwrap();
+    let in_music = audio_under(&music);
+    soulseek_settings(&data, &music, &incoming, &library.join("own"));
+    let slskd = slskd_sharing(&completed, shares).await;
+    if busy > 0 {
+        slskd.busy_first(busy as u32);
+    }
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(Method::PUT, "/api/settings/slskd", json!({ "url": slskd.url, "key": "k", "folder": completed, "enabled": true })).await;
+    for (who, admin) in [("root", true), ("alice", false)] {
+        s.ok(Method::POST, "/api/users", json!({ "name": who, "password": format!("{who} pw"), "admin": admin })).await;
+        if who == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let mut requests = Vec::new();
+    {
+        let alice = s.sign_in("alice", "alice pw").await;
+        for (album, year, _) in wants {
+            requests.push(alice.ok(Method::POST, "/api/requests/want", json!({ "artist": "Glass Harbour", "album": album, "year": year })).await["request"].clone());
+        }
+    }
+    s.stop();
+    let items: Vec<Value> = requests.iter().zip(wants).enumerate().map(|(n, (r, (_, year, list)))| waiting(&format!("ss-{}", n + 1), r, *year, list)).collect();
+    write_queue(&data, &items);
+    slskd.mark();
+    let started = now_secs();
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    (s, data, music, incoming, completed, requests, in_music, started, slskd)
+}
+
+/// SK6.1: a certain folder starts by itself, passes every check, and is placed whole (P/SCENARIOS-SK17-GATE.md).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_certain_folder_starts_by_itself_passes_every_check_and_is_placed_whole_end_to_end() {
+    let root = temp("sk6-1");
+    let cases = gate_cases(&root.join("cases"));
+    let peer_a = cases.share("peer-a", CLEAN, TIDE_DIR).speed(100);
+    let (s, data, music, incoming, completed, requests, in_music, started, slskd) = sk6_run(&root, &[&peer_a], 1, &[("Tide Tables", 2012, &TIDE_LIST)]).await;
+    let seen = sampled(&s);
+    let to = incoming.join(TIDE);
+    let fewest = whole_when_seen(&to);
+    s.until("ss-1 placed", Duration::from_secs(240), || async { kept_item(&data, "ss-1")["state"] == "placed" }).await;
+    let i = kept_item(&data, "ss-1");
+    assert_eq!((&i["chosen"], &i["auto"], &i["failed"], &i["set_aside"]), (&json!(0), &json!(true), &json!([]), &json!([])), "{i}");
+    for none in ["why", "batch", "checked", "placing", "notes"] {
+        assert!(i.get(none).is_none_or(|v| v.is_null() || v == &json!({})), "{none}: {i}");
+    }
+    assert!(i["placed_at"].as_i64() >= Some(started) && i["local_failures"] == 0 && i["place_failures"] == 0, "{i}");
+    let posts = slskd.posts();
+    assert_eq!(posts.iter().map(|p| (p.user.as_str(), p.status)).collect::<Vec<_>>(), [("peer-a", 429), ("peer-a", 200)]);
+    assert!(posts[0].batch == posts[1].batch && i.get("batch").is_none_or(Value::is_null));
+    assert_eq!(posts[1].files, peer_a.offered(), "its three files, in the list's order");
+    assert_eq!(slskd.dropped(), slskd.transfers_of(&posts[1].batch), "dropped after the check");
+    assert!(slskd.every_search_forgotten() && slskd.violations().is_empty(), "{:?}", slskd.violations());
+    assert!(as_it_lies(&to) == every_file(&peer_a.dir), "the three tracks byte for byte, and nothing else");
+    assert_eq!(fewest.get(), Some(3), "never seen partial");
+    assert!(hidden_left(&incoming).is_empty(), "no hidden folder left");
+    assert!(!completed.join("cratarr").join(&posts[1].batch).exists() && !data.join("soulseek-set-aside").exists());
+    assert_eq!(audio_under(&music), in_music, "nothing into Music");
+    assert!(seen.whys("ss-1").iter().all(|w| !w.contains("429") && !w.contains("Too Many Requests")), "{:?}", seen.whys("ss-1"));
+    let alice = s.sign_in("alice", "alice pw").await;
+    let id = requests[0]["id"].as_i64().unwrap();
+    s.until("alice's request arrived", Duration::from_secs(150), || async { state_of(&alice, id).await == "arrived" }).await;
+    let card = heard_card(&s, &s.incoming_album("Tide Tables").await, &incoming).await;
+    assert_eq!(sound(&card), ("green", "Every track decodes whole, without clipping or clicks"));
+    // A round on: had, and nothing more.
+    let asked = slskd.operations().len();
+    tokio::time::sleep(Duration::from_secs(70)).await;
+    assert_eq!(slskd.operations().len(), asked);
+    assert!(!incoming.join("Glass Harbour/Tide Tables (2012) 2").exists() && kept_item(&data, "ss-1")["state"] == "placed");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// SK6.2: a FLAC walled at 16 kHz is set aside, never placed, never counted as lossless; Harbour Lights' transcode, ranked first,
+/// is set aside and the real FLAC fetched by itself and placed (P/SCENARIOS-SK17-GATE.md).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_flac_walled_at_16_khz_is_set_aside_and_never_placed_end_to_end() {
+    let root = temp("sk6-2");
+    let cases = gate_cases(&root.join("cases"));
+    let peer_a = cases.share("peer-a", WALLED, TIDE_DIR);
+    let peer_c = cases.share("peer-c", WALLED, LIGHTS_DIR).speed(200);
+    let peer_d = cases.share("peer-d", CLEAN, LIGHTS_DIR).speed(100);
+    let (s, data, music, incoming, completed, requests, _in_music, _started, slskd) =
+        sk6_run(&root, &[&peer_a, &peer_c, &peer_d], 0, &[("Tide Tables", 2012, &TIDE_LIST), ("Harbour Lights", 2014, &LIGHTS_LIST)]).await;
+    s.until("ss-1 searched again, ss-2 placed", Duration::from_secs(300), || async {
+        let (one, two) = (kept_item(&data, "ss-1"), kept_item(&data, "ss-2"));
+        one["state"] == "waiting" && one["misses"] == 1 && two["state"] == "placed"
+    })
+    .await;
+    let walled = "Not lossless: it stops at 16 kHz";
+    let why: Value = TIDE_LIST.iter().enumerate().map(|(n, (t, _))| (format!("{:02} {t}.flac", n + 1), json!(walled))).collect::<serde_json::Map<_, _>>().into();
+    let one = kept_item(&data, "ss-1");
+    let aside = data.join("soulseek-set-aside").join("ss-1 peer-a");
+    assert_eq!((&one["failed"], &one["why"], one["local_failures"].as_i64()), (&json!(["peer-a"]), &json!("No folder holds every track of its release"), Some(0)), "{one}");
+    assert_eq!(one["set_aside"], json!([{ "user": "peer-a", "path": aside.display().to_string(), "why": why }]));
+    assert!(one["folders"].as_array().is_none_or(|f| f.iter().all(|f| f["user"] != "peer-a")), "no folder of peer-a's left: {one}");
+    assert!(one.get("notes").is_none_or(Value::is_null));
+    let mut set = every_file(&aside);
+    assert_eq!(serde_json::from_slice::<Value>(&set.remove("why.json").unwrap()).unwrap(), why);
+    assert!(set == every_file(&peer_a.dir), "set aside whole, as peer-a sent it");
+    assert!(!incoming.join(TIDE).exists() && !music.join(TIDE).exists() && hidden_left(&incoming).is_empty());
+    assert!(as_it_lies(&incoming.join(LIGHTS)) == every_file(&peer_d.dir), "the real FLAC placed, nothing else");
+    let walled_bytes: Vec<Vec<u8>> = every_file(&peer_a.dir).into_values().chain(every_file(&peer_c.dir).into_values()).collect();
+    for lib in [&incoming, &music] {
+        assert!(every_file(lib).values().all(|b| !walled_bytes.contains(b)), "no walled file in {}", lib.display());
+    }
+    assert_eq!((slskd.post_users_of(TIDE_DIR), slskd.post_users_of(LIGHTS_DIR)), (vec!["peer-a".to_string()], vec!["peer-c".to_string(), "peer-d".to_string()]));
+    let two = kept_item(&data, "ss-2");
+    assert_eq!((&two["failed"], two["set_aside"].as_array().unwrap().len(), &two["auto"]), (&json!(["peer-c"]), 1, &json!(true)), "{two}");
+    assert!(!completed.join("cratarr").exists() || std::fs::read_dir(completed.join("cratarr")).unwrap().next().is_none(), "no batch folder left");
+    let alice = s.sign_in("alice", "alice pw").await;
+    let (tide, lights) = (requests[0]["id"].as_i64().unwrap(), requests[1]["id"].as_i64().unwrap());
+    s.until("alice's Harbour Lights arrived", Duration::from_secs(150), || async { state_of(&alice, lights).await == "arrived" }).await;
+    assert!(!["arrived", "done", "delivered"].contains(&state_of(&alice, tide).await.as_str()), "Tide Tables not had");
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// SK6.3: clipping, a click and a pop at the very end pass, with notes (P/SCENARIOS-SK17-GATE.md).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_folder_with_only_clipping_a_click_and_a_pop_passes_with_notes_end_to_end() {
+    let root = temp("sk6-3");
+    let cases = gate_cases(&root.join("cases"));
+    let peer_a = cases.share("peer-a", NOTES, TIDE_DIR).speed(200);
+    let peer_b = cases.share("peer-b", CLEAN, TIDE_DIR).speed(100);
+    let (s, data, _music, incoming, _completed, requests, _in_music, _started, slskd) = sk6_run(&root, &[&peer_a, &peer_b], 0, &[("Tide Tables", 2012, &TIDE_LIST)]).await;
+    let seen = sampled(&s);
+    let fewest = whole_when_seen(&incoming.join(TIDE));
+    s.until("ss-1 placed", Duration::from_secs(240), || async { kept_item(&data, "ss-1")["state"] == "placed" }).await;
+    let i = kept_item(&data, "ss-1");
+    assert_eq!((&i["state"], &i["failed"], &i["set_aside"], &i["why"], &i["auto"]), (&json!("placed"), &json!([]), &json!([]), &Value::Null, &json!(true)), "{i}");
+    let notes = json!({ "02 Neap.flac": "Clipped at 0:01", "03 Spring Tide.flac": "A click at 0:01; a pop at the very end" });
+    assert_eq!(i["notes"], notes);
+    assert_eq!(s.get("/api/soulseek").await["items"].as_array().unwrap().iter().find(|x| x["id"] == "ss-1").unwrap()["notes"], notes);
+    assert!(as_it_lies(&incoming.join(TIDE)) == every_file(&peer_a.dir) && fewest.get() == Some(3), "placed whole, no note written into a file");
+    assert!(hidden_left(&incoming).is_empty());
+    assert_eq!(slskd.post_users(), ["peer-a"], "peer-b never asked");
+    let states = seen.states("ss-1");
+    // Once under way (picked, fetching, checked, placed: the sampler may miss a short download's fetching), never back.
+    let from = states.iter().position(|s| ["approved", "fetching", "checking", "placed"].contains(&s.as_str())).expect("seen under way");
+    assert!(states[from..].iter().all(|s| !["searching", "found", "waiting"].contains(&s.as_str())), "{states:?}");
+    let alice = s.sign_in("alice", "alice pw").await;
+    let id = requests[0]["id"].as_i64().unwrap();
+    s.until("alice's request arrived", Duration::from_secs(150), || async { state_of(&alice, id).await == "arrived" }).await;
+    let card = heard_card(&s, &s.incoming_album("Tide Tables").await, &incoming).await;
+    assert_eq!(sound(&card), ("amber", "Track 2: Clipped at 0:01; Track 3: A click at 0:01; a pop at the very end"));
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

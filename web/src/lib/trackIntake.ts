@@ -66,7 +66,7 @@ export function itemLine(item: IntakeItem, picked?: string, now = Math.floor(Dat
 }
 
 /** Where it went wrong, said at its row's end; the reason (the single-track gate's own sentence, some long) is its
- *  line, never squeezed beside it (a5, 2026-10-31). */
+ *  line, never squeezed beside it (2026-10-31). */
 export const itemEnd = (item: IntakeItem): string | null =>
   item.state === 'refused' ? 'Refused' : item.state === 'failed' ? 'Failed' : null;
 

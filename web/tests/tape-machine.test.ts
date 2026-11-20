@@ -1,4 +1,4 @@
-// The deck's machine as the page calls it in tape.wasm (lib/tape/deck: the rules crate's deck::next, a5's): what the
+// The deck's machine as the page calls it in tape.wasm (lib/tape/deck: the rules crate's deck::next): what the
 // page sends in and reads out says what the rules crate's own tests say, through the engine's numbers.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

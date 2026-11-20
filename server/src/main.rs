@@ -63,6 +63,7 @@ enum Mode {
     NewApiKey,
     MakeFixtures,
     MakeLayout,
+    MakeGateCases,
     Analyse,
     Signals,
     Beats,
@@ -71,7 +72,7 @@ enum Mode {
 }
 
 /// The known flags, as the answer to an unknown argument lists them.
-const KNOWN: &str = "--version | --healthcheck | --new-api-key <name> --out <file> | --make-fixtures <folder> | --make-layout <folder> | --analyse <music folder> --out <file> [--threads N] | --signals <file>... | --beats <file>... | none: the server";
+const KNOWN: &str = "--version | --healthcheck | --new-api-key <name> --out <file> | --make-fixtures <folder> | --make-layout <folder> | --make-gate-cases <folder> | --analyse <music folder> --out <file> [--threads N] | --signals <file>... | --beats <file>... | none: the server";
 
 /// The arguments after the program's name, read once (W4).
 fn mode(args: &[String]) -> Mode {
@@ -82,6 +83,7 @@ fn mode(args: &[String]) -> Mode {
         "--new-api-key" => Mode::NewApiKey,
         "--make-fixtures" => Mode::MakeFixtures,
         "--make-layout" => Mode::MakeLayout,
+        "--make-gate-cases" => Mode::MakeGateCases,
         "--analyse" => Mode::Analyse,
         "--signals" => Mode::Signals,
         "--beats" => Mode::Beats,
@@ -132,6 +134,7 @@ async fn main() -> Result<()> {
         }),
         Mode::MakeFixtures => make_and_leave("--make-fixtures", fixtures::make, args.get(1)),
         Mode::MakeLayout => make_and_leave("--make-layout", fixtures::make_layout, args.get(1)),
+        Mode::MakeGateCases => make_and_leave("--make-gate-cases", fixtures::gate_cases, args.get(1)),
         Mode::Analyse => std::process::exit(match analysis::batch::run(&args[1..]) {
             Ok(code) => code,
             Err(e) => {
@@ -283,7 +286,7 @@ async fn main() -> Result<()> {
     let linker = app.clone();
     crate::run::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
 
-    // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
+    // Decision 0035: the NAS keeps the analysis up to date (after a PC's first pass, or all of it).
     memwatch::start();
     app::analysis_pass::run(app.library.catalogue());
     // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).
@@ -409,5 +412,14 @@ mod tests {
         let image = include_str!("../../Dockerfile");
         assert!(image.contains(r#"ENTRYPOINT ["/cratarr-server"]"#), "the image starts the server with no argument");
         assert!(image.contains(r#"CMD ["/cratarr-server", "--healthcheck"]"#), "and checks it with --healthcheck");
+    }
+
+    /// `--make-gate-cases <folder>` is a known flag (W4), its own work, never a server (`fixtures::gate`).
+    #[test]
+    fn the_gate_cases_flag_is_known() {
+        let of = |args: &[&str]| mode(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        assert_eq!(of(&["--make-gate-cases", "/tmp/cases"]), Mode::MakeGateCases);
+        assert_eq!(of(&["--make-gate-cases"]), Mode::MakeGateCases, "its own usage line");
+        assert!(KNOWN.contains("--make-gate-cases <folder>"), "{}", KNOWN);
     }
 }

@@ -646,7 +646,7 @@
   /** Nothing, caused here: each cause a chip, the popover's tip on the one control that alone brings tracks back, or on
    *  the Filter button where it takes more than one (decision 0095; the owner, 2026-11-02: a crate empty by its
    *  heart or disc, "the user does not necessarily understand what's going on"). */
-  // What keeps every track out, asked when the panel shows none (a5's `blocked`): the true cause, not every cause that
+  // What keeps every track out, asked when the panel shows none (the server's `blocked`): the true cause, not every cause that
   // is on (the owner, 2026-11-02: "I want the real true attribution"; lib/attribution). The search is one of them.
   let blocked = $state.raw<{ for: string; of: ListBlocked } | null>(null);
   $effect(() => {

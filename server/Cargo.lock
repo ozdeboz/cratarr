@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-api"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -455,7 +455,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-app"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "alac-encoder",
  "anyhow",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-clients"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-core"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-gate"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "cratarr-clients",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-media"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-server"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-store"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
