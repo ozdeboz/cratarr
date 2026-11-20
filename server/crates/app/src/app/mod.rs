@@ -99,6 +99,7 @@ pub mod incomplete;
 pub mod track_fetch;
 // Bulk intake of missing tracks (0.13, decision 0080 amended).
 pub mod track_intake;
+pub mod track_intake_base;
 pub mod soulseek;
 pub mod runtime;
 pub mod runtime_base;
@@ -123,6 +124,8 @@ pub mod requests_host;
 mod app_requests;
 #[cfg(test)]
 mod served_tests_requests;
+#[cfg(test)]
+mod u1_tests_incoming;
 // Incoming's tests that run the one path on the whole app, moved up (the app split's phase 2).
 #[cfg(test)]
 mod incoming_tests_top;

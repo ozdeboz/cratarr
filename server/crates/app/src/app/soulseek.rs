@@ -83,7 +83,7 @@ const LOCAL_HOLD: i64 = 86_400;
 /// Folders a record shows, best first.
 const SHOWN: usize = 5;
 /// The shortest wait between two rounds of searches for one record (the ladder's "at once" still waits this).
-const ROUND_AT_LEAST: i64 = 15 * 60;
+pub(crate) const ROUND_AT_LEAST: i64 = 15 * 60;
 /// A file's length may be this far from its track's.
 const LENGTH_SLACK_MS: i64 = crate::slskd::LENGTH_SLACK_MS;
 /// A record held at its check is checked again after this long: each time decodes a file to ask AcoustID about it.
@@ -1678,7 +1678,7 @@ fn copy_gone(i: &Item, held: &BTreeMap<i64, (super::requests::Holding, bool)>) -
 }
 
 /// The next record to search: waiting and due, the longest waiting first.
-fn next_search() -> Option<String> {
+pub(crate) fn next_search() -> Option<String> {
     let t = now();
     kept(|k| next_to_search(k, t))
 }
@@ -1761,7 +1761,7 @@ async fn search(id: &str) {
 }
 
 /// [`search`], its list read through `read`, slskd as `ready` gives it (the tests' stand in).
-async fn search_in<R, F>(id: &str, cat: &Arc<crate::catalogue::Catalogue>, read: R, ready: impl std::future::Future<Output = Result<Slskd>>)
+pub(crate) async fn search_in<R, F>(id: &str, cat: &Arc<crate::catalogue::Catalogue>, read: R, ready: impl std::future::Future<Output = Result<Slskd>>)
 where
     R: Fn(crate::catalogue::records::Ref) -> F,
     F: std::future::Future<Output = Result<Option<super::references::Read>>>,
@@ -2840,7 +2840,7 @@ where
 }
 
 /// The files anywhere under `dir`.
-fn files_under(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut todo = vec![dir.to_path_buf()];
     while let Some(d) = todo.pop() {
@@ -3144,7 +3144,7 @@ fn set_aside(dir: &Path, id: &str, user: &str, why: &BTreeMap<String, String>, d
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Whose turn it is (round 1.3's review: M3's room and space arm, L3, L4).
@@ -5692,7 +5692,7 @@ mod tests {
 
     /// The workers' seams in turn for one item, as 0.17's one fetcher took it up (`fetch_from`, which the tests before round 1.3
     /// drove; they assert what they did): its start (the disks as they are), its download followed to its end, its check and placing.
-    async fn fetch_from<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, gate: G)
+    pub(crate) async fn fetch_from<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, gate: G)
     where
         G: Fn(PathBuf, ReleaseTrack) -> Fut,
         Fut: std::future::Future<Output = Result<f32>>,
@@ -7086,13 +7086,13 @@ mod tests {
 
     use std::collections::VecDeque;
 
-    use crate::app::track_intake::tests as bulk;
+    use crate::app::track_intake_base::testing as bulk;
     use crate::app::turn::{Paused, Turn};
     use crate::catalogue::records::Ref;
     use bulk::{Clock, FakeAcoustid, FakeSlskd, T0};
 
     /// A folder of the test's own with its list in it (`items`, its `soulseek.json`) and its Soulseek library, on this thread.
-    fn own_list(name: &str, items: Vec<Item>) -> PathBuf {
+    pub(crate) fn own_list(name: &str, items: Vec<Item>) -> PathBuf {
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-own-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
         std::fs::create_dir_all(&d).unwrap();
@@ -7104,20 +7104,20 @@ mod tests {
     }
 
     /// The test done: its list and its library kept nowhere, its folder gone.
-    fn own_done(d: &Path) {
+    pub(crate) fn own_done(d: &Path) {
         OWN.with(|o| *o.borrow_mut() = None);
         OWN_LIBRARY.with(|l| *l.borrow_mut() = None);
         std::fs::remove_dir_all(d).ok();
     }
 
     /// `soulseek.json` as written, its items by id.
-    fn on_disk(d: &Path) -> HashMap<String, Item> {
+    pub(crate) fn on_disk(d: &Path) -> HashMap<String, Item> {
         let k: Kept = serde_json::from_slice(&std::fs::read(d.join("soulseek.json")).unwrap()).unwrap();
         k.items.into_iter().map(|i| (i.id.clone(), i)).collect()
     }
 
     /// "Tide Tables"' list as a record's, each track ten seconds long, its recording as AcoustID's fake knows it.
-    fn tide_list() -> Vec<Track> {
+    pub(crate) fn tide_list() -> Vec<Track> {
         [(1, "Slack Water", "rec-slack"), (2, "Neap", "rec-neap"), (3, "Spring Tide", "rec-spring")]
             .into_iter()
             .map(|(n, title, rec)| Track { disc: 1, position: n, title: title.into(), length_ms: Some(10_000), recording: Some(rec.into()) })
@@ -7141,12 +7141,12 @@ mod tests {
     }
 
     /// slskd's answers to a search for `album`: `user`'s folder of it.
-    fn answers_of(user: &str, album: &str) -> serde_json::Value {
+    pub(crate) fn answers_of(user: &str, album: &str) -> serde_json::Value {
         serde_json::json!([{ "username": user, "files": folder_of(user, album).files, "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100 }])
     }
 
     /// Glass Harbour's `album` on the list as `id`, at `state`, its list read; its record and its request both `record`.
-    fn tn_item(id: &str, record: i64, album: &str, state: State) -> Item {
+    pub(crate) fn tn_item(id: &str, record: i64, album: &str, state: State) -> Item {
         Item {
             id: id.into(),
             record: Record { record, artist: "Glass Harbour".into(), album: album.into(), year: None, request: record },
@@ -7177,13 +7177,13 @@ mod tests {
     }
 
     /// `i` ticked: its folders `users`' (the first chosen), its batch `batch`.
-    fn ticked(i: Item, users: &[&str], batch: Option<&str>) -> Item {
+    pub(crate) fn ticked(i: Item, users: &[&str], batch: Option<&str>) -> Item {
         let folders = users.iter().map(|u| folder_of(u, &i.record.album)).collect();
         Item { folders, chosen: Some(0), batch: batch.map(Into::into), ..i }
     }
 
     /// `album`'s three files as slskd lands a batch of them (`<slskd>/cratarr/<batch>`), each a copy of `tone`.
-    fn landed(slskd_dir: &Path, batch: &str, album: &str, tone: &Path) {
+    pub(crate) fn landed(slskd_dir: &Path, batch: &str, album: &str, tone: &Path) {
         let at = slskd_dir.join(crate::slskd::FOLDER).join(batch);
         std::fs::create_dir_all(&at).unwrap();
         for f in folder_of("peer-a", album).files {
@@ -7192,13 +7192,13 @@ mod tests {
     }
 
     /// slskd as Soulseek's rounds have it (`track_fetch::slskd_on`): `slskd` while it is switched on, else why not.
-    async fn ready(slskd: &Slskd) -> Result<Slskd> {
+    pub(crate) async fn ready(slskd: &Slskd) -> Result<Slskd> {
         super::super::track_fetch::slskd_on()?;
         Ok(slskd.clone())
     }
 
     /// The next item the downloads' or the checks' worker takes up now (`next_of`): one held waits for its time.
-    fn next_fetch() -> Option<String> {
+    pub(crate) fn next_fetch() -> Option<String> {
         let t = now();
         kept(|k| next_of(&k.items, t))
     }
@@ -7217,7 +7217,7 @@ mod tests {
     }
 
     /// The gate as the server's (`gate_track`, background reading's switch with it), AcoustID asked through `heard` in `turn`.
-    fn gate_through(turn: Arc<Turn>, heard: Arc<FakeAcoustid>) -> impl Fn(PathBuf, ReleaseTrack) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f32>>>> {
+    pub(crate) fn gate_through(turn: Arc<Turn>, heard: Arc<FakeAcoustid>) -> impl Fn(PathBuf, ReleaseTrack) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f32>>>> {
         move |file, track| {
             let (turn, heard) = (turn.clone(), heard.clone());
             Box::pin(async move {
@@ -7225,121 +7225,6 @@ mod tests {
                 super::super::track_fetch::gate_track_with(&file, &track, lookup).await
             })
         }
-    }
-
-    /// A list read standing in for MusicBrainz's (`read_reference`): "Tide Tables"' list.
-    fn listed_by_musicbrainz(_: Ref) -> std::future::Ready<Result<Option<crate::app::references::Read>>> {
-        std::future::ready(Ok(Some((tide_list(), None, Default::default()))))
-    }
-
-    /// TN.5's world at t0, slskd at `url`: away until t0+120 (503 to all it is asked before then: slskd has no pause of its own in 0.17);
-    /// ss-1 waiting with its list read (a miss before), due; ss-2 waiting with no list yet, its MusicBrainz release to read, due; ss-7 at
-    /// its check with its files in slskd's folder, due, AcoustID to ask; the bulk queue's ti-1 queued.
-    struct Tn5 {
-        d: PathBuf,
-        cat: Arc<crate::catalogue::Catalogue>,
-        neap: i64,
-        fake: Arc<FakeSlskd>,
-        slskd: Slskd,
-        heard: Arc<FakeAcoustid>,
-        acoustid: Arc<Turn>,
-        intake: bulk::Through,
-    }
-
-    async fn tn5(name: &str, url: &str) -> Tn5 {
-        let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
-        let neap = cat.record_for_tests("Neap Season", 0);
-        assert!(cat.set_reference(&crate::serve::ids::record(neap), &Ref::new("musicbrainz", "release", "r-neap"), "link").unwrap());
-        let items = vec![
-            Item { misses: 1, ..tn_item("ss-1", 9101, "Tide Tables", State::Waiting) },
-            Item { tracks: Vec::new(), ..tn_item("ss-2", neap, "Neap Season", State::Waiting) },
-            Item { percent: 100.0, ..ticked(tn_item("ss-7", 9107, "Harbour Lights", State::Checking), &["peer-a"], Some("b7")) },
-        ];
-        let d = own_list(name, items);
-        let tone = bulk::tone(&d);
-        landed(&d.join("slskd"), "b7", "Harbour Lights", &tone);
-        let fake = Arc::new(FakeSlskd {
-            away_until: T0 + 120,
-            found: HashMap::from([("Glass Harbour Tide Tables", answers_of("peer-a", "Tide Tables")), ("Glass Harbour Neap Season", answers_of("peer-b", "Neap Season"))]),
-            folder: d.join("slskd"),
-            file: tone,
-            ..Default::default()
-        });
-        let slskd = bulk::slskd_at(url, &fake);
-        let given = slskd.search("Glass Harbour").await.unwrap_err();
-        assert!(matches!(crate::app::turn::class(&given), Failure::Away(_)), "the given: slskd away, its 503: {given:#}");
-        let heard = Arc::new(FakeAcoustid::default());
-        let intake = bulk::Through::new(&d, slskd.clone(), &heard);
-        bulk::start_with(&d, vec![bulk::waiting("ti-1", &bulk::tide_tables()[0])]);
-        Tn5 { d, cat, neap, fake, slskd, heard, acoustid: Arc::new(Turn::new(crate::app::turn::ACOUSTID)), intake }
-    }
-
-    /// The searcher, the fetcher and the bulk worker taking their work at `now` as their loops do (`next_search`, `next_fetch`, the bulk
-    /// queue's next step), each until it has none: the items taken, in turn. Lists read through `read`.
-    async fn rounds_at<R, F>(w: &Tn5, read: &R, now: i64) -> Vec<String>
-    where
-        R: Fn(Ref) -> F,
-        F: std::future::Future<Output = Result<Option<crate::app::references::Read>>>,
-    {
-        let mut took = Vec::new();
-        for _ in 0..5 {
-            let Some(id) = next_search() else { break };
-            search_in(&id, &w.cat, read, ready(&w.slskd)).await;
-            took.push(id);
-        }
-        for _ in 0..5 {
-            let Some(id) = next_fetch() else { break };
-            fetch_from(&id, &w.slskd, &w.d.join("slskd"), gate_through(w.acoustid.clone(), w.heard.clone())).await;
-            took.push(id);
-        }
-        for _ in 0..5 {
-            let Some(id) = bulk::worked(&w.intake, now).await else { break };
-            took.push(id);
-        }
-        took
-    }
-
-    /// TN.5: while slskd is away (until t0+120) the other sources' work goes on at once: MusicBrainz is asked for ss-2's release and its
-    /// list kept (the item's and the catalogue's), AcoustID is asked for ss-7's three files, and ss-7 is placed. Never a loop asleep
-    /// while that work waits: all of it done long before slskd is back, by tokio's clock too, slskd asked once for each and no more.
-    #[tokio::test(start_paused = true)]
-    async fn another_source_goes_on_while_one_is_paused() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
-        let (_pinned, _clock) = Clock::at_t0();
-        let w = tn5("goes-on", "http://192.168.1.20:5052").await;
-        let start = tokio::time::Instant::now();
-        let asked = Mutex::new(Vec::new());
-        let musicbrainz = |r: Ref| {
-            asked.lock().unwrap().push((r.source.clone(), r.value.clone(), tokio::time::Instant::now() - start));
-            listed_by_musicbrainz(r)
-        };
-        assert_eq!(rounds_at(&w, &musicbrainz, T0).await, ["ss-1", "ss-2", "ss-7", "ti-1"]);
-
-        // MusicBrainz asked for ss-2's release at once, its list kept.
-        let mb = asked.lock().unwrap().clone();
-        assert_eq!(mb.iter().map(|(s, v, _)| (s.as_str(), v.as_str())).collect::<Vec<_>>(), [("musicbrainz", "r-neap")]);
-        assert!(mb[0].2 < Duration::from_secs(1), "asked at once: {:?}", mb[0].2);
-        let held = on_disk(&w.d);
-        assert_eq!(held["ss-2"].tracks, tide_list(), "the item's list");
-        let kept_lists = w.cat.reference_tracks(w.neap).unwrap();
-        assert!(kept_lists.iter().any(|(s, l)| s == "musicbrainz" && l.len() == 3), "the catalogue's: {kept_lists:?}");
-        // AcoustID asked for ss-7's three files, and ss-7 placed in its library.
-        let acoustid = w.heard.asked.lock().unwrap().clone();
-        assert_eq!(acoustid.len(), 3, "{acoustid:?}");
-        assert!(acoustid.iter().all(|(at, when)| *at == T0 && *when - start < Duration::from_secs(5)), "{acoustid:?}");
-        let ss7 = &held["ss-7"];
-        assert_eq!((ss7.state, ss7.batch.as_deref(), ss7.failed.len()), (State::Placed, None, 0));
-        let placed = files_under(Path::new(ss7.placed.as_deref().expect("placed")));
-        assert_eq!(placed.iter().filter(|p| p.extension().is_some_and(|e| e == "flac")).count(), 3, "{placed:?}");
-        // No loop asleep: the rounds done long before slskd is back; ss-1 and ss-2 held a round as away holds a search, slskd asked once
-        // for each (the given, ss-1's and ss-2's searches, ss-7's transfers at its check, ti-1's search), each answered 503.
-        assert!(tokio::time::Instant::now() - start < Duration::from_secs(10), "{:?}", tokio::time::Instant::now() - start);
-        assert_eq!((held["ss-1"].due, held["ss-2"].due), (T0 + ROUND_AT_LEAST, T0 + ROUND_AT_LEAST));
-        assert_eq!(w.fake.asked.lock().unwrap().len(), 5, "slskd asked once for each, away");
-        assert!(w.fake.violations.lock().unwrap().is_empty(), "{:?}", w.fake.violations.lock().unwrap());
-        assert!(w.heard.violations.lock().unwrap().is_empty(), "{:?}", w.heard.violations.lock().unwrap());
-        bulk::done(&w.d);
-        own_done(&w.d);
     }
 
     /// The 0.17-shaped list (`soulseek.json`), one item in each state as production's store holds them (Placed, Found, Waiting,
