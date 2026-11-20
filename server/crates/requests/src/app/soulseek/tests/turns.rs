@@ -21,7 +21,7 @@ fn a_found_record_held_for_room_or_space_reads_waiting_in_those_words() {
 /// the record waits a round, as with slskd away. No miss, no five-minute or longer wait of a miss, no 429 in its why.
 #[tokio::test]
 async fn a_search_slskd_keeps_busy_past_its_wait_is_no_miss() {
-    let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+    let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
     let slskd = Scripted::new().answers(Vec::new()).responses_busy(1_000);
     waiting_with("ss-turns-l3", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
     with_item("ss-turns-l3", |i| i.misses = 2);
@@ -40,7 +40,7 @@ async fn a_search_slskd_keeps_busy_past_its_wait_is_no_miss() {
 /// look slskd answers drops it, and that record goes.
 #[tokio::test]
 async fn a_batch_let_go_unread_keeps_its_users_turn_till_it_is_dropped() {
-    let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+    let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
     let d = data_folder("turns-l4");
     let slskd = Scripted::new().hold_all(0.0);
     picked("ss-turns-l4-1", &["peer-a", "peer-b"]);

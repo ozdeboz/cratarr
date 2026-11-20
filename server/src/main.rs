@@ -49,6 +49,9 @@ fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -
 
 #[cfg(test)]
 mod whole_router;
+// What Home Assistant reads of Cratarr, pinned (HA-CONTRACT-0.18).
+#[cfg(test)]
+mod home_assistant;
 
 
 /// What the arguments ask (W4): with none, the server; a known flag, its own work; anything else, nothing at all. So a flag

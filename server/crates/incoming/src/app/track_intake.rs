@@ -897,7 +897,7 @@ pub(crate) mod tests {
     /// `failed`, a file set aside, the next candidate (peer-b's) fetched, a question to a source before its deadline.
     #[tokio::test(start_paused = true)]
     async fn slskd_away_holds_the_track_and_fails_nothing() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let (_pinned, clock) = Clock::at_t0();
         let d = fresh("held");
         let tracks = tide_tables();
@@ -992,7 +992,7 @@ pub(crate) mod tests {
     /// deadline lengthened.
     #[tokio::test(start_paused = true)]
     async fn a_restart_mid_pause_asks_nothing_early() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let (_pinned, clock) = Clock::at_t0();
         let d = fresh("restart");
         let tracks = tide_tables();
@@ -1058,7 +1058,7 @@ pub(crate) mod tests {
     /// written again holds every field it had, as it had it, and none for a pause (the deadline is `due`; `paused_until` a view).
     #[tokio::test]
     async fn the_queues_read_back_unchanged_after_the_turns() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let d = fresh("015");
         let raw = include_str!("../../../../tests/fixtures/0.15/track-intake.json");
         std::fs::write(d.join("track-intake.json"), raw).unwrap();

@@ -1367,7 +1367,7 @@ mod tests {
     /// the preview (Q34).
     #[test]
     fn a_record_not_had_is_a_page_not_playable() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let _one = crate::app::switches::TEST_STATE.blocking_write();
         let was = crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, true);
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let record = cat.record_for_tests("Night Walks", 0);

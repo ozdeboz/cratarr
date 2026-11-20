@@ -1227,14 +1227,14 @@ pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String,
 pub struct TestState {
     was: Vec<(&'static str, bool)>,
     held: i64,
-    _one: tokio::sync::MutexGuard<'static, ()>,
+    _one: tokio::sync::RwLockWriteGuard<'static, ()>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
 impl TestState {
     pub async fn set() -> TestState {
         use super::switches::{BACKGROUND, BANDCAMP, DISCOGS, MUSICBRAINZ, TEST_STATE, set_for_tests};
-        let one = TEST_STATE.lock().await;
+        let one = TEST_STATE.write().await;
         let was = [MUSICBRAINZ, DISCOGS, BANDCAMP, BACKGROUND].into_iter().map(|name| (name, set_for_tests(name, true))).collect();
         TestState { was, held: crate::bandcamp::hold_for_tests(0), _one: one }
     }
@@ -1628,7 +1628,7 @@ pub mod tests {
     /// X3: with Discogs switched off, a Discogs reference is passed over as MusicBrainz's is: nothing is asked of Discogs.
     #[tokio::test]
     async fn with_discogs_off_a_record_is_judged_by_its_next_list() {
-        let _one = super::super::switches::TEST_STATE.lock().await;
+        let _one = super::super::switches::TEST_STATE.write().await;
         let was = super::super::switches::set_for_tests(super::super::switches::DISCOGS, false);
         let read = read_reference(Ref::new("discogs", "release", "2000009")).await;
         super::super::switches::set_for_tests(super::super::switches::DISCOGS, was);
@@ -1639,7 +1639,7 @@ pub mod tests {
     /// kept: Bandcamp's reference says it is switched off, and nothing is asked of Bandcamp.
     #[tokio::test]
     async fn with_bandcamp_off_a_record_is_judged_by_its_next_list() {
-        let _one = super::super::switches::TEST_STATE.lock().await;
+        let _one = super::super::switches::TEST_STATE.write().await;
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let record = wanted(&cat, "Further", &[("bandcamp", "album", "https://grouch.bandcamp.com/album/further"), ("discogs", "release", "2000011")]);
         cat.set_counting(record, Some("bandcamp"), false).unwrap();

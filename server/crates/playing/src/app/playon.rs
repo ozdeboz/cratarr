@@ -1390,6 +1390,12 @@ impl PlayOn {
         }
     }
 
+    /// The webhooks the player list is pushed to, nothing written (the tests': `save_settings` keeps them in `players.json`).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_webhooks_for_tests(&self, webhooks: Vec<String>) {
+        self.settings.lock().unwrap_or_else(|p| p.into_inner()).webhooks = webhooks;
+    }
+
     /// A player connects: the commands for it come out of the returned stream, which closes the connection when it
     /// is dropped (the player went away). A second connection under the same name replaces the first.
     fn connect_as(self: &Arc<Self>, name: &str, kind: PlayerKind, page: Option<&str>, conn: Option<&str>) -> Result<Commands, ToggleError> {
