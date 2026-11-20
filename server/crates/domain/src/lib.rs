@@ -4,6 +4,7 @@
 
 pub mod arrival;
 pub mod can;
+pub mod when;
 
 /// The holding, the one had rule, and the pairing it reads: in the rules crate, since the device runs them too (§14, X28).
 pub use cratarr_rules::{assign, holding};
