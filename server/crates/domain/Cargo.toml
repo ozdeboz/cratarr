@@ -1,0 +1,19 @@
+[package]
+name = "cratarr-domain"
+description = "Cratarr's pure domain rules: who may do what with a record, its copies and its arrivals, and the arrival's machine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+# Pure (DOMAIN-CORE §14): no I/O, no clock, no async, no app or store crate. It reads only what it is handed.
+[dependencies]
+cratarr-rules.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

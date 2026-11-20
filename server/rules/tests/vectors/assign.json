@@ -1,0 +1,990 @@
+[
+  {
+    "about": "PAIR01.1: the crossing case, each track 1 000 off its file",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 181000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 179000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 182000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.1: the crossing case, the files listed the other way round",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 181000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 179000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 182000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.1: the twin with no tie, 2 000 (the slack's edge) and 1 000",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 178000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 179000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 182000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.2: exact matches, listed 03, 01, 02",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\03 Low Water.flac",
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\02 Landing.flac",
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.3 (a): 3 000 off, no pair",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 253000
+      }
+    ],
+    "pairs": []
+  },
+  {
+    "about": "PAIR01.3 (b): another title at Landing's length is never paired",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\03 Breakwater.flac",
+        "title": "Breakwater",
+        "disc": null,
+        "number": 3,
+        "length_ms": 240000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.4 (a): two pairs at 4 000 before one at 0",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 182000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 180000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 182000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 184000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.4 (b), SK3.3 (d): the straight pairs, never the crossed",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 181000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 181000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.5 (a): both within the slack, the file at Pier's place",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 251500
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": null,
+        "length_ms": 253000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.5 (b2): fewer pairs by title alone win over the least difference",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 182000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 3,
+        "length_ms": 184000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": null
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 182000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\03 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 3,
+        "length_ms": 184000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\04 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 4,
+        "length_ms": 186000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        3
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.6 (b): fewer files than tracks, the files as rows",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\02 Landing.flac",
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.6 (c): an empty folder",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      }
+    ],
+    "files": [],
+    "pairs": []
+  },
+  {
+    "about": "PAIR01.12 (b): a timed file of the same title before the untimed one",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": null
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\02 Landing.flac",
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\03 Low Water.flac",
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": null,
+        "length_ms": 251000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        3
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.13 (b): a list with no lengths pairs by title, then place",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": null
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": null
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 300000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.14 (a): two titles of one length, the titles part them",
+    "tracks": [
+      {
+        "title": "Intro",
+        "disc": null,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "title": "Outro",
+        "disc": null,
+        "number": 2,
+        "length_ms": 60000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Outro.flac",
+        "title": "Outro",
+        "disc": null,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Intro.flac",
+        "title": "Intro",
+        "disc": null,
+        "number": 2,
+        "length_ms": 60000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.14 (b): one title, one length, the place breaks the tie",
+    "tracks": [
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      },
+      {
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 180000
+      }
+    ],
+    "files": [
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\02 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 2,
+        "length_ms": 180000
+      },
+      {
+        "key": "q\\Kite Theory\\Quiet Hours\\01 Untitled.flac",
+        "title": "Untitled",
+        "disc": null,
+        "number": 1,
+        "length_ms": 180000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        0
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.15 (a): two discs' Intros, each its own disc's",
+    "tracks": [
+      {
+        "title": "Intro",
+        "disc": 1,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "title": "Harbour",
+        "disc": 1,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Intro",
+        "disc": 2,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "title": "Tide",
+        "disc": 2,
+        "number": 2,
+        "length_ms": 300000
+      }
+    ],
+    "files": [
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD2\\01 Intro.flac",
+        "title": "Intro",
+        "disc": 2,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD2\\02 Tide.flac",
+        "title": "Tide",
+        "disc": 2,
+        "number": 2,
+        "length_ms": 300000
+      },
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD1\\01 Intro.flac",
+        "title": "Intro",
+        "disc": 1,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD1\\02 Harbour.flac",
+        "title": "Harbour",
+        "disc": 1,
+        "number": 2,
+        "length_ms": 240000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        2
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        1
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.15 (e): the lengths decide over the disc folders",
+    "tracks": [
+      {
+        "title": "Intro",
+        "disc": 1,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "title": "Harbour",
+        "disc": 1,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Intro",
+        "disc": 2,
+        "number": 1,
+        "length_ms": 75000
+      },
+      {
+        "title": "Tide",
+        "disc": 2,
+        "number": 2,
+        "length_ms": 300000
+      }
+    ],
+    "files": [
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD2\\01 Intro.flac",
+        "title": "Intro",
+        "disc": 2,
+        "number": 1,
+        "length_ms": 60000
+      },
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD2\\02 Tide.flac",
+        "title": "Tide",
+        "disc": 2,
+        "number": 2,
+        "length_ms": 300000
+      },
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD1\\01 Intro.flac",
+        "title": "Intro",
+        "disc": 1,
+        "number": 1,
+        "length_ms": 75000
+      },
+      {
+        "key": "m\\Glass Harbour\\Long Water\\CD1\\02 Harbour.flac",
+        "title": "Harbour",
+        "disc": 1,
+        "number": 2,
+        "length_ms": 240000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        3,
+        1
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.16 (a): a bonus file past the list is left over",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\02 Landing.flac",
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\03 Low Water.flac",
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\04 Breakwater (Bonus Track).flac",
+        "title": "Breakwater (Bonus Track)",
+        "disc": null,
+        "number": 4,
+        "length_ms": 200000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        2
+      ]
+    ]
+  },
+  {
+    "about": "PAIR01.16 (b): a hidden track inside the last file, 452 s off, never paired",
+    "tracks": [
+      {
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 260000
+      }
+    ],
+    "files": [
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\01 Pier.flac",
+        "title": "Pier",
+        "disc": null,
+        "number": 1,
+        "length_ms": 250000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\02 Landing.flac",
+        "title": "Landing",
+        "disc": null,
+        "number": 2,
+        "length_ms": 240000
+      },
+      {
+        "key": "a\\Glass Harbour\\Sea Wall\\03 Low Water.flac",
+        "title": "Low Water",
+        "disc": null,
+        "number": 3,
+        "length_ms": 712000
+      }
+    ],
+    "pairs": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ]
+  }
+]
