@@ -203,7 +203,7 @@ pub struct AlbumMore {
     pub have: Option<String>,
     /// The account's newest request of it, whatever its status, as the Requests page shows it (C54).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<super::requests::View>,
+    pub request: Option<super::requests_base::View>,
     /// Its labels as About shows them (C54; F9, `labels::LabelOf`): a record's each by its id for life; a Bandcamp album's by its
     /// name, the one label of it where exactly one has it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
