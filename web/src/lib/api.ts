@@ -2297,6 +2297,8 @@ export type Task = {
 };
 type Started = { task: Task };
 export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
+/** Health › Activity (RN; administrators'): every job that runs or waits (lib/activityRows). */
+export const getActivity = () => quietly<{ jobs: import('./activityRows').ActivityJob[] }>('/api/activity');
 /** An album's numbers as a release has them (0.9.6; Health's track numbers): where from, whether its discs stay
  *  (a CD's, a CD-sized digital release's) or run on as one (vinyl, cassette), each track now and after. */
 export type Renumbering = {
