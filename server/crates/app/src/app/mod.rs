@@ -56,6 +56,10 @@ pub mod fixes;
 pub mod fix_plans;
 #[cfg(test)]
 mod every_copy;
+#[cfg(test)]
+mod backup_list_tests;
+#[cfg(test)]
+mod file_words_tests;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
@@ -113,6 +117,7 @@ pub mod visuals;
 pub mod file_facts_base;
 pub mod file_runs_base;
 mod incoming_base;
+pub mod listening_base;
 mod playlists_base;
 mod playon_base;
 mod queue_base;

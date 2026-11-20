@@ -88,7 +88,7 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
 }
 
 /// `proposal`, from these words.
-fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
+pub(super) fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
     let field = field_of(kind);
     let cat = serve.catalogue();
     let roots = cat.folders();
@@ -182,11 +182,11 @@ pub async fn apply(app: &Arc<super::App>, plan: &str, albums: Vec<String>, stamp
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::app::words::store::Word;
 
-    fn w(word: &str, sources: &[Source]) -> Word {
+    pub(crate) fn w(word: &str, sources: &[Source]) -> Word {
         Word { word: word.into(), sources: sources.to_vec() }
     }
 
@@ -208,24 +208,6 @@ mod tests {
             assert!(proposal(&serve, kind, None).unwrap().files.is_empty(), "no words stored: nothing to write");
         }
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// A word is the record's or its track's: every copy's file gets it, and a copy on tracks of its own the record's.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_word_reaches_every_copy_and_its_undo_takes_it_out() {
-        use super::super::every_copy::{app, tag, two_copies, undone, written};
-        use super::super::words::store::{KindWords, Words};
-        for shared in [true, false] {
-            let (c, app) = (two_copies(&format!("words-{shared}"), shared), app(&format!("words-{shared}")).await);
-            let words = Words { kinds: vec![KindWords { kind: Kind::Mood, hand: false, words: vec![w("Calm", &[Source::Hand])] }], tracks: Vec::new() };
-            let stored = super::super::words::Stored { records: std::collections::HashMap::from([(c.album.clone(), words)]), ..Default::default() };
-            let p = proposal_of(&c.serve, &stored, Kind::Mood, None).unwrap();
-            assert_eq!(p.files.len(), 4, "every file of both copies");
-            let token = written(&app, p).await;
-            assert!(c.files().iter().all(|f| tag(f, "mood") == ["Calm"]));
-            undone(&app, &token).await;
-            assert!(c.files().iter().all(|f| tag(f, "mood").is_empty()));
-        }
     }
 
     #[test]

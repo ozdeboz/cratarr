@@ -503,7 +503,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let me = owner(&s)?;
             // One way in for listening (decision 0068).
-            crate::app::listening::heard(&s, &me, track, &crate::userdata::Heard::counted(at)).await?;
+            crate::app::listening_base::heard(&s, &me, track, &crate::userdata::Heard::counted(at)).await?;
             Ok(())
         })
     }
