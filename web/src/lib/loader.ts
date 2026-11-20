@@ -21,3 +21,19 @@ export function waitShows(since: number | null, now: number): 'answer' | 'kept' 
 export const LOADER_LARGE = 96;
 export const LOADER_SMALL = 40;
 export const loaderSizeIn = (el: Element): number => (el.closest('.player-side, .playlist-layer, .sheet') ? LOADER_SMALL : LOADER_LARGE);
+
+/** The room under a page's loader for the line of what it waits for (lib/PageLoading's `.under`: 16 px under the mark, then a
+ *  line), kept whether a line shows or not, so the line coming moves nothing. */
+export const LOADER_LINE = 40;
+
+/** Where a page's loader sits (lib/PageLoading): its height and its mark's offset from its top, from what can be seen of its
+ *  container (`top`, `bottom`), where the loader starts in it (`at`), its mark's size and the room the line under the mark takes
+ *  (`under`, measured; LOADER_LINE at least). The mark in the middle of its own room, as much room above it as below, and lower
+ *  only where what comes before it reaches that far; the line's room counted in the height (the review of 1.2, low 12: on a phone
+ *  the words hung past the box), so the line always ends inside it. */
+export function loaderFit(v: { top: number; bottom: number; at: number; mark: number; under: number }): { height: number; top: number } {
+  const room = Math.max(LOADER_LINE, v.under);
+  const middle = Math.max((Math.max(v.top, v.at) + v.bottom) / 2, v.at + v.mark / 2);
+  const height = Math.round(Math.max(v.bottom - v.at, v.mark * 2 + room));
+  return { height, top: Math.round(Math.max(0, Math.min(middle - v.at - v.mark / 2, height - v.mark - room))) };
+}

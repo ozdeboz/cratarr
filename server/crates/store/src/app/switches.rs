@@ -52,9 +52,11 @@ pub fn set_for_tests(name: &'static str, on: bool) -> bool {
 }
 
 /// Tests: the one lock for the state the whole process shares that some tests change (Y12): the switches, Bandcamp's and Discogs'
-/// holds, a fetcher said down. A test that changes one, or reads one another test changes, takes it, and puts back what was there.
+/// holds, a fetcher said down, the epoch clock pinned (`moment::PINNED`). A test that changes one takes it to write, and puts back
+/// what was there; a test that only reads one another test changes takes it to read, beside the other readers (TS01: a hundred
+/// of Soulseek's tests read `now()` alone, and waited for each other in turn).
 #[cfg(any(test, feature = "test-support"))]
-pub static TEST_STATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub static TEST_STATE: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 /// A connection switched on or off. Blocking.
 pub fn set_on(name: &'static str, on: bool) -> Result<()> {

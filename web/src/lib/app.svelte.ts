@@ -7,6 +7,8 @@ import { onSignInAsked } from './reach.svelte';
 // ways (android/README.md). There the music plays in the app itself; the page is its face (localPlayer.svelte.ts).
 
 type Port = { postMessage(message: string): void; onmessage: ((event: { data: string }) => void) | null };
+/** Sync's Mobile data (CU13): all, all but downloads, or none. */
+export type MobileData = 'all' | 'notDownloads' | 'none';
 type Message = { type: string; [key: string]: unknown };
 
 const port = typeof window === 'undefined' ? null : ((window as unknown as { CratarrApp?: Port }).CratarrApp ?? null);
@@ -45,8 +47,9 @@ export const appInfo = $state({
   batteryAllowed: true,
   /** Downloads as the files are, or as Cratarr's smaller copies (decision 0033, step 4). */
   downloadQuality: 'original' as 'original' | 'smaller',
-  /** Downloads over mobile data too, not only over Wi-Fi. */
-  downloadOverMobile: false,
+  /** What this device does on mobile data (CU12, CU13; Q4 (a)): everything, everything but downloads (as before), or nothing:
+   *  Cratarr out of reach there. The app's Prefs.mobileData. */
+  mobileData: 'notDownloads' as MobileData,
   /** Kept on this device (decision 0038): the storage budget in GB, 0 for no limit; syncing only while charging. */
   syncBudgetGb: 20,
   syncOnlyCharging: false,
@@ -146,7 +149,7 @@ export const setDevice = (change: {
   preferLocal?: boolean;
   stayReady?: boolean;
   downloadQuality?: string;
-  downloadOverMobile?: boolean;
+  mobileData?: MobileData;
   syncBudgetGb?: number;
   syncOnlyCharging?: boolean;
   levelling?: boolean;
@@ -218,7 +221,7 @@ if (port) {
       appInfo.stayReady = m.stayReady === true;
       appInfo.batteryAllowed = m.batteryAllowed !== false;
       appInfo.downloadQuality = m.downloadQuality === 'smaller' ? 'smaller' : 'original';
-      appInfo.downloadOverMobile = m.downloadOverMobile === true;
+      appInfo.mobileData = m.mobileData === 'all' ? 'all' : m.mobileData === 'none' ? 'none' : 'notDownloads';
       appInfo.syncBudgetGb = typeof m.syncBudgetGb === 'number' ? m.syncBudgetGb : 20;
       appInfo.syncOnlyCharging = m.syncOnlyCharging === true;
       appInfo.levelling = m.levelling !== false;

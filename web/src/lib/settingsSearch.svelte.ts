@@ -6,6 +6,7 @@ import { HOME_PARTS, PROFILE_ROWS } from './prefs.svelte';
 import { matches } from './search';
 import { IMPORT_WHAT } from './settings/editor.svelte';
 import type { SettingsSection } from './settingsSections.svelte';
+import { basicShows, groupTier } from './settings/tiers';
 
 /** The lists a part shows that are kept in another file (the owner, 2026-10-25: Home's sections, the profile's rows…
  *  found by their labels as every other row is). */
@@ -76,9 +77,11 @@ export function loadSettingsWords(): Promise<void> {
   return loading;
 }
 
-/** The names in `part` that hold every word searched, and whether the part's own title does. */
-export function settingsMatches(part: SettingsSection, title: string, words: string[]): { title: boolean; rows: string[] } {
+/** The names in `part` that hold every word searched, and whether the part's own title does. In Basic (`basic`, CU23) only what
+ *  shows is found: never a row Basic hides, nor a group that goes whole (lib/settings/tiers). */
+export function settingsMatches(part: SettingsSection, title: string, words: string[], basic = false): { title: boolean; rows: string[] } {
   // As every search reads (lib/search, decision 0072): `words` read by it, each a word's start.
   const has = (s: string) => matches(words, s);
-  return { title: has(title), rows: (settingsWords.by?.[part] ?? []).filter(has) };
+  const shows = (s: string) => !basic || (basicShows(part, s) && groupTier(part, s) !== 'advanced');
+  return { title: has(title), rows: (settingsWords.by?.[part] ?? []).filter((s) => has(s) && shows(s)) };
 }

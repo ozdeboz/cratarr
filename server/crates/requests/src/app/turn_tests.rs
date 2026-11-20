@@ -62,7 +62,7 @@ mod turn {
     #[tokio::test]
     async fn every_failure_has_its_class() {
         use crate::app::switches::{BACKGROUND, MUSICBRAINZ as MUSICBRAINZ_ON, TEST_STATE, set_for_tests};
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let pinned = Pinned::now();
         let t0 = pinned.0;
         let null = serde_json::Value::Null;
@@ -214,7 +214,7 @@ mod turn {
     async fn the_switches_are_not_pauses() {
         use crate::app::switches::{BACKGROUND, BANDCAMP as BANDCAMP_ON, MUSICBRAINZ as MUSICBRAINZ_ON, PAUSED, SLSKD as SLSKD_ON, TEST_STATE, set_for_tests};
         use crate::catalogue::records::Ref;
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let t0 = Pinned::now();
         let t0 = t0.0;
         let discogs = Turn::new(DISCOGS);

@@ -52,7 +52,7 @@ mod bandcamp {
     /// played.
     #[tokio::test]
     async fn a_bot_check_holds_bandcamp_for_a_day() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
         let now = crate::app::moment::now_secs();
         hold();

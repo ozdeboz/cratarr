@@ -213,15 +213,6 @@ export async function playAlbums(list: { source: string; a: ListedAlbum }[], mod
   else await port().enqueue(tracks, mode, source);
 }
 
-/** An album artist's credits, lower case: "A & B, C feat. D" is a, b, c and d (and the credit whole). */
-export const artistCredits = (artist: string | null) =>
-  (artist ?? '')
-    .toLowerCase()
-    .split(/\s*(?:,|;|\/|&|\band\b|\bx\b|\bfeat\.?|\bft\.|\bfeaturing\b|\bvs\.?|\bwith\b)\s*/)
-    .map((c) => c.trim())
-    .filter(Boolean)
-    .concat((artist ?? '').toLowerCase().trim());
-
 /** Whom a credit is under: "A feat. B" is A's (the albums are under the main artist). */
 export const mainArtist = (artist: string | null | undefined) => artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() || null;
 

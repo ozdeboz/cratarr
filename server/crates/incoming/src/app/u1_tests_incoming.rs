@@ -96,7 +96,7 @@ mod soulseek {
     /// while that work waits: all of it done long before slskd is back, by tokio's clock too, slskd asked once for each and no more.
     #[tokio::test(start_paused = true)]
     async fn another_source_goes_on_while_one_is_paused() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let (_pinned, _clock) = Clock::at_t0();
         let w = tn5("goes-on", "http://192.168.1.20:5052").await;
         let start = tokio::time::Instant::now();

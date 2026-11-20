@@ -15,6 +15,8 @@ export const reach = $state({
   kept: false,
   /** The device says it has no network at all: the browser's word, or the app's (lib/away's `network`). */
   noNetwork: false,
+  /** The app says it is on mobile data with Sync's Mobile data set to None (CU12, CU13): reads come from the device. */
+  mobileOff: false,
 });
 
 /** A status with no words from Cratarr in it that means it was not reached, rather than that it refused. */
@@ -69,9 +71,11 @@ export function unreached() {
 /** Called each time the device says it has a network again. */
 export const whenNetwork = new Set<() => void>();
 
-/** The device's own word on its network: with none, out of reach at once. */
-export function networkSaid(online: boolean) {
+/** The device's own word on its network: with none, out of reach at once. `mobileOff`: the app's, on mobile data with Mobile data
+ *  set to None (CU13), where it says so (a browser's word leaves it): what reads depend on is told, as they move to the device. */
+export function networkSaid(online: boolean, mobileOff?: boolean) {
   reach.noNetwork = !online;
+  if (mobileOff !== undefined) reach.mobileOff = mobileOff;
   if (!online) return unreached();
   for (const f of whenNetwork) f();
 }
@@ -79,7 +83,14 @@ export function networkSaid(online: boolean) {
 if (typeof window !== 'undefined') {
   // No network at all: out of reach at once, before any request finds out (the app says it too: lib/app's `network`).
   addEventListener('offline', () => networkSaid(false));
-  addEventListener('online', () => networkSaid(true));
+  // Waking (RC01): the network back, or the page shown again, looks for Cratarr once, past any hold.
+  addEventListener('online', () => {
+    networkSaid(true);
+    void wake();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void wake();
+  });
   if (navigator.onLine === false) reach.away = reach.noNetwork = true;
   // A read of the service worker's reached Cratarr again.
   navigator.serviceWorker?.addEventListener('message', (e) => {
@@ -105,6 +116,25 @@ export function refused() {
   reach.away = true;
 }
 
+/** Why the background requests are held now, in words for the console; null where nothing holds them. */
+export function heldWhy(): string | null {
+  if (signOutOwed()) return 'a sign-out is owed, until Cratarr hears it';
+  const left = refusedUntil - Date.now();
+  return left > 0 ? `refused (401 or 403), for ${Math.ceil(left / 1000)} s more` : null;
+}
+/** The hold said last: its end, or Infinity for a sign-out owed. */
+let saidHold: number | null = null;
+/** Says in the console why background requests are held, once a hold (a renewed one is another): the desktop shell's log keeps
+ *  it (RC01: "unreachable" for hours, and nothing said why). */
+export function sayHeld() {
+  const hold = signOutOwed() ? Infinity : refusedUntil;
+  if (hold === saidHold) return;
+  const why = heldWhy();
+  if (!why) return;
+  saidHold = hold;
+  console.warn(`Cratarr: background requests held back: ${why}`);
+}
+
 /** How long a look for Cratarr waits for its answer. */
 const LOOK_MS = 5_000;
 
@@ -115,6 +145,26 @@ export async function lookForCratarr(): Promise<boolean> {
   try {
     const res = await fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(LOOK_MS) });
     if (notReached(res.status)) return false;
+    reached();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A wake's looks at least this far apart: a page shown again and again knocks once a minute at most, never through a ban. */
+const WAKE_APART_MS = 60_000;
+let wokeAt = -Infinity;
+/** On waking (the network back, the page shown again): one look for Cratarr past any hold (RC01: after a sleep, 0.16.2's
+ *  desktop app said "unreachable" for hours while Cratarr was well). Its answer lifts a refusal's hold, as Cratarr answering is
+ *  no ban; the proxy's bare refusal, or none, leaves it. Whether Cratarr answered. */
+export async function wake(now = Date.now()): Promise<boolean> {
+  if (now - wokeAt < WAKE_APART_MS) return false;
+  wokeAt = now;
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(LOOK_MS) });
+    if (notReached(res.status)) return false;
+    refusedUntil = 0;
     reached();
     return true;
   } catch {

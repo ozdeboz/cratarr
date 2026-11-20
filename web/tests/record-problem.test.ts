@@ -61,6 +61,6 @@ test('F28.2: Health and the sheet draw one piece; Health keeps no tools of its o
   assert.match(health, /<HealthItemTools\n    \{problem\}/);
   assert.match(src('RecordProblemSheet.svelte'), /<HealthItemTools\n          \{problem\}/);
   assert.doesNotMatch(health, /HealthMissing|HealthReconnect|HealthIncoming|HealthRenumber|HealthEvents|RecordReferences/);
-  assert.match(health, /import \{ LEVEL, fullOf \} from '\.\/healthTools';/, 'the level words from one map');
+  assert.match(health, /import \{ LEVEL, allGone, fullOf, goneTracks \} from '\.\/healthTools';/, 'the level words from one map (LS05: and All gone by its rule)');
   assert.match(src('HealthItemTools.svelte'), /itemTools\(problem, x, \{/);
 });

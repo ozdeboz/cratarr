@@ -152,6 +152,7 @@
   import { shownIn } from './sources.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
+  import { moreArtists } from './albumMore';
   import SimilarAlbums from './SimilarAlbums.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import SimilarLists from './SimilarLists.svelte';
@@ -2925,8 +2926,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <!-- As Symfonium's album: the artist's other albums, the similar ones, then About; seen through a search, its
          About only. -->
     {#if !own}
-      {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
-      {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
+      <!-- One row per artist chip, in the chips' order, each leaving out what a row above shows (MORE, lib/albumMore). -->
+      {@const by = moreArtists(albumChipsShown, listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist))}
+      {#each by as artist, i (artist)}<AlbumMore source={album.source} album={album.id} {artist} above={by.slice(0, i)} />{/each}
       {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
     {/if}
     {#if notHad}

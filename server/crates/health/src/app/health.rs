@@ -1089,7 +1089,7 @@ mod tests {
     /// O5: the background reading paused by an administrator is said on Health.
     #[test]
     fn background_reading_paused_shows_on_health() {
-        let _one = super::super::switches::TEST_STATE.blocking_lock();
+        let _one = super::super::switches::TEST_STATE.blocking_write();
         let shown = || check_connections(super::super::moment::now_secs()).into_iter().find(|f| f.key == "connections:background-paused");
         let was = super::super::switches::set_for_tests(super::super::switches::BACKGROUND, false);
         let paused = shown();

@@ -22,6 +22,8 @@ export const fullOf = (x: HealthItem) => (x.album?.[0] === 'cratarr' ? x.album[1
 export type ToolKind =
   | 'playlistMissing'
   | 'reconnect'
+  | 'gone'
+  | 'heldGone'
   | 'incoming'
   | 'renumber'
   | 'references'
@@ -46,6 +48,9 @@ const cratarr = (x: HealthItem) => x.album?.[0] === 'cratarr';
 const WHEN: [ToolKind, (problem: string, x: HealthItem, c: ToolsContext) => boolean][] = [
   ['playlistMissing', (_, x) => !!x.playlist],
   ['reconnect', (p, x) => p === 'library:missing' && !!x.track],
+  // Gone (LS05): a missing track let go, an administrator's word; a held library's walk let through, likewise.
+  ['gone', (p, x, c) => p === 'library:missing' && !!x.track && !!c.admin],
+  ['heldGone', (p, x, c) => p === 'library:held' && !!x.folder && !!c.admin],
   ['incoming', (p, x) => p.startsWith('incoming:') && !!x.album],
   ['renumber', (p, x, c) => RENUMBERS.has(p) && cratarr(x) && !!c.renumber],
   ['references', (p, x) => p === 'library:references' && cratarr(x)],
@@ -59,6 +64,12 @@ const WHEN: [ToolKind, (problem: string, x: HealthItem, c: ToolsContext) => bool
   ['changeCover', (p, x, c) => p === 'library:cover' && cratarr(x) && !!c.admin],
   ['goTo', (_, x, c) => (!!x.album || !!x.playlist) && !(c.here && x.album?.[1] === c.here)],
 ];
+
+/** Missing music's tracks among `items`, each one "All gone" lets go (LS05): only tracks, never a parked library or a held
+ *  retired one, which have no track of their own. */
+export const goneTracks = (items: readonly HealthItem[]) => items.flatMap((x) => (x.track ? [x.track] : []));
+/** Whether a finding offers "All gone" (LS05): Missing music with tracks to let go, to an administrator. */
+export const allGone = (problem: string, items: readonly HealthItem[], admin: boolean) => problem === 'library:missing' && admin && goneTracks(items).length > 0;
 
 /** What can be done for `item` of `problem` (a finding's key, a files kind's `files-<kind>`), in today's order. */
 export function itemTools(problem: string, item: HealthItem, ctx: ToolsContext = {}): ToolKind[] {

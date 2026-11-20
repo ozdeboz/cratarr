@@ -1665,7 +1665,7 @@ mod tests {
     #[tokio::test]
     async fn acoustid_is_not_asked_while_background_reading_is_paused() {
         use super::super::switches::{BACKGROUND, PAUSED, TEST_STATE, set_for_tests};
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let d = dir("trackfile-paused");
         let from = d.join("cratarr/Old drive/06 Bloom.flac");
         old_flac(&from, "trackfile-paused");
@@ -1828,7 +1828,7 @@ mod tests {
     #[tokio::test]
     async fn clipping_a_pop_and_clicks_are_notes_not_refusals() {
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-        let _one = crate::app::switches::TEST_STATE.lock().await; // the gate reads background reading's switch, which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // the gate reads background reading's switch, which TN's tests move
         let asked = AtomicUsize::new(0);
         let asked = &asked;
         let knows = |recording: &'static str| {

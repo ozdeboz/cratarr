@@ -10,7 +10,7 @@ import { loadCapabilities } from './capabilities.svelte';
 import { reach } from './reach.svelte';
 import { settleSignOut } from './signOut.svelte';
 
-const ALL: Permissions = { offline: true, playlists: true, share: true, links: true, request: true, manage_requests: true };
+const ALL: Permissions = { offline: true, playlists: true, share: true, links: true, request: true, manage_requests: true, upload: true };
 
 export const me = $state<Me & { known: boolean }>({ known: false, name: null, admin: false, permissions: ALL });
 

@@ -19,6 +19,7 @@
   import ConfirmSheet from './ConfirmSheet.svelte';
   import { count, ed, QUALITIES, USES, type Draft } from './editor.svelte';
   import FolderBrowser from './FolderBrowser.svelte';
+  import { folderMoved, libraryOf } from './libraryIds';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
@@ -92,9 +93,19 @@
     if (!now.includes(path)) d.values.folders = [...now, path];
   }
 
-  function removeFolder(d: Draft, path: string) {
-    ed.setUse(d, path, 'unused');
-    d.values.folders = chosenOf(d).filter((p) => p !== path);
+  function removeFolder(l: Lib) {
+    ed.setUse(l.d, l.id, 'unused');
+    l.d.values.folders = chosenOf(l.d).filter((p) => p !== l.where);
+  }
+  // Change folder (CU18): the same library, its id, use, name, dot and switches kept, in another folder; the server reads a path
+  // changed on an id as a move (CU17), not as one library gone and another come.
+  let moving = $state<Lib | null>(null);
+  function moveFolder(l: Lib, to: string) {
+    moving = null;
+    const folders = folderMoved(chosenOf(l.d), l.where, to);
+    if (!folders) return;
+    l.d.values.folders = folders;
+    ed.setPath(l.d, l.id, to);
   }
 
   // Each chosen folder's state, asked for as the list shows.
@@ -125,12 +136,14 @@
     if (d.kind === 'cratarr')
       return chosenOf(d).map((path) => {
         const st = statuses[path];
-        const u = ed.useOf(d, path);
+        // By its library's id (CU18): the server's for the folder, its path until the server has read it.
+        const id = libraryOf(d.view?.server_libraries ?? [], path);
+        const u = ed.useOf(d, id);
         return {
           d,
-          id: path,
+          id,
           // Its own name where given (the owner, 2026-11-02), else its folder's.
-          name: ed.policyOf(d, path).name?.trim() || folderName(path),
+          name: ed.policyOf(d, id).name?.trim() || folderName(path),
           where: path,
           problem: st && !st.exists ? 'Not found. Mount it into Cratarr and restart it.' : st && !st.writable && u !== 'unused' ? 'Read only' : null,
           status: st && st.exists ? statusLine(st, u) : null,
@@ -256,7 +269,7 @@
         name="Name"
         value={l.name}
         onclick={() =>
-          (typing = { title: 'Name', value: l.name, placeholder: folderName(l.id), save: (v) => ed.setPolicy(l.d, l.id, { name: v.trim() && v.trim() !== folderName(l.id) ? v.trim() : null }) })}
+          (typing = { title: 'Name', value: l.name, placeholder: folderName(l.where), save: (v) => ed.setPolicy(l.d, l.id, { name: v.trim() && v.trim() !== folderName(l.where) ? v.trim() : null }) })}
       />
     {/if}
     <!-- The row says it, the choice sheet picks it (the owner, 2026-10-25). -->
@@ -295,6 +308,7 @@
   </Group>
   <Group title={l.folder ? 'Folder' : 'Where'}>
     <Item lead={l.problem ? 'warn' : 'on'} name={l.where || l.name} line={l.problem ?? l.status} tone={l.problem ? 'warn' : null} wrap />
+    {#if l.folder}<Item name="Change folder" onclick={() => (moving = l)} />{/if}
   </Group>
   {#if l.folder}
     <Group>
@@ -494,6 +508,11 @@
   {@const d = browsing}
   <FolderBrowser chosen={chosenOf(d)} onadd={(p) => addFolder(d, p)} onclose={() => (browsing = null)} />
 {/if}
+{#if moving}
+  {@const l = moving}
+  <!-- The browser every folder is chosen in (decision 0044), its choice this library's folder. -->
+  <FolderBrowser chosen={chosenOf(l.d)} choose="Use this folder" onadd={(p) => moveFolder(l, p)} onclose={() => (moving = null)} />
+{/if}
 {#if browsingOwn}
   {@const d = browsingOwn}
   <FolderBrowser
@@ -650,7 +669,7 @@
     text="Its files stay where they are."
     label="Remove"
     onconfirm={() => {
-      removeFolder(l.d, l.id);
+      removeFolder(l);
       backFromThing('libraries');
     }}
     onclose={() => (removing = null)}

@@ -17,7 +17,8 @@
   import { toast } from './lib/toast.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
-  import { pageView } from './lib/pageView.svelte';
+  import { pageView, usePageAction } from './lib/pageView.svelte';
+  import UploadSheet from './lib/UploadSheet.svelte';
   import { filterBlocked, passing } from './lib/listFilter.svelte';
   import { recordOn } from './lib/copiesRule';
   import { shownIn } from './lib/sources.svelte';
@@ -185,6 +186,9 @@
     pageView.counted = sources ? { shown: count(shown), total: count(sources), pending: pass.pending } : null;
     return () => (pageView.counted = null);
   });
+  // Upload music (UP04): the page's own button, for whoever may (UP01's permission; an administrator always), its sheet over it.
+  let uploading = $state(false);
+  usePageAction(() => (me.admin || me.permissions.upload ? { icon: 'upload', label: 'Upload music', run: () => (uploading = true) } : null));
 </script>
 
 <main>
@@ -240,6 +244,8 @@
     onundone={reload}
   />
 {/if}
+
+{#if uploading}<UploadSheet onclose={() => (uploading = false)} />{/if}
 
 <style>
   /* As wide as the page, as Playlists: the albums take as many columns as fit. */

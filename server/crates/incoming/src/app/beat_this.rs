@@ -329,7 +329,6 @@ fn logits(spect: &[f32]) -> Result<(Vec<f32>, Vec<f32>)> {
         }
     }
     let (mut beat, mut down) = (vec![-1000f32; n], vec![-1000f32; n]);
-    let full = whole()?;
     for &start in starts.iter().rev() {
         let (from, to) = (start.max(0) as usize, ((start + CHUNK as isize) as usize).min(n));
         let left = (-start).max(0) as usize;
@@ -338,8 +337,9 @@ fn logits(spect: &[f32]) -> Result<(Vec<f32>, Vec<f32>)> {
         let mut input = vec![0f32; len * MELS];
         input[left * MELS..(left + to - from) * MELS].copy_from_slice(&spect[from * MELS..to * MELS]);
         let tensor: Tensor = tract_ndarray::Array3::from_shape_vec((1, len, MELS), input)?.into();
+        // The whole pieces' model made only where a whole piece is heard: a sound shorter than one needs none.
         let out = if len == CHUNK {
-            full.run(tvec!(tensor.into()))
+            whole()?.run(tvec!(tensor.into()))
         } else {
             plan(len)?.run(tvec!(tensor.into()))
         }
@@ -431,8 +431,9 @@ mod tests {
 
     #[test]
     fn the_spectrogram_has_a_frame_every_441_samples_and_the_model_hears_a_click_track() {
-        // 20 s of clicks at 120 a minute, a louder one every fourth, at 22,050 Hz.
-        let n = RATE as usize * 20;
+        // 10 s of clicks at 120 a minute, a louder one every fourth, at 22,050 Hz (TS01: half the 20 s it was; under one piece of
+        // the model's either way).
+        let n = RATE as usize * 10;
         let sound: Vec<f32> = (0..n)
             .map(|i| {
                 let beat = i % (RATE as usize / 2);
@@ -448,7 +449,9 @@ mod tests {
         assert_eq!(spect.len() / MELS, 1 + n / HOP);
         let (beat, down) = logits(&spect).unwrap();
         let h = beats_of(&beat, &down);
-        assert!(h.beats.len() >= 30, "{:?}", h.beats);
+        // Three quarters of the clicks heard at least (30 of the 20 s clip's 40).
+        let clicks = n / (RATE as usize / 2);
+        assert!(h.beats.len() >= clicks * 3 / 4, "{:?}", h.beats);
         let gaps: Vec<f64> = h.beats.windows(2).map(|w| w[1] - w[0]).collect();
         let mut sorted = gaps.clone();
         sorted.sort_by(f64::total_cmp);

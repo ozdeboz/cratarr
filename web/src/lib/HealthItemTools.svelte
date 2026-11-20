@@ -1,7 +1,7 @@
 <script lang="ts">
   // What can be done for one Health item (F28.2): Health's row opened in place and a record's health sheet draw it alike, by one
   // when-table (lib/healthTools), in today's order. The sheets its tools open are its host's, which it is told of.
-  import type { HealthItem } from './api';
+  import { missingAccept, missingGone, type HealthItem } from './api';
   import type { ReleaseTrack } from './replaceTrack';
   import { offers } from './capabilities.svelte';
   import { me } from './me.svelte';
@@ -14,6 +14,8 @@
   import HealthRenumber from './HealthRenumber.svelte';
   import RecordReferences from './RecordReferences.svelte';
   import Item from './settings/Item.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
+  import { toast } from './toast.svelte';
 
   let {
     problem,
@@ -57,6 +59,17 @@
 
   const tools = $derived(itemTools(problem, x, { admin: me.admin, finds, renumber: offers('renumber'), fixable, here }));
   const has = (k: ToolKind) => tools.includes(k);
+  // Gone (LS05): asked once more, then let go; no word after, the row leaving says it.
+  let goneAsk = $state<'gone' | 'heldGone' | null>(null);
+  async function gone(kind: 'gone' | 'heldGone') {
+    try {
+      if (kind === 'gone') await missingGone([x.track!]);
+      else await missingAccept(x.folder!);
+      ongone();
+    } catch (e) {
+      toast.fail(e, kind === 'gone' ? "It wasn't let go" : "The library wasn't read again");
+    }
+  }
   const clock = (ms: number | null) => (ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms / 1000) % 60)).padStart(2, '0')}` : '');
 </script>
 
@@ -64,6 +77,9 @@
   {#if has('playlistMissing')}<div class="tool"><HealthMissing playlist={x.playlist!} /></div>{/if}
   <!-- A track of Missing music: what it is now, by a person's word (lib/HealthReconnect). -->
   {#if has('reconnect')}<div class="tool"><HealthReconnect track={x.track!} title={x.title} ongone={ongone} /></div>{/if}
+  <!-- Gone for good (LS05): Missing music's track let go; a held library's files not found let go, its walk let through. -->
+  {#if has('gone')}<Item name="Gone" kind="danger" onclick={() => (goneAsk = 'gone')} />{/if}
+  {#if has('heldGone')}<Item name="They are gone" kind="danger" onclick={() => (goneAsk = 'heldGone')} />{/if}
   {#if has('incoming')}<div class="tool"><HealthIncoming source={x.album![0]} album={x.album![1]} ongone={ongone} /></div>{/if}
   <!-- Track numbers off (unnumbered ones too), disc numbers: renumbered as a release has them (lib/HealthRenumber). -->
   {#if has('renumber')}<div class="tool"><HealthRenumber album={x.album![1]} title={x.title} ongone={ongone} /></div>{/if}
@@ -102,6 +118,17 @@
   {#if has('changeCover')}<Item name="Change cover" onclick={() => oncover({ id: x.album![1], title: x.title })} />{/if}
   {#if has('goTo') && go}<Item name={go.label} onclick={go.go} />{/if}
 </div>
+{#if goneAsk === 'gone'}
+  <ConfirmSheet title={`Is ${x.title} gone?`} text="It leaves the library. Its plays stay, should its file come back." label="Gone" onconfirm={() => void gone('gone')} onclose={() => (goneAsk = null)} />
+{:else if goneAsk === 'heldGone'}
+  <ConfirmSheet
+    title={`Are they gone from ${x.title}?`}
+    text="What wasn't found there leaves the library. Their plays stay, should their files come back."
+    label="They are gone"
+    onconfirm={() => void gone('heldGone')}
+    onclose={() => (goneAsk = null)}
+  />
+{/if}
 
 <style>
   .opened {

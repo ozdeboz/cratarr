@@ -55,16 +55,17 @@ fn named_routes() -> Vec<(String, Vec<Method>)> {
     out
 }
 
-/// The server as `main` serves it, signing in required, with one account, the administrator `me`, and a folder of its own.
-struct Whole {
+/// The server as `main` serves it, signing in required, with one account, the administrator `me`, and a folder of its own (Home
+/// Assistant's contract, `home_assistant`, asks it too).
+pub(crate) struct Whole {
     dir: std::path::PathBuf,
-    served: Arc<crate::serve::Serve>,
-    app: Arc<crate::app::App>,
-    router: axum::Router,
+    pub(crate) served: Arc<crate::serve::Serve>,
+    pub(crate) app: Arc<crate::app::App>,
+    pub(crate) router: axum::Router,
 }
 
 impl Whole {
-    async fn open(name: &str) -> Self {
+    pub(crate) async fn open(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("cratarr-whole-router-{name}-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
@@ -86,7 +87,7 @@ impl Whole {
     }
 
     /// An API key of `user`'s, as the `authorization` header a client sends.
-    fn key(&self, user: &str, scope: &str) -> String {
+    pub(crate) fn key(&self, user: &str, scope: &str) -> String {
         let (key, _) = self.served.sessions.new_key("a client", Some(user), scope, None, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).unwrap();
         format!("Bearer {key}")
     }
@@ -97,7 +98,7 @@ impl Whole {
     }
 
     /// `path` asked that way, with `body`: the answer as `ask` gives it.
-    async fn send(&self, by: (&str, &str), method: Method, path: &str, body: Body) -> (StatusCode, serde_json::Value) {
+    pub(crate) async fn send(&self, by: (&str, &str), method: Method, path: &str, body: Body) -> (StatusCode, serde_json::Value) {
         let req = Request::builder().method(method).uri(path).header(by.0, by.1).header("accept", "application/json").header("content-type", "application/json").body(body).unwrap();
         let r = self.router.clone().oneshot(req).await.unwrap();
         let status = r.status();

@@ -8,7 +8,7 @@ import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
-import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
+import { asksSignIn, notReached, reached, refused, refusedFor, sayHeld, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick, devicePlaylistRows, devicePlaylists } from './deviceAnswers.svelte';
 import { cratarrBusy } from './waiting.svelte';
 import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
@@ -147,63 +147,94 @@ function request<T>(path: string, init?: RequestInit): Promise<T> {
   return track(fetchJson<T>(path, init));
 }
 
-/** A request in the background (polling, checks while typing): no progress bar. */
+/** A request in the background (polling, checks while typing): no progress bar, and a hard limit (`watch.mostMs`). */
 function quietly<T>(path: string, init?: RequestInit): Promise<T> {
-  // Not while a refusal holds them back (lib/reach): each would be one more knock on a ban.
-  if (refusedFor() > 0) return Promise.reject(new ApiError(UNREACHED));
-  return fetchJson<T>(path, init);
+  // Not while a refusal holds them back (lib/reach): each would be one more knock on a ban. Why, said in the console once a hold
+  // (RC01: the desktop shell's log keeps it).
+  if (refusedFor() > 0) {
+    sayHeld();
+    return Promise.reject(new ApiError(UNREACHED));
+  }
+  return fetchJson<T>(path, init, true);
 }
 
 /** A request that has waited `afterMs` for its answer's start asks whether Cratarr answers at all (its health, within `probeMs`):
  *  a network that drops what is sent never fails a request, it only never answers (0.16.0 on the tablet, 2026-11-08: the app
- *  opened with Cratarr out of reach and Home loaded for good; in the app no service worker gives up for it). No answer: Cratarr
- *  is out of reach, the request is let go and the page goes on as away. An answer: Cratarr is there and busy, and it waits on,
- *  asking again each `afterMs`. */
-export const watch = { afterMs: 5_000, probeMs: 4_000 };
-let probing: Promise<boolean> | null = null;
+ *  opened with Cratarr out of reach and Home loaded for good; in the app no service worker gives up for it). An answer: Cratarr
+ *  is there and busy, and it waits on, asking again each `afterMs`. A refused connection, a network error or the proxy's bare
+ *  status: Cratarr is out of reach, the request is let go and the page goes on as away.
+ *  RC01 (production, 2026-11-18: Fetch said it could not reach Cratarr while it answered in 1.5 to 5.6 s; 0.16.2's desktop app
+ *  after a sleep: "unreachable" for hours, a request on a connection dead since the sleep waiting for ever while the health
+ *  check answered on a new one):
+ *  - a health check with no answer within `probeMs` proves nothing, as a busy Cratarr's can take that long too: it is asked
+ *    again, and only a request that heard nothing for `silentMs` is let go as out of reach (the silent network's wait, bounded);
+ *  - a background request (`quietly`: polls, checks) has a hard limit, `mostMs`, even while Cratarr answers: let go then as
+ *    busy, not away (`TooLong`), so no poll that waits for it waits for ever. */
+export const watch = { afterMs: 5_000, probeMs: 4_000, silentMs: 15_000, mostMs: 60_000 };
+/** How a look for Cratarr fared: it answered; it is not there; or no answer within `probeMs`, which says nothing either way. */
+type Look = 'there' | 'away' | 'slow';
+let probing: Promise<Look> | null = null;
 /** Whether Cratarr answers now: one health check at a time, however many requests wait. */
-function answers(): Promise<boolean> {
+function answers(): Promise<Look> {
   probing ??= fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(watch.probeMs) })
     .then(
-      (r) => !notReached(r.status),
-      () => false,
+      (r): Look => (notReached(r.status) ? 'away' : 'there'),
+      (e): Look => ((e as { name?: string } | null)?.name === 'TimeoutError' ? 'slow' : 'away'),
     )
     .finally(() => (probing = null));
   return probing;
 }
-/** `fetch`, let go where Cratarr turns out not to answer while it waits (`watch`). */
-function watched(path: string, init?: RequestInit): Promise<Response> {
+/** A background request let go at its hard limit with Cratarr there: busy, not away (RC01). */
+export class TooLong extends Error {}
+/** What such a request fails with: no words of its own (its caller says what failed), and never "out of reach". */
+export const TOO_LONG = 'Cratarr took too long to answer';
+/** It failed only because Cratarr, there and busy, took longer than a background request waits (RC01). */
+export const tookTooLong = (e: unknown) => e instanceof ApiError && e.message === TOO_LONG;
+/** `fetch`, let go where Cratarr turns out not to answer while it waits (`watch`); a background one at its hard limit too. */
+function watched(path: string, init?: RequestInit, background = false): Promise<Response> {
   const gone = new AbortController();
   const signal = init?.signal ? AbortSignal.any([init.signal, gone.signal]) : gone.signal;
   return new Promise<Response>((resolve, reject) => {
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let most: ReturnType<typeof setTimeout> | undefined;
     /** Counted among those waiting on a busy Cratarr (lib/waiting), from its first look that found it there till it ends. */
     let busy = false;
+    /** When Cratarr was last heard from: the request's start, then each look it answered. */
+    let heard = Date.now();
     const settle = () => {
       done = true;
       clearTimeout(timer);
+      clearTimeout(most);
       if (busy) cratarrBusy.asks--;
       busy = false;
     };
+    const letGo = (why: Error) => {
+      if (done) return;
+      settle();
+      gone.abort();
+      reject(why);
+    };
     const look = () => {
       timer = setTimeout(() => {
-        void answers().then((there) => {
+        void answers().then((was) => {
           if (done) return;
-          if (there) {
+          if (was === 'there') {
+            heard = Date.now();
             if (!busy) cratarrBusy.asks++;
             busy = true;
             return look();
           }
-          settle();
-          gone.abort();
-          reject(new TypeError('Cratarr does not answer'));
+          if (was === 'away' || Date.now() - heard >= watch.silentMs) return letGo(new TypeError('Cratarr does not answer'));
+          look();
         });
       }, watch.afterMs);
     };
     look();
+    if (background) most = setTimeout(() => letGo(busy ? new TooLong(path) : new TypeError('Cratarr does not answer')), watch.mostMs);
     fetch(path, { ...init, signal }).then(
       (r) => {
+        if (done) return;
         settle();
         resolve(r);
       },
@@ -216,7 +247,7 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
   });
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(path: string, init?: RequestInit, background = false): Promise<T> {
   if (loopHeld(path, init)) throw new ApiError('Asked too often', true);
   // A sign-out owed (lib/account): nothing is asked under a session that is over, what one taps either.
   if (signOutOwed()) {
@@ -225,8 +256,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   let res: Response;
   try {
-    res = await watched(path, init);
-  } catch {
+    res = await watched(path, init, background);
+  } catch (e) {
+    // Let go at its hard limit with Cratarr there: busy, not away (RC01); its caller says what failed.
+    if (e instanceof TooLong) throw new ApiError(TOO_LONG, true);
     unreached();
     throw new ApiError(UNREACHED);
   }
@@ -1125,7 +1158,11 @@ export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
  *  library; none: the first; 0101 point 2); how its files write several values in one tag (`tag_rules`, its own since
  *  0.18; one added starts from the default as it stands). */
 export type LibrarySetting = {
+  /** Its id: a server's own; Cratarr's own library's, its folder's, kept for life (CU17). */
   id: string;
+  /** Cratarr's own library's folder (CU17: `LibrarySetting { id, path }`): a path changed on an id is a move, the library and
+   *  its switches kept (CU18's Change folder). */
+  path?: string;
   kind: 'main' | 'incoming';
   quality?: Quality;
   colour?: string | null;
@@ -1403,6 +1440,8 @@ export type Permissions = {
   /** Requests (decision 0070): ask for albums (a Want goes ahead with no one's yes since 0.17), answer everyone's. */
   request: boolean;
   manage_requests: boolean;
+  /** Upload music (UP01): their own files into Incoming, theirs until kept; administrators always may. */
+  upload: boolean;
 };
 /** A device that belongs to an account (it plays only on its own, decision 0051): `id` is its player's name. One that is
  *  connected, or a Kodi (removed under Players), is not taken away. */
@@ -1445,9 +1484,35 @@ export const getCapabilities = () => quietly<import('./generated/Capabilities').
 /** Ends one of one's own sign-ins, or takes one of one's own devices away. */
 export const endMySession = (id: string) => request<void>(`/api/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** Pairing an app (QR01, QR02; QR04): a code for this account, its password asked again (OQ-B2 (a)); what became of it (lib/pairing
+ *  PairState); its QR, the code's owner's alone. */
+export const pairCode = (password: string) => post<{ code: string }>('/api/pair', { password });
+export const pairState = () => quietly<import('./pairing').PairState>('/api/pair');
+export const PAIR_QR = '/api/pair/qr';
+/** A browser asking to be signed in (QR06; QR07): what asked, by its code; Allow, the password asked again; Refuse. */
+export const pairAsk = (code: string) => request<import('./pairing').PairAsk>(`/api/pair/allow/${encodeURIComponent(code)}`);
+export const pairAllow = (code: string, password: string) => post<unknown>('/api/pair/allow', { code, password });
+export const pairRefuse = (code: string) => post<unknown>('/api/pair/refuse', { code });
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
 /** About Cratarr: its version, since when it runs, its licence (SPDX) and where its source is. */
 export const getAbout = () => quietly<{ version: string; started: number; licence?: string; source?: string }>('/api/about');
+/** An upload (UP02, UP04): its id, the picked folder's name, each file's number, name, size and the bytes the server has of it,
+ *  and once a pass has read them in, the records it placed. */
+export type Upload = { id: string; folder: string | null; files: { n: number; name: string; size: number; received: number }[]; placed?: { album: string; title: string }[] };
+/** The pick made an upload (refused with the server's words: its room, its floor, a name). */
+export const createUpload = (folder: string | null, files: { name: string; size: number }[]) => post<Upload>('/api/uploads', { folder, files });
+/** What the server has of it: the count every piece goes on from. */
+export const uploadStatus = (id: string) => request<Upload>(`/api/uploads/${encodeURIComponent(id)}`);
+/** A piece of file `n` at `offset`, with its SHA-256 (OQ-U1 (a)): the server checks it, keeps it, and counts it. */
+export const uploadPiece = (id: string, n: number, offset: number, piece: Blob, digest: string) =>
+  request<unknown>(`/api/uploads/${encodeURIComponent(id)}/${n}?offset=${offset}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream', 'Content-Digest': digest },
+    body: piece,
+  });
+/** What's New (UC02, UC03): what this account has not seen, newest first (lib/whatsNewRule); marked seen up to a version. */
+export const getWhatsNew = () => quietly<import('./whatsNewRule').WhatsNew>('/api/whats-new');
+export const whatsNewSeen = (version: string) => post<unknown>('/api/whats-new/seen', { version });
 /** Cratarr restarted (0.9.6; its administrators'): it answers, then stops as `docker stop` stops it, and Docker's
  *  restart policy starts it again. */
 export const restartServer = () => post<{ restarting: boolean }>('/api/server/restart', {});
@@ -1737,11 +1802,18 @@ export type HealthItem = {
   track?: string;
   /** Since when it stands so (epoch seconds, Missing music). */
   since?: number;
+  /** A held library's folder (LS04's `library:held`): the walk its guard holds back, let through by "They are gone". */
+  folder?: string;
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
 /** A track on Health's Missing music is `to` (A5): for good, so what names it follows it. */
 export const reconnectTrack = (track: string, to: string) => post<unknown>('/api/missing/reconnect', { track, to });
+/** Tracks of Missing music let go (LS02, administrators'): each with no file left retires as a reconnect retires one, its plays
+ *  kept should its file come back; a record left with no tracks retires too. */
+export const missingGone = (tracks: string[]) => post<unknown>('/api/missing/gone', { tracks });
+/** A held library's walk let through (LS03, administrators'): what was not found there leaves the library, its moves found. */
+export const missingAccept = (folder: string) => post<unknown>('/api/missing/accept', { folder });
 /** A record's own Health problems (0.14, `/api/albums/{source}/{id}/health`): each finding that names it, worst first, by
  *  its kind (the report's key) and row, with only the record's items; its tracks' file problems as `files:{kind}`
  *  findings, an item for each track (`track`, `files`, the problem in `line`). */
@@ -2726,6 +2798,9 @@ export type BeyondAlbum = {
   /** Its page on Discogs, where Discogs found it: Discogs' data is shown with its attribution (its terms). */
   discogs_url?: string | null;
   sources: ('musicbrainz' | 'discogs')[];
+  /** Its release type, as its sources say it (album, EP, single…): Find's heading by the record word rule (SB12); none until
+   *  the server sends it, which reads "Records". */
+  type?: string | null;
   /** The record that holds its reference (`al-<n>`, C57); none until it is opened. */
   record?: string | null;
   bandcamp?: string | null;

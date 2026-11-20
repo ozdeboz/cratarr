@@ -6,6 +6,9 @@
   // page (W9: a record not had, made one at open where none holds it yet; Want in its header). The words ride in the address
   // (`#/find?q=`); the pill's search asks again.
   import { searchBeyond, type BeyondFound } from './lib/api';
+  import { keepWhile } from './lib/keepWhile.svelte';
+  import Notice from './lib/Notice.svelte';
+  import { recordsTitle } from './lib/recordTypeRules';
   import { wordHere } from './lib/addresses';
   import Cover from './lib/Cover.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
@@ -33,9 +36,12 @@
   /** How many albums a page of Beyond brings. */
   const PAGE = 40;
   let error = $state<string | null>(null);
+  /** A next page that failed: said with Try again, the list not ended there (SB29: errors are never shown as nothing). */
+  let pageFailed = $state<string | null>(null);
   $effect(() => {
     const now = q;
     error = null;
+    pageFailed = null;
     if (!now) return;
     let gone = false;
     const t = setTimeout(() => {
@@ -49,6 +55,14 @@
       clearTimeout(t);
     };
   });
+  // New words keep what was shown while they are asked, the loader in its place once due (the one loading rule, SB29: the
+  // results were swapped for the loader at every key, though the ask waits 300 ms), as Everywhere's results keep theirs.
+  const kept = keepWhile(
+    () => found,
+    () => !!q && !error && found?.q !== q,
+    () => q,
+  );
+  const shown = $derived(kept.loader ? null : kept.value);
   type Album = BeyondFound['albums'][number];
   /** A row's key: its record, else what its source knows it by (two of one name are two rows, C57; lib/beyondRows). */
   const keyOf = (a: Album) => beyondKey(a);
@@ -57,7 +71,7 @@
   let more = false;
   async function nextPage() {
     const f = found;
-    if (!f || f.done || more) return;
+    if (!f || f.done || more || f.q !== q) return;
     more = true;
     try {
       const r = await searchBeyond(f.q, PAGE, f.r.albums.length);
@@ -65,12 +79,16 @@
       const seen = new Set(f.r.albums.map(keyOf));
       const fresh = r.albums.filter((a) => !seen.has(keyOf(a)));
       found = { q: f.q, r: { ...f.r, albums: [...f.r.albums, ...fresh] }, done: !fresh.length || r.albums.length < PAGE };
-    } catch {
-      if (found === f) found = { ...f, done: true };
+    } catch (e) {
+      if (found === f) pageFailed = e instanceof Error ? e.message : 'The search could not be asked';
     } finally {
       more = false;
     }
   }
+  const moreAgain = () => {
+    pageFailed = null;
+    void nextPage();
+  };
   function nearEnd(el: Element) {
     const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && void nextPage(), { rootMargin: '400px' });
     io.observe(el);
@@ -96,24 +114,25 @@
 </script>
 
 <main>
+  <!-- SB12: what it asks, in its words; the record word rule's heading; no line saying what the page is. -->
   {#if !q}
-    <p class="note">Search for an artist or an album to find it on MusicBrainz.</p>
+    <p class="note">Search MusicBrainz and Discogs</p>
   {:else if error}
     <p class="note" role="alert">{error}</p>
-  {:else if !found || found.q !== q}
+  {:else if !shown}
     <PageLoading />
-  {:else if !found.r.albums.length && !found.r.artists.length}
-    <p class="note">Nothing found for “{q}”.</p>
+  {:else if !shown.r.albums.length && !shown.r.artists.length}
+    <p class="note">Nothing found for “{shown.q}”.</p>
   {:else}
-    <p class="note">Beyond Cratarr for “{q}”.</p>
-    {#if found.r.artists.length}
+    {@const artists = shown.r.artists}
+    {#if artists.length}
       <SectionHead title="Artists" />
       <ul class="rows">
-        {#each found.r.artists as x (x.mbid)}
+        {#each artists as x (x.mbid)}
           <li>
             <Row
               size="large"
-              title={artistLabel(x.name, x.number, found.r.artists.map((a) => a.name))}
+              title={artistLabel(x.name, x.number, artists.map((a) => a.name))}
               label={`Open ${x.name}`}
               onclick={() => openArtist(x)}
             >
@@ -123,10 +142,10 @@
         {/each}
       </ul>
     {/if}
-    {#if found.r.albums.length}
-      <SectionHead title="Albums" />
+    {#if shown.r.albums.length}
+      <SectionHead title={recordsTitle(shown.r.albums.map((a) => a.type))} />
       <ul class="rows">
-        {#each found.r.albums as a (keyOf(a))}
+        {#each shown.r.albums as a (keyOf(a))}
           <li>
             <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
               {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? null} small />{#if finding === keyOf(a)}<CoverBusy small />{/if}</span>{/snippet}
@@ -134,10 +153,11 @@
             </Row>
           </li>
         {/each}
-      {#if !found.done}<li class="more" {@attach nearEnd}></li>{/if}
+      {#if !shown.done && !pageFailed}<li class="more" {@attach nearEnd}></li>{/if}
       </ul>
+      {#if pageFailed}<Notice text={pageFailed} onretry={moreAgain} away="Find more music needs Cratarr." />{/if}
       <!-- Discogs' data shown with its attribution (its terms; 0076). -->
-      {#if found.r.albums.some((a) => a.sources.includes('discogs'))}<p class="note credit">Data from <a href="https://www.discogs.com" target="_blank" rel="noopener noreferrer">Discogs</a></p>{/if}
+      {#if shown.r.albums.some((a) => a.sources.includes('discogs'))}<p class="note credit">Data from <a href="https://www.discogs.com" target="_blank" rel="noopener noreferrer">Discogs</a></p>{/if}
     {/if}
   {/if}
 </main>

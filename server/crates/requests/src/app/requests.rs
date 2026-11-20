@@ -2442,7 +2442,7 @@ pub mod tests {
     #[test]
     fn a_dead_fetcher_shows_on_health() {
         const FETCHER: &str = "the test's fetcher";
-        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let _one = crate::app::switches::TEST_STATE.blocking_write();
         let was = DOWN.lock().unwrap_or_else(|p| p.into_inner()).get(FETCHER).copied();
         fetcher_said_at(FETCHER, false, 1_000);
         fetcher_said_at(FETCHER, false, 2_000);
@@ -3852,7 +3852,7 @@ pub mod tests {
         const SLSKD_AWAY: &str = "slskd could not be reached: error sending request for url (http://192.168.1.20:5030/api/v0/transfers/downloads)";
         const ACOUSTID: &str = "AcoustID could not be asked: error sending request for url (http://192.168.1.20:8080/v2/lookup)";
         const NO_LIST: &str = "MusicBrainz has no list of it: 503 from http://192.168.1.30:5000/ws/2/release";
-        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let _state = crate::app::switches::TEST_STATE.write().await;
         let (serve, dir) = room_shape_above("rq01-4", 96_400);
         with_accounts(&serve);
         serve.catalogue().number_above(9_610).unwrap();
@@ -3978,7 +3978,7 @@ pub mod tests {
         const G: [&str; 3] = ["00000000-0000-4000-8000-000000002851", "00000000-0000-4000-8000-000000002852", "00000000-0000-4000-8000-000000002853"];
         const ID: &str = "ss-rq01-7";
         const HANDED: &str = "Lidarr is looking for it; Soulseek searches for it";
-        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let _state = crate::app::switches::TEST_STATE.write().await;
         let (serve, dir) = room_shape_above("rq01-7", 96_700);
         with_accounts(&serve);
         let cat = serve.catalogue().clone();
@@ -4312,7 +4312,7 @@ pub mod tests {
     /// are delivered at the first round, their count in the log.
     #[tokio::test]
     async fn a_delivered_request_has_no_say_over_a_later_copy() {
-        use super::super::albums_base::{default_target, may_add, requester_of};
+        use super::super::albums_base::{default_target, may_add, may_delete_waiting, requester_of};
         use crate::settings::{Libraries, LibraryKind, LibrarySetting, SourceConfig};
         const R: &str = "00000000-0000-4000-8000-000000000441";
         const R2: &str = "00000000-0000-4000-8000-000000000442";
@@ -4352,6 +4352,9 @@ pub mod tests {
         assert_eq!(default_target(&a, flac.library.as_deref(), requester).as_deref(), Some(FOLDERS[0]), "its default target the library's: Music");
         assert_eq!(default_target(&a, flac.library.as_deref(), Some("ann")).as_deref(), Some("/own/ann"), "as her open request's would have gone");
         assert!(!may_add(&a, false, Some("ann"), requester), "ann may not add it");
+        // RM8: nor delete it, by the rule the Library's view gives each Incoming copy (an administrator may).
+        assert!(!may_delete_waiting(false, Some("ann"), requester), "ann may not delete it");
+        assert!(may_delete_waiting(true, Some("root"), requester), "root may");
         // Home Assistant's promote is a Keep with no library named: where the page's default goes.
         assert_eq!(default_target(&a, flac.library.as_deref(), requester).as_deref(), Some(FOLDERS[0]), "Home Assistant's promote: into Music");
         assert_eq!((used(&serve, "ann"), total(&serve)), (held, held), "AL01.7: her room counts nothing of it, and no one's does");

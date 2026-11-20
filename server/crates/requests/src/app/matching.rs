@@ -436,7 +436,7 @@ mod tests {
                 anyhow::Ok(None::<Found>)
             })
         }
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
         crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
@@ -476,7 +476,7 @@ mod tests {
                 anyhow::Ok(None::<Found>)
             })
         }
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
         crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
@@ -518,7 +518,7 @@ mod tests {
                 anyhow::Ok(None::<Found>)
             })
         }
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
         crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
