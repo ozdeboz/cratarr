@@ -35,3 +35,26 @@ pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
     });
     (cfg, client)
 }
+
+/// Lidarr as the page sees it: its address, whether a key is saved, and whether it answers.
+pub(super) async fn lidarr_view(cfg: Option<&settings::LidarrConfig>, client: Option<crate::lidarr::Lidarr>) -> Option<LidarrView> {
+    let cfg = cfg?;
+    let (version, error) = match client {
+        _ if !cfg.enabled => (None, None),
+        Some(l) => match l.version().await {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(format!("{e:#}"))),
+        },
+        None => (None, Some("the API key is not usable".into())),
+    };
+    Some(LidarrView {
+        url: cfg.url.clone(),
+        key_set: !cfg.api_key.is_empty(),
+        enabled: cfg.enabled,
+        quality_profile: cfg.quality_profile,
+        metadata_profile: cfg.metadata_profile,
+        root_folder: cfg.root_folder.clone(),
+        version,
+        error,
+    })
+}

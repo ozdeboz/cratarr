@@ -20,7 +20,6 @@ mod carry_on;
 mod queue;
 mod replace;
 pub use queue::JobView;
-pub use super::incoming_base::LidarrView;
 pub(super) use super::incoming_base::{LidarrPair, lidarr_pair};
 pub use replace::{ReplacePreview, ReplaceSheet};
 #[cfg(test)]
@@ -471,29 +470,6 @@ impl IncomingService {
     /// The saved Lidarr connection and its client.
     pub(super) fn lidarr_state(&self) -> LidarrPair {
         self.lidarr.read().unwrap_or_else(|p| p.into_inner()).clone()
-    }
-
-    /// Lidarr as the page sees it: its address, whether a key is saved, and whether it answers.
-    pub(super) async fn lidarr_view(cfg: Option<&settings::LidarrConfig>, client: Option<crate::lidarr::Lidarr>) -> Option<LidarrView> {
-        let cfg = cfg?;
-        let (version, error) = match client {
-            _ if !cfg.enabled => (None, None),
-            Some(l) => match l.version().await {
-                Ok(v) => (Some(v), None),
-                Err(e) => (None, Some(format!("{e:#}"))),
-            },
-            None => (None, Some("the API key is not usable".into())),
-        };
-        Some(LidarrView {
-            url: cfg.url.clone(),
-            key_set: !cfg.api_key.is_empty(),
-            enabled: cfg.enabled,
-            quality_profile: cfg.quality_profile,
-            metadata_profile: cfg.metadata_profile,
-            root_folder: cfg.root_folder.clone(),
-            version,
-            error,
-        })
     }
 
     pub(super) fn trash_days(&self) -> u32 {

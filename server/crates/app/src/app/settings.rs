@@ -8,10 +8,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::incoming::IncomingService;
-use super::incoming_base::{LidarrView, lidarr_pair};
+use super::incoming_base::{LidarrView, lidarr_pair, lidarr_view};
 use super::library::{Active, Library, derive_folders, epoch_now, label_of};
-use super::playlists::PlaylistService;
+use super::settings_base::{SettingsIncoming, SettingsPlaylists};
 use super::{ToggleError, VERSION};
 use crate::placement;
 use crate::ports::Files;
@@ -105,8 +104,8 @@ const NAMES_SECS: i64 = 600;
 pub struct SettingsService {
     lib: Arc<Library>,
     files: Arc<dyn Files>,
-    playlists: Arc<PlaylistService>,
-    incoming: Arc<IncomingService>,
+    playlists: Arc<dyn SettingsPlaylists>,
+    incoming: Arc<dyn SettingsIncoming>,
     origin: std::sync::RwLock<Origin>,
     bind: String,
     settings_path: Option<PathBuf>,
@@ -131,8 +130,8 @@ impl SettingsService {
     pub(super) fn new(
         lib: Arc<Library>,
         files: Arc<dyn Files>,
-        playlists: Arc<PlaylistService>,
-        incoming: Arc<IncomingService>,
+        playlists: Arc<dyn SettingsPlaylists>,
+        incoming: Arc<dyn SettingsIncoming>,
         bind: String,
         data_dir: Option<&str>,
         origin: Origin,
@@ -336,7 +335,7 @@ impl SettingsService {
         let lidarr = match self.asked_before(&key) {
             Some(Asked::Lidarr(v)) => v,
             _ => {
-                let v = IncomingService::lidarr_view(lidarr_cfg.as_ref(), lidarr_client).await;
+                let v = lidarr_view(lidarr_cfg.as_ref(), lidarr_client).await;
                 self.keep_asked(key, Asked::Lidarr(v.clone()));
                 v
             }
@@ -379,7 +378,7 @@ impl SettingsService {
         let saved = self.incoming.lidarr_state().0;
         let cfg = settings::merge_lidarr(saved.as_ref(), draft)?;
         let client = cfg.as_ref().and_then(|c| crate::lidarr::Lidarr::new(&c.url, &c.api_key).ok());
-        Ok(IncomingService::lidarr_view(cfg.as_ref(), client).await)
+        Ok(lidarr_view(cfg.as_ref(), client).await)
     }
 
     /// The tag rules alone saved (the Catalogue sheet's genre aliases, 0.15): every source as it is.
