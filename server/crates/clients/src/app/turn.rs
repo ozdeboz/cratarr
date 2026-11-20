@@ -10,9 +10,15 @@
 //!
 //! slskd has no turn here: its turn is its lane (`slskd`, 0.17's round 1.3), where its "one operation at a time" 429 is slskd
 //! busy, asked again, and never a limit answer.
+//!
+//! A server's turn keeps its hold in the user data's server choices (`<source>:held_until`, OQ-T3, as Bandcamp's day after its bot
+//! check was kept), and takes it up again at the start (`keep`), cut to its cap: a restart asks nothing early.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
+
+use crate::userdata::UserData;
 
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
@@ -65,6 +71,21 @@ pub fn policy(name: &str) -> Option<&'static Policy> {
     POLICIES.into_iter().find(|p| p.name == name)
 }
 
+/// Where a source's hold is kept across a restart (OQ-T3): the user data's server choice `<source>:held_until`, epoch seconds ("":
+/// none), Bandcamp's day after its bot check among them as it always was.
+pub fn held_choice(source: &str) -> String {
+    format!("{source}:held_until")
+}
+
+/// Every turn of the server's own kept in its user data `ud` (OQ-T3), each hold kept before a restart taken up first (`keep`): at the
+/// start, before anything is asked. `theirs`: the app's own turns (Discogs', Last.fm's), which are above this crate. slskd has no turn
+/// here (its lane, `slskd`): its 429 is asked again, never held.
+pub fn keep_all(ud: &Arc<UserData>, theirs: &[&Turn]) {
+    for turn in [&super::musicbrainz::TURN, &crate::acoustid::TURN, &crate::bandcamp::TURN].into_iter().chain(theirs.iter().copied()) {
+        turn.keep(ud.clone());
+    }
+}
+
 /// The wait a limit answer's Retry-After asks (TN.2): its seconds, or the HTTP date it names, from `now` (epoch s). None where it is
 /// absent, 0, negative, past or neither (the source's default then); `RETRY_AFTER_MOST` at most. Pure.
 pub fn retry_after(headers: &HeaderMap, now: i64) -> Option<Duration> {
@@ -112,16 +133,30 @@ pub fn limit_said(p: &Policy, status: StatusCode, headers: &HeaderMap, now: i64)
 /// goes while the source is held (`heard`), those already waiting too (Y8).
 pub struct Turn {
     policy: Policy,
-    /// When the next question may go; none before the first.
-    next: tokio::sync::Mutex<Option<Instant>>,
+    /// Between two of its questions now (ms): its policy's, or what the source last said its limit is (Discogs', TN.4).
+    apart: AtomicU64,
+    /// When the last question went; none before the first. The next goes `apart` after it.
+    last: tokio::sync::Mutex<Option<Instant>>,
     /// Questions waiting that are not the background's.
     waiting: AtomicUsize,
     /// Told when none waits any more.
     quiet: tokio::sync::Notify,
     /// The run of limit answers' last wait (TN.3), none after any other answer.
     run: std::sync::Mutex<Option<Duration>>,
-    /// The hold: the instant no question goes before, and the same as epoch seconds (what an asker is told).
-    held: std::sync::Mutex<Option<(Instant, i64)>>,
+    held: std::sync::Mutex<Option<Hold>>,
+    /// Where its hold is kept across a restart (OQ-T3): the server's user data, for the server's own turns (`keep`).
+    kept: std::sync::Mutex<Option<Arc<UserData>>>,
+}
+
+/// A turn's hold.
+#[derive(Debug, Clone, Copy)]
+struct Hold {
+    /// The instant no question goes before.
+    at: Instant,
+    /// The same as epoch seconds: what an asker is told.
+    until: i64,
+    /// A deadline of the source's own (`hold_until`: Bandcamp's bot check's day), not a limit answer's.
+    own: bool,
 }
 
 /// A question waiting that is not the background's, counted while it waits, a question dropped meanwhile too.
@@ -139,12 +174,23 @@ impl Turn {
     pub const fn new(policy: Policy) -> Self {
         Self {
             policy,
-            next: tokio::sync::Mutex::const_new(None),
+            apart: AtomicU64::new(policy.apart.as_millis() as u64),
+            last: tokio::sync::Mutex::const_new(None),
             waiting: AtomicUsize::new(0),
             quiet: tokio::sync::Notify::const_new(),
             run: std::sync::Mutex::new(None),
             held: std::sync::Mutex::new(None),
+            kept: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Its questions `apart` apart from the next on (Discogs' limit as its answers say it, TN.4).
+    pub fn set_apart(&self, apart: Duration) {
+        self.apart.store(apart.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    fn apart(&self) -> Duration {
+        Duration::from_millis(self.apart.load(Ordering::Relaxed))
     }
 
     /// Waits for a question's turn and takes it, a hold waited out however long.
@@ -170,19 +216,20 @@ impl Turn {
         if !behind {
             self.waiting.fetch_add(1, Ordering::SeqCst);
             let _waiting = Waiting(self);
-            let mut next = self.next.lock().await;
-            // The turn's own instant and the hold's, looked at again on waking: a hold set meanwhile holds on (Y8).
+            let mut last = self.last.lock().await;
+            // The turn's own instant and the hold's, looked at again on waking: a hold set meanwhile holds on (Y8), a pace said
+            // meanwhile paces (TN.4).
             loop {
                 let held = self.held_at();
                 if past(held) {
                     return Err(self.paused());
                 }
-                match (*next).max(held).filter(|at| *at > Instant::now()) {
+                match last.map(|l| l + self.apart()).max(held).filter(|at| *at > Instant::now()) {
                     Some(at) => tokio::time::sleep_until(at).await,
                     None => break,
                 }
             }
-            *next = Some(Instant::now() + self.policy.apart);
+            *last = Some(Instant::now());
             return Ok(());
         }
         loop {
@@ -191,19 +238,19 @@ impl Turn {
                 quiet.await;
                 continue;
             }
-            let mut next = self.next.lock().await;
+            let mut last = self.last.lock().await;
             let held = self.held_at();
             if past(held) {
                 return Err(self.paused());
             }
-            match (*next).max(held) {
+            match last.map(|l| l + self.apart()).max(held) {
                 Some(at) if at > Instant::now() => {
-                    drop(next);
+                    drop(last);
                     tokio::time::sleep_until(at).await;
                 }
                 _ if self.waiting.load(Ordering::SeqCst) > 0 => {}
                 _ => {
-                    *next = Some(Instant::now() + self.policy.apart);
+                    *last = Some(Instant::now());
                     return Ok(());
                 }
             }
@@ -246,30 +293,126 @@ impl Turn {
         }
     }
 
-    /// No question for `wait`, whoever asks: a later hold set already stays (a hold only grows).
-    fn hold_for(&self, wait: Duration) {
+    /// No question for `wait`, whoever asks (a limit answer's, or Discogs' moving minute spent): a later hold set already stays (a
+    /// hold only grows). Kept where the turn is (OQ-T3).
+    pub fn hold_for(&self, wait: Duration) {
         let at = Instant::now() + wait;
         let until = super::moment::now_secs() + wait.as_secs() as i64 + i64::from(wait.subsec_nanos() > 0);
+        if self.grow(Hold { at, until, own: false }) {
+            self.keep_until(None, Some(until));
+        }
+    }
+
+    /// No question until `until` (epoch s), whoever asks: a deadline of the source's own (Bandcamp's bot check's day), not waited
+    /// out by an asker's patience. A later hold set already stays. Kept in `ud` where given, else where the turn is (OQ-T3).
+    pub fn hold_until(&self, until: i64, ud: Option<&UserData>) {
+        let now = super::moment::now_secs();
+        if until <= now {
+            return;
+        }
+        self.grow(Hold { at: Instant::now() + Duration::from_secs((until - now) as u64), until, own: true });
+        let kept = self.held.lock().unwrap_or_else(|p| p.into_inner()).map(|h| h.until);
+        self.keep_until(ud, kept);
+    }
+
+    /// The hold `h` set where it ends later than the one there (a hold only grows): whether it was.
+    fn grow(&self, h: Hold) -> bool {
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        if held.is_none_or(|(h, _)| h < at) {
-            *held = Some((at, until));
+        let later = held.is_none_or(|was| was.at < h.at);
+        if later {
+            *held = Some(h);
+        }
+        later
+    }
+
+    /// Its hold lifted, the run of limit answers over (Bandcamp switched on again, V8): asked again at once, in memory and in `ud`
+    /// where given, else where the turn is kept, so a restart takes up nothing.
+    pub fn lift(&self, ud: Option<&UserData>) {
+        *self.held.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *self.run.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        self.keep_until(ud, None);
+    }
+
+    /// Until when (epoch s) its own hold (`hold_until`) holds at `now`, where it does. Never longer than its `longest` from `now`
+    /// (U11): one set while the clock ran ahead is cut to that as it is read, and held so.
+    pub fn own_until(&self, now: i64) -> Option<i64> {
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let h = held.as_mut().filter(|h| h.own)?;
+        let most = now + self.policy.longest.as_secs() as i64;
+        if h.until > most {
+            h.at = h.at.checked_sub(Duration::from_secs((h.until - most) as u64)).unwrap_or(h.at);
+            h.until = most;
+        }
+        (h.until > now).then_some(h.until)
+    }
+
+    /// Its holds kept in the server's user data `ud` from now on (OQ-T3), the one kept before a restart taken up first
+    /// (`take_up`): at the start.
+    pub fn keep(&self, ud: Arc<UserData>) {
+        self.take_up(&ud);
+        *self.kept.lock().unwrap_or_else(|p| p.into_inner()) = Some(ud);
+    }
+
+    /// The hold kept in `ud` before a restart taken up (OQ-T3), so nothing is asked of the source before it is out: never longer
+    /// than its `longest` from now (V8), one kept while the clock ran ahead cut to that, in `ud` too, and never lengthened. One
+    /// further off than any limit answer holds (`RETRY_AFTER_MOST`) is the source's own (Bandcamp's day). Until when it holds.
+    pub fn take_up(&self, ud: &UserData) -> Option<i64> {
+        let key = held_choice(self.policy.name);
+        let kept = ud.import_choice(&key).ok().flatten().and_then(|v| v.trim().parse::<i64>().ok())?;
+        let now = super::moment::now_secs();
+        let until = kept.min(now + self.policy.longest.as_secs() as i64);
+        if until < kept
+            && let Err(e) = ud.set_import_choice(&key, &until.to_string())
+        {
+            tracing::warn!(target: "connections", source = self.policy.name, "a hold cut to its cap is not kept for a restart: {e:#}");
+        }
+        if until <= now {
+            return None;
+        }
+        let own = until - now > RETRY_AFTER_MOST.as_secs() as i64;
+        self.grow(Hold { at: Instant::now() + Duration::from_secs((until - now) as u64), until, own });
+        tracing::info!(target: "connections", source = self.policy.name, until, "a source's hold kept across the restart: its questions wait");
+        Some(until)
+    }
+
+    /// Its hold's deadline (none: lifted) kept for a restart, in `ud` where given, else where the turn is kept; nowhere otherwise.
+    fn keep_until(&self, ud: Option<&UserData>, until: Option<i64>) {
+        let kept = self.kept.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let Some(ud) = ud.or(kept.as_deref()) else { return };
+        if let Err(e) = ud.set_import_choice(&held_choice(self.policy.name), &until.map_or_else(String::new, |u| u.to_string())) {
+            tracing::warn!(target: "connections", source = self.policy.name, "a source's hold is not kept for a restart: {e:#}");
         }
     }
 
     /// The instant its hold ends, where one was set.
-    pub(crate) fn held_at(&self) -> Option<Instant> {
-        self.held.lock().unwrap_or_else(|p| p.into_inner()).map(|(at, _)| at)
+    pub fn held_at(&self) -> Option<Instant> {
+        self.held.lock().unwrap_or_else(|p| p.into_inner()).map(|h| h.at)
     }
 
     /// Until when it holds (epoch s), while it does.
     pub fn paused_until(&self) -> Option<i64> {
-        self.held.lock().unwrap_or_else(|p| p.into_inner()).filter(|(at, _)| *at > Instant::now()).map(|(_, until)| until)
+        self.held.lock().unwrap_or_else(|p| p.into_inner()).filter(|h| h.at > Instant::now()).map(|h| h.until)
     }
 
     /// The pause it holds for, as the error an asker is told: its source, and until when.
     pub fn paused(&self) -> Paused {
-        let until = self.held.lock().unwrap_or_else(|p| p.into_inner()).map_or_else(super::moment::now_secs, |(_, until)| until);
+        let until = self.held.lock().unwrap_or_else(|p| p.into_inner()).map_or_else(super::moment::now_secs, |h| h.until);
         Paused { source: self.policy.name, until }
+    }
+}
+
+/// Tests: a turn's hold as it was, to put back (`switches::TEST_STATE`'s rule for the state the process shares).
+#[cfg(any(test, feature = "test-support"))]
+pub struct Held(Option<Hold>);
+
+#[cfg(any(test, feature = "test-support"))]
+impl Turn {
+    pub fn as_held(&self) -> Held {
+        Held(*self.held.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
+    pub fn put_back(&self, was: Held) {
+        *self.held.lock().unwrap_or_else(|p| p.into_inner()) = was.0;
     }
 }
 
@@ -672,6 +815,77 @@ mod tests {
         assert_eq!(policy("bandcamp").map(|p| p.longest), Some(Duration::from_secs(86_400)), "Bandcamp's bot check holds a day");
         assert_eq!(class_at(&crate::bandcamp::NotRead.into(), 1_800_000_000), Failure::Paused { until: 1_800_000_000 + 86_400 });
         assert!(POLICIES.iter().all(|p| policy(p.name) == Some(*p) && p.first <= p.most && p.most <= RETRY_AFTER_MOST.max(p.longest)), "every source declared once");
+    }
+
+    /// TN.9 (OQ-T3), the turn's half: a restart mid-pause asks nothing early. AcoustID held until t0+600 (its 429 saying 600), Discogs
+    /// until t0+300 (its 429 saying 300), Bandcamp for its bot check's day, each kept in the user data's server choices as it is set;
+    /// the server stops at t0+60 and starts at t0+120: each hold is taken up again, never lengthened, and nothing is asked before it
+    /// is out. A kept deadline beyond its cap (kept while the clock ran ahead) is cut to it as it is taken up, in the user data too.
+    #[tokio::test(start_paused = true)]
+    async fn a_restart_mid_pause_asks_nothing_early() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let t0 = 1_800_000_000;
+        let _pinned = Pinned(t0);
+        let clock = |secs: i64| super::super::moment::PINNED.store(t0 + secs, Ordering::Relaxed);
+        clock(0);
+        let ud = Arc::new(UserData::open(None).unwrap());
+        let kept = |source: &str| ud.import_choice(&held_choice(source)).unwrap().and_then(|v| v.parse::<i64>().ok());
+        let made = || {
+            let turns = (Turn::new(ACOUSTID), Turn::new(DISCOGS), Turn::new(BANDCAMP));
+            for turn in [&turns.0, &turns.1, &turns.2] {
+                turn.keep(ud.clone());
+            }
+            turns
+        };
+        let fake = AcoustidFake::script(&[(429, Some("600"))]);
+        let print = print();
+        let start = Instant::now();
+
+        // Before the stop: each source's limit (Bandcamp's check) holds its turn, kept as it is set.
+        let (acoustid, discogs, bandcamp) = made();
+        let limited = crate::acoustid::lookup_in(&acoustid, |form| fake.answer(form), "key", &print).await;
+        assert_eq!(class(&limited.unwrap_err()), Failure::Paused { until: t0 + 600 });
+        let rate = discogs.heard_answer(StatusCode::TOO_MANY_REQUESTS, &headers(&[("retry-after", "300".into())]));
+        assert_eq!(rate, Err(Paused { source: "discogs", until: t0 + 300 }));
+        bandcamp.hold_until(t0 + 86_400, None);
+        assert_eq!([kept("acoustid"), kept("discogs"), kept("bandcamp")], [Some(t0 + 600), Some(t0 + 300), Some(t0 + 86_400)], "kept as each is set");
+        assert_eq!(held_choice("bandcamp"), "bandcamp:held_until", "Bandcamp's where it always was");
+
+        // The server stops at t0+60 and starts at t0+120: each turn made anew, its hold taken up from the user data.
+        tokio::time::advance(Duration::from_secs(60)).await;
+        clock(60);
+        drop((acoustid, discogs, bandcamp));
+        tokio::time::advance(Duration::from_secs(60)).await;
+        clock(120);
+        let (acoustid, discogs, bandcamp) = made();
+        let held = [acoustid.paused_until(), discogs.paused_until(), bandcamp.paused_until()];
+        assert_eq!(held, [Some(t0 + 600), Some(t0 + 300), Some(t0 + 86_400)], "taken up, never lengthened");
+
+        // Nothing asked early: AcoustID not before t0+600, Discogs not before t0+300, Bandcamp not before its day is out.
+        let asked_discogs = async {
+            discogs.turn().await;
+            Instant::now()
+        };
+        let looked = crate::acoustid::lookup_in(&acoustid, |form| fake.answer(form), "key", &print);
+        let (discogs_at, looked) = tokio::join!(asked_discogs, looked);
+        assert!(looked.is_ok());
+        let sent = fake.asked.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert!(sent[1] - start >= Duration::from_secs(600), "AcoustID asked at {:?}", sent[1] - start);
+        assert!(discogs_at - start >= Duration::from_secs(300), "Discogs asked at {:?}", discogs_at - start);
+        assert_eq!(bandcamp.take_within(false, Duration::from_secs(10)).await, Err(Paused { source: "bandcamp", until: t0 + 86_400 }));
+        assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+
+        // Kept beyond its cap (the clock ran ahead): cut to it as it is taken up, in the user data too.
+        clock(600);
+        let now = t0 + 600;
+        for (source, far) in [("acoustid", t0 + 5_000), ("discogs", t0 + 5_000), ("bandcamp", t0 + 30 * 86_400)] {
+            ud.set_import_choice(&held_choice(source), &far.to_string()).unwrap();
+        }
+        let (acoustid, discogs, bandcamp) = made();
+        let held = [acoustid.paused_until(), discogs.paused_until(), bandcamp.paused_until()];
+        assert_eq!(held, [Some(now + 900), Some(now + 900), Some(now + 86_400)], "each cut to its cap");
+        assert_eq!([kept("acoustid"), kept("discogs"), kept("bandcamp")], held, "cut in the user data too");
     }
 
 }

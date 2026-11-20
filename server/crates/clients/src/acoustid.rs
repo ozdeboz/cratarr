@@ -128,7 +128,7 @@ pub const LIMIT: u32 = 14;
 
 /// AcoustID's one turn (O6, TN): its limit is three questions a second, whoever asks (the gate, every account's hearing); its limit
 /// answer holds them all.
-static TURN: Turn = Turn::new(crate::app::turn::ACOUSTID);
+pub(crate) static TURN: Turn = Turn::new(crate::app::turn::ACOUSTID);
 /// Where AcoustID's lookup is asked.
 const LOOKUP: &str = "https://api.acoustid.org/v2/lookup";
 

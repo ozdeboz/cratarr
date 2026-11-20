@@ -26,7 +26,7 @@ fn answered(turn: &Turn, status: reqwest::StatusCode, retry_after: Option<u64>) 
 }
 
 /// The server's one turn (S10, TN).
-static TURN: Turn = Turn::new(MUSICBRAINZ);
+pub(crate) static TURN: Turn = Turn::new(MUSICBRAINZ);
 
 tokio::task_local! {
     /// Set for the background asker's questions (`behind`).

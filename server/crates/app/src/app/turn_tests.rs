@@ -1,5 +1,5 @@
-//! The turn's tests that reach the app's areas (its class over Soulseek's, the gate's and the list's errors), moved up from the
-//! turn's module in the clients crate with the turn's placing.
+//! The turn's tests that reach the app's areas (its class over Soulseek's, the gate's and the list's errors, and the switches
+//! over a record's list), moved up from the turn's module in the clients crate with the turn's placing.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +8,8 @@ use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 
 use super::turn::fakes::{self, headers, kind, print};
-use super::turn::{ACOUSTID, Failure, GITHUB, MUSICBRAINZ, Pinned, Refused, Stuck, Turn, class};
+use super::turn::{ACOUSTID, DISCOGS, Failure, GITHUB, MUSICBRAINZ, Paused, Pinned, Refused, Stuck, Turn, class, held_choice};
+use crate::userdata::UserData;
 
 /// A slskd at a local address whose batches answer `status`, Retry-After `said`, `body`; its own state `state`.
 async fn slskd(status: u16, said: Option<&'static str>, body: serde_json::Value, state: serde_json::Value) -> crate::slskd::Slskd {
@@ -133,8 +134,10 @@ async fn every_failure_has_its_class() {
 
     // Discogs.
     let said = |v: &str| headers(&[("retry-after", v.to_string())]);
-    cases.push(("Discogs 429", crate::app::discogs::too_many_said(&HeaderMap::new(), t0).1.into(), paused(60)));
-    cases.push(("Discogs 429 Retry-After 30", crate::app::discogs::too_many_said(&said("30"), t0).1.into(), paused(30)));
+    // As Discogs' turn hears it (TN-a2), not asked again.
+    let discogs = |h: HeaderMap| -> anyhow::Error { crate::app::discogs::again_after(&Turn::new(DISCOGS), StatusCode::TOO_MANY_REQUESTS, &h, &mut false).unwrap_err().into() };
+    cases.push(("Discogs 429", discogs(HeaderMap::new()), paused(60)));
+    cases.push(("Discogs 429 Retry-After 30", discogs(said("30")), paused(30)));
     cases.push(("Discogs 404", reqwest::get(mb("gone")).await.unwrap().error_for_status().unwrap_err().into(), Failure::NotFound));
 
     // Bandcamp.
@@ -196,4 +199,81 @@ async fn every_failure_has_its_class() {
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// TN.12, the turn's half: the switches and "Pause background reading" are no pauses. Discogs held until t0+300 (its 429 saying
+/// 300); then, each alone: background reading paused refuses the background's question, away with no deadline, and holds no page's
+/// (V6); MusicBrainz switched off is away (`SwitchedOff`), and a record's list passes to its next source (Y12); Bandcamp switched off
+/// is away, its bot check's hold kept, and switched on again lifts it through its one turn, in memory and in the user data (V8);
+/// slskd switched off and on again leaves Discogs' pause as it was. Never a switch read as a pause with a deadline; never a rate pause's
+/// deadline cleared by another switch.
+#[tokio::test]
+async fn the_switches_are_not_pauses() {
+    use crate::app::switches::{BACKGROUND, BANDCAMP as BANDCAMP_ON, MUSICBRAINZ as MUSICBRAINZ_ON, PAUSED, SLSKD as SLSKD_ON, TEST_STATE, set_for_tests};
+    use crate::catalogue::records::Ref;
+    let _one = TEST_STATE.lock().await;
+    let t0 = Pinned::now();
+    let t0 = t0.0;
+    let discogs = Turn::new(DISCOGS);
+    let rate = discogs.heard_answer(StatusCode::TOO_MANY_REQUESTS, &headers(&[("retry-after", "300".into())]));
+    assert_eq!(rate, Err(Paused { source: "discogs", until: t0 + 300 }));
+    let no_pause = |e: &anyhow::Error| matches!(class(e), Failure::Away(_));
+
+    // Background reading paused: the background's question refused, away with no deadline; a page's goes (V6).
+    let at = fakes::serve(axum::Router::new().route("/ws/2/release/r1", axum::routing::get(|| async { "{}" }))).await;
+    let http = reqwest::Client::builder().user_agent(super::reach::USER_AGENT).build().unwrap();
+    let musicbrainz = Turn::new(MUSICBRAINZ);
+    let ask = || crate::app::musicbrainz::asked_in(&musicbrainz, http.get(format!("{at}/ws/2/release/r1")));
+    let was = set_for_tests(BACKGROUND, false);
+    let pass = crate::app::musicbrainz::behind(ask()).await;
+    let page = ask().await;
+    set_for_tests(BACKGROUND, was);
+    assert!(pass.is_err_and(|e| e.to_string() == PAUSED && no_pause(&e)), "the background's: away, no deadline");
+    assert!(page.is_ok_and(|r| r.status().is_success()), "a page's goes");
+    assert_eq!((musicbrainz.paused_until(), discogs.paused_until()), (None, Some(t0 + 300)));
+
+    // MusicBrainz switched off: away, and a record's list passes to its next source (Y12).
+    let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+    let record = cat.record_for_tests("Tide Tables", 0);
+    for (source, kind, value) in [("musicbrainz", "release", "r1"), ("discogs", "release", "2000013")] {
+        assert!(cat.set_reference(&crate::serve::ids::record(record), &Ref::new(source, kind, value), "link").unwrap());
+    }
+    let slack = vec![crate::catalogue::identity::RefTrack { disc: 1, position: 1, title: "Slack Water".into(), length_ms: Some(200_000), recording: None }];
+    let read = |r: Ref| {
+        let slack = slack.clone();
+        async move { if r.source == "musicbrainz" { crate::app::references::read_reference(r).await } else { Ok(Some((slack, None, Default::default()))) } }
+    };
+    let was = set_for_tests(MUSICBRAINZ_ON, false);
+    let off = ask().await;
+    let judged = crate::app::references::tracklist(&cat, record, read).await;
+    set_for_tests(MUSICBRAINZ_ON, was);
+    assert!(off.is_err_and(|e| e.is::<crate::app::references::SwitchedOff>() && no_pause(&e)), "switched off: away, no deadline");
+    assert_eq!(judged.unwrap().unwrap().timed.map(|(s, _)| s).as_deref(), Some("discogs"), "judged by its next list");
+    assert_eq!((musicbrainz.paused_until(), discogs.paused_until()), (None, Some(t0 + 300)));
+
+    // Bandcamp switched off: away, its bot check's hold kept; switched on again, lifted through its one turn (V8).
+    let ud = UserData::open(None).unwrap();
+    let was_held = crate::bandcamp::TURN.as_held();
+    crate::bandcamp::hold_in(Some(&ud));
+    let was = set_for_tests(BANDCAMP_ON, false);
+    crate::bandcamp::switched(Some(&ud), false);
+    let off = crate::bandcamp::Bandcamp::get().search("Glass Harbour", "Tide Tables").await;
+    let held_off = crate::bandcamp::held_until(t0);
+    set_for_tests(BANDCAMP_ON, true);
+    crate::bandcamp::switched(Some(&ud), true);
+    let lifted = (crate::bandcamp::held_until(t0), crate::bandcamp::TURN.paused_until(), ud.import_choice(&held_choice("bandcamp")).unwrap());
+    set_for_tests(BANDCAMP_ON, was);
+    crate::bandcamp::TURN.put_back(was_held);
+    assert!(off.is_err_and(|e| e.to_string() == "Bandcamp is switched off" && no_pause(&e)), "switched off: away, no deadline");
+    assert_eq!(held_off, Some(t0 + 86_400), "switched off, its hold stays");
+    assert_eq!(lifted, (None, None, Some(String::new())), "switched on: lifted in memory and in the user data");
+    assert_eq!(discogs.paused_until(), Some(t0 + 300), "another source's pause kept");
+
+    // slskd switched off and on again: Discogs' pause as it was, nothing asked of it before t0+300.
+    let was = set_for_tests(SLSKD_ON, false);
+    let off = discogs.paused_until();
+    set_for_tests(SLSKD_ON, true);
+    let early = discogs.take_within(false, Duration::from_secs(1)).await;
+    set_for_tests(SLSKD_ON, was);
+    assert_eq!((off, early), (Some(t0 + 300), Err(Paused { source: "discogs", until: t0 + 300 })), "a switch is no pause, and clears none");
 }

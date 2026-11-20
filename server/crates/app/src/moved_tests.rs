@@ -53,7 +53,7 @@ mod bandcamp {
     #[tokio::test]
     async fn a_bot_check_holds_bandcamp_for_a_day() {
         let _one = crate::app::switches::TEST_STATE.lock().await;
-        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let was = TURN.as_held();
         let now = crate::app::moment::now_secs();
         hold();
         let until = held_until(now);
@@ -66,7 +66,7 @@ mod bandcamp {
         let played = bc.stream(page, 2, None).await;
         let found: Vec<crate::app::health::Finding> = crate::app::health::check_connections(now).into_iter().filter(|f| f.key == "connections:bandcamp-check").collect();
         let said: Vec<String> = found.iter().map(|f| f.title.clone()).collect();
-        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        TURN.put_back(was);
         let opens = found.iter().map(|f| f.open.as_ref().map(|o| (o.page, o.thing))).collect::<Vec<_>>();
         assert_eq!(opens, [Some(("settings", Some("bandcamp")))], "G9: opens Bandcamp's page in Settings");
         assert!(said.len() == 1 && said[0].starts_with("Bandcamp asked for a browser check; Cratarr stopped asking until "), "{said:?}");

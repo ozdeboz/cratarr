@@ -1,12 +1,12 @@
 //! Discogs (0.9.5, the owner: "Discogs, with an app key and secret"): albums' masters, their images, genres and
 //! styles, and artists' images. The server's own key and secret (Settings › Server; never shown, never in an address)
-//! go in the Authorization header; without them Discogs answers at its anonymous pace and gives no images. One pacer
-//! for every call, kept under the limit Discogs reports in each reply. An album's master is MusicBrainz's link from its
+//! go in the Authorization header; without them Discogs answers at its anonymous pace and gives no images. One turn
+//! for every call (`TURN`, TN.4), kept under the limit Discogs reports in each reply. An album's master is MusicBrainz's link from its
 //! release group first, else Discogs' own search by artist and title (which needs the key).
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::userdata::UserData;
 use super::musicbrainz::Asked as _;
 use super::reach::Sent as _;
+use super::turn::{Paused, Turn};
 
 /// Where the key and secret are kept (user data's server choices, as the server's Last.fm key).
 pub const KEY: &str = "discogs:key";
@@ -22,8 +23,8 @@ const API: &str = "https://api.discogs.com";
 /// Discogs' limits a minute, until a reply says.
 const ANONYMOUS_PER_MINUTE: u32 = 25;
 const KEYED_PER_MINUTE: u32 = 60;
-/// Too many asked (429) without a Retry-After: once more after this (its policy's, `turn::DISCOGS`).
-const TOO_MANY_WAIT: Duration = super::turn::DISCOGS.first;
+/// Discogs counts its limit over a moving minute: one spent, every caller held this long.
+const MOVING_MINUTE: Duration = Duration::from_secs(60);
 /// An album's cover found (or not) is kept this long before it is looked for again.
 const COVER_FOUND_SECS: i64 = 30 * 86_400;
 const COVER_NONE_SECS: i64 = 7 * 86_400;
@@ -34,8 +35,9 @@ const GENRES_BATCH: usize = 100;
 
 /// The limit a minute Discogs said last (0: not yet).
 static PER_MINUTE: AtomicU32 = AtomicU32::new(0);
-/// Asked nothing until then (Unix ms): the reply said the minute's calls are used up.
-static HOLD_UNTIL: AtomicU64 = AtomicU64::new(0);
+/// Discogs' one turn (TN.4): every caller's questions `gap` apart at the limit it said, none while its minute is spent or after its
+/// "too many" (429), on tokio's clock.
+pub static TURN: Turn = Turn::new(super::turn::DISCOGS);
 
 /// The limit a minute Discogs reported last, for Settings.
 pub fn per_minute() -> Option<u32> {
@@ -71,51 +73,20 @@ fn client() -> Result<&'static reqwest::Client> {
     Ok(C.get_or_init(|| c))
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
-}
-
 /// The time between two calls at `per_minute`, a little over it.
 fn gap(per_minute: u32) -> Duration {
     Duration::from_millis(60_000 / u64::from(per_minute.max(1)) + 50)
 }
 
-/// Waits for this call's turn: one at a time, `gap` apart, and none while the minute's calls are used up.
-async fn pace(keyed: bool) {
-    static NEXT: OnceLock<tokio::sync::Mutex<Instant>> = OnceLock::new();
-    let mut next = NEXT.get_or_init(|| tokio::sync::Mutex::new(Instant::now())).lock().await;
-    let hold = HOLD_UNTIL.load(Ordering::Relaxed).saturating_sub(now_ms());
-    if hold > 0 {
-        tokio::time::sleep(Duration::from_millis(hold)).await;
+/// Whether `get` asks once more after an answer (its status and headers, heard by `turn`): after its first 429 only (`again`). Every
+/// 429 holds every caller first, for its Retry-After, else its policy's wait doubling in a row (TN.3), a second in a row too, and one
+/// while a hold is on pushes it out (O6, Y8); any other answer ends the run. A second in a row is the pause it asks for (TN.1).
+pub(crate) fn again_after(turn: &Turn, status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap, again: &mut bool) -> Result<bool, Paused> {
+    match turn.heard_answer(status, headers) {
+        Ok(()) => Ok(false),
+        Err(_) if std::mem::take(again) => Ok(true),
+        Err(paused) => Err(paused),
     }
-    let now = Instant::now();
-    if *next > now {
-        tokio::time::sleep(*next - now).await;
-    }
-    let limit = per_minute().unwrap_or(if keyed { KEYED_PER_MINUTE } else { ANONYMOUS_PER_MINUTE });
-    *next = Instant::now() + gap(limit);
-}
-
-/// Discogs said "too many" (429): every caller held `wait` (O6), a later hold kept.
-fn too_many(wait: Duration) {
-    HOLD_UNTIL.fetch_max(now_ms() + wait.as_millis() as u64, Ordering::Relaxed);
-}
-
-/// Discogs' "too many" (429) as the pause it is (TN.1): its Retry-After where it says, else `TOO_MANY_WAIT`. The wait, and the pause
-/// from `now` (epoch s). Pure.
-pub(crate) fn too_many_said(headers: &reqwest::header::HeaderMap, now: i64) -> (Duration, super::turn::Paused) {
-    let wait = super::turn::retry_after(headers, now).unwrap_or(TOO_MANY_WAIT);
-    (wait, super::turn::Paused { source: super::turn::DISCOGS.name, until: now + wait.as_secs() as i64 })
-}
-
-/// Whether `get` asks once more after an answer of `status`: after its first 429 only (`again`). Every 429 holds every caller first
-/// (`wait`), a second in a row too, and one while a hold is on pushes it out (O6, Y8).
-fn again_after(status: reqwest::StatusCode, wait: Duration, again: &mut bool) -> bool {
-    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return false;
-    }
-    too_many(wait);
-    std::mem::take(again)
 }
 
 /// Whether a release group's kept cover answer is a fresh "none" (O6): no cover anywhere, so the Cover Art Archive is not asked for
@@ -132,14 +103,16 @@ pub async fn kept_without_cover(rg: &str) -> bool {
     none_kept(kept, super::moment::now_secs())
 }
 
-/// What a reply says of the limits: the limit a minute, and a hold of a minute when few calls are left.
-fn note_limits(h: &reqwest::header::HeaderMap) {
+/// What a reply says of the limits (TN.4): the limit a minute, `turn`'s questions `gap` apart at it from the next on; and every caller
+/// held a minute when one call or none is left.
+fn note_limits(turn: &Turn, h: &reqwest::header::HeaderMap) {
     let num = |name: &str| h.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u32>().ok());
     if let Some(n) = num("x-discogs-ratelimit") {
         PER_MINUTE.store(n, Ordering::Relaxed);
+        turn.set_apart(gap(n));
     }
     if num("x-discogs-ratelimit-remaining").is_some_and(|left| left <= 1) {
-        HOLD_UNTIL.store(now_ms() + 60_000, Ordering::Relaxed);
+        turn.hold_for(MOVING_MINUTE);
     }
 }
 
@@ -193,31 +166,55 @@ pub async fn search_masters(q: &str, limit: usize, offset: usize) -> Result<Vec<
     Ok(found)
 }
 
-/// One GET of Discogs' API (`path` with its query), paced; none where Discogs has no such thing.
+/// One GET of Discogs' API (`path` with its query), in its turn; none where Discogs has no such thing.
 async fn get(path: &str) -> Result<Option<Value>> {
-    // Switched off (0.9.6): Discogs is asked nothing; as if it had nothing.
     if !super::switches::is_on(super::switches::DISCOGS) {
         return Ok(None);
     }
-    let creds = saved().await;
+    let (creds, http) = (saved().await, client()?);
+    get_in(&TURN, creds.as_ref(), path, |q: Question| {
+        let mut req = http.get(format!("{API}{}", q.path));
+        if let Some(a) = q.authorization {
+            req = req.header(reqwest::header::AUTHORIZATION, a);
+        }
+        req.sent()
+    })
+    .await
+}
+
+/// One question to Discogs as it is sent (`get_in`): its path with its query, and the key's Authorization where one is saved.
+pub(crate) struct Question {
+    pub path: String,
+    pub authorization: Option<String>,
+}
+
+/// `get`, in `turn`, each question sent by `send` (Discogs' address in `get`; the tests' stand-in for it, TN.4, as a paused clock
+/// and sockets do not mix): with the key `creds` where saved. Switched off (0.9.6), Discogs is asked nothing, as if it had nothing.
+/// Its first 429 holds every caller and is asked once more after; a second in a row is the pause it asks for (TN.1).
+pub(crate) async fn get_in<S, F>(turn: &Turn, creds: Option<&(String, String)>, path: &str, send: S) -> Result<Option<Value>>
+where
+    S: Fn(Question) -> F,
+    F: std::future::Future<Output = reqwest::Result<reqwest::Response>>,
+{
+    if !super::switches::is_on(super::switches::DISCOGS) {
+        return Ok(None);
+    }
+    let authorization = creds.map(|(k, s)| format!("Discogs key={k}, secret={s}"));
     let mut again = true;
     loop {
-        pace(creds.is_some()).await;
-        let mut req = client()?.get(format!("{API}{path}"));
-        if let Some((k, s)) = &creds {
-            req = req.header(reqwest::header::AUTHORIZATION, format!("Discogs key={k}, secret={s}"));
+        // Its pace until a reply says its limit: the key's, else the anonymous one.
+        if per_minute().is_none() {
+            turn.set_apart(gap(if creds.is_some() { KEYED_PER_MINUTE } else { ANONYMOUS_PER_MINUTE }));
         }
-        let r = req.sent().await?;
-        note_limits(r.headers());
-        let (wait, paused) = too_many_said(r.headers(), super::moment::now_secs());
-        // Everyone held, not only this caller (O6): `pace` waits it out.
-        if again_after(r.status(), wait, &mut again) {
+        turn.turn().await;
+        let r = send(Question { path: path.to_string(), authorization: authorization.clone() }).await?;
+        note_limits(turn, r.headers());
+        // Everyone held, not only this caller (O6): the turn waits it out.
+        if again_after(turn, r.status(), r.headers(), &mut again)? {
             continue;
         }
         match r.status() {
             reqwest::StatusCode::NOT_FOUND => return Ok(None),
-            // A second in a row, not asked again: the pause it asks for (TN.1).
-            reqwest::StatusCode::TOO_MANY_REQUESTS => return Err(paused.into()),
             _ => return Ok(Some(r.error_for_status()?.json().await?)),
         }
     }
@@ -834,40 +831,163 @@ mod listing_tests {
 mod tests {
     use super::*;
 
-    /// Y8: every 429 holds every caller, a second in a row too (which is not asked again); any other answer holds no one.
+    /// Y8: every 429 holds every caller, a second in a row too (which is not asked again); any other answer holds no one. (TN-a2: the
+    /// hold is Discogs' turn's, on tokio's clock.)
     #[test]
     fn every_discogs_429_holds_everyone() {
         let _one = crate::app::switches::TEST_STATE.blocking_lock();
-        let was = HOLD_UNTIL.load(Ordering::Relaxed);
-        let busy = reqwest::StatusCode::TOO_MANY_REQUESTS;
+        let turn = Turn::new(super::super::turn::DISCOGS);
+        let (busy, none) = (reqwest::StatusCode::TOO_MANY_REQUESTS, reqwest::header::HeaderMap::new());
         let mut again = true;
-        HOLD_UNTIL.store(0, Ordering::Relaxed);
-        let first = again_after(busy, TOO_MANY_WAIT, &mut again);
-        HOLD_UNTIL.store(0, Ordering::Relaxed);
-        let second = again_after(busy, TOO_MANY_WAIT, &mut again);
-        let held = HOLD_UNTIL.swap(0, Ordering::Relaxed);
-        let other = again_after(reqwest::StatusCode::OK, TOO_MANY_WAIT, &mut true);
-        let after_other = HOLD_UNTIL.load(Ordering::Relaxed);
-        HOLD_UNTIL.store(was, Ordering::Relaxed);
+        let first = again_after(&turn, busy, &none, &mut again).unwrap();
+        turn.lift(None);
+        let second = again_after(&turn, busy, &none, &mut again).unwrap_or(false);
+        let held = turn.held_at();
+        turn.lift(None);
+        let other = again_after(&turn, reqwest::StatusCode::OK, &none, &mut true).unwrap();
+        let after_other = turn.held_at();
+        let now = tokio::time::Instant::now();
         assert!(first && !second, "the first asked once more, the second not");
-        assert!(held >= now_ms() + 59_000, "the second holds every caller all the same");
-        assert!(!other && after_other == 0, "any other answer holds no one");
+        assert!(held.is_some_and(|h| h >= now + Duration::from_secs(59)), "the second holds every caller all the same");
+        assert!(!other && after_other.is_none(), "any other answer holds no one");
     }
 
     /// O6: Discogs' "too many" holds every caller, not only the one it answered; a release group kept as having no cover anywhere
-    /// is not asked of the Cover Art Archive again while that is kept.
+    /// is not asked of the Cover Art Archive again while that is kept. (TN-a2: the hold is Discogs' turn's, on tokio's clock.)
     #[test]
     fn a_discogs_429_holds_everyone_and_a_kept_none_asks_nothing() {
         let _one = crate::app::switches::TEST_STATE.blocking_lock();
-        let was = HOLD_UNTIL.load(Ordering::Relaxed);
-        too_many(TOO_MANY_WAIT);
-        let held = HOLD_UNTIL.load(Ordering::Relaxed);
-        HOLD_UNTIL.store(was, Ordering::Relaxed);
-        assert!(held >= now_ms() + 59_000, "held a minute for every caller");
+        let turn = Turn::new(super::super::turn::DISCOGS);
+        let _ = again_after(&turn, reqwest::StatusCode::TOO_MANY_REQUESTS, &reqwest::header::HeaderMap::new(), &mut true);
+        let held = turn.held_at();
+        assert!(held.is_some_and(|h| h >= tokio::time::Instant::now() + Duration::from_secs(59)), "held a minute for every caller");
         let now = 1_800_000_000;
         assert!(none_kept(Some((now - 60, None)), now));
         assert!(!none_kept(Some((now - COVER_NONE_SECS - 1, None)), now), "an old none is asked again");
         assert!(!none_kept(Some((now, Some("https://coverartarchive.org/release-group/x/front-250".into()))), now) && !none_kept(None, now));
+    }
+
+    /// One answer of `DiscogsFake`'s script: its status, its `X-Discogs-Ratelimit` and `-Remaining`, its Retry-After.
+    #[derive(Clone, Copy)]
+    struct Scripted(u16, Option<u32>, Option<u32>, Option<&'static str>);
+
+    /// Discogs as TN.4's fake answers it, standing in for its address: its script in order (then 200 at 25 a minute), each answer
+    /// with its limit headers; every question kept with its instant on the paused clock. A question while its minute was spent
+    /// (`Remaining` 0, its minute not over), one without the key's Authorization while a key is saved, or one while Discogs is switched
+    /// off, is a violation.
+    struct DiscogsFake {
+        key: String,
+        script: std::sync::Mutex<std::collections::VecDeque<Scripted>>,
+        asked: std::sync::Mutex<Vec<(tokio::time::Instant, String)>>,
+        spent_until: std::sync::Mutex<Option<tokio::time::Instant>>,
+        violations: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl DiscogsFake {
+        fn answer(&self, q: Question) -> std::future::Ready<reqwest::Result<reqwest::Response>> {
+            let now = tokio::time::Instant::now();
+            let mut violations = self.violations.lock().unwrap();
+            if q.authorization.as_deref() != Some(self.key.as_str()) {
+                violations.push(format!("{} asked without the key: {:?}", q.path, q.authorization));
+            }
+            if self.spent_until.lock().unwrap().is_some_and(|until| now < until) {
+                violations.push(format!("{} asked while its minute was spent", q.path));
+            }
+            if !crate::app::switches::is_on(crate::app::switches::DISCOGS) {
+                violations.push(format!("{} asked while Discogs is switched off", q.path));
+            }
+            self.asked.lock().unwrap().push((now, q.path.clone()));
+            let Scripted(status, limit, remaining, said) = self.script.lock().unwrap().pop_front().unwrap_or(Scripted(200, Some(25), Some(20), None));
+            if remaining == Some(0) {
+                *self.spent_until.lock().unwrap() = Some(now + Duration::from_secs(60));
+            }
+            let mut r = axum::http::Response::builder().status(status);
+            if let Some(n) = limit {
+                r = r.header("x-discogs-ratelimit", n).header("x-discogs-ratelimit-used", n - remaining.unwrap_or(0));
+            }
+            if let Some(n) = remaining {
+                r = r.header("x-discogs-ratelimit-remaining", n);
+            }
+            if let Some(s) = said {
+                r = r.header("retry-after", s);
+            }
+            let body = if status == 200 { format!(r#"{{"id":{},"main_release":1}}"#, q.path.trim_start_matches("/masters/")) } else { String::new() };
+            std::future::ready(Ok(reqwest::Response::from(r.body(body).unwrap())))
+        }
+
+        /// The instants `path` was asked at.
+        fn at(&self, path: &str) -> Vec<tokio::time::Instant> {
+            self.asked.lock().unwrap().iter().filter(|(_, p)| p == path).map(|(at, _)| *at).collect()
+        }
+    }
+
+    /// TN.4: Discogs follows its limit headers, every caller in its one turn on tokio's clock. A key saved: questions go `gap(60)`
+    /// apart while it says 60 a minute, `gap(25)` once it says 25; after an answer with one call left or none, no question for its
+    /// minute, every caller held; a bare 429 holds every caller a minute and its question is asked once more after; a second in a row
+    /// holds and is not asked again, the pause it asks for; Retry-After 30 holds 30 s. Never a question while its minute is spent,
+    /// none a third time after two 429s, none without the key, none while switched off.
+    #[tokio::test(start_paused = true)]
+    async fn discogs_follows_its_limit_headers() {
+        use super::super::turn::{Failure, Pinned, class};
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let t0 = Pinned::now();
+        let t0 = t0.0;
+        let per_minute_was = PER_MINUTE.swap(0, Ordering::Relaxed);
+        let creds = ("AbCdEf1234567890".to_string(), "Secret1234567890".to_string());
+        // 60 a minute, one call fewer left each time down to none; then 25 a minute; then a bare 429 twice, and a 429 saying 30.
+        let mut script: std::collections::VecDeque<Scripted> = (1..=60).map(|n| Scripted(200, Some(60), Some(60 - n), None)).collect();
+        script.push_back(Scripted(200, Some(25), Some(24), None));
+        script.extend([Scripted(429, None, None, None), Scripted(429, None, None, None), Scripted(429, None, None, Some("30")), Scripted(200, Some(25), Some(23), None)]);
+        let fake = DiscogsFake {
+            key: format!("Discogs key={}, secret={}", creds.0, creds.1),
+            script: std::sync::Mutex::new(script),
+            asked: Default::default(),
+            spent_until: Default::default(),
+            violations: Default::default(),
+        };
+        let turn = Turn::new(super::super::turn::DISCOGS);
+        let master = |n: u32| {
+            let (turn, fake, creds) = (&turn, &fake, &creds);
+            async move { get_in(turn, Some(creds), &format!("/masters/{n}"), |q| fake.answer(q)).await }
+        };
+        let start = tokio::time::Instant::now();
+
+        // 61 masters in a row: the last two asked at once, every caller held by the spent minute.
+        for n in 1..=59 {
+            assert!(master(n).await.unwrap().is_some());
+        }
+        let (sixty, sixty_one) = tokio::join!(master(60), master(61));
+        assert!(sixty.unwrap().is_some() && sixty_one.unwrap().is_some());
+        let at = |n: u32| fake.at(&format!("/masters/{n}"));
+        let first: Vec<tokio::time::Instant> = (1..=61).map(|n| at(n)[0]).collect();
+        let gaps: Vec<Duration> = first.windows(2).map(|w| w[1] - w[0]).collect();
+        assert_eq!(first[0], start, "the first at once");
+        assert!(gaps[..58].iter().all(|g| *g == gap(60)), "gap(60) apart while it says 60: {:?}", &gaps[..58]);
+        assert_eq!(gap(60), Duration::from_millis(1050));
+        assert_eq!((gaps[58], gaps[59]), (Duration::from_secs(60), Duration::from_secs(60)), "one left, then none: its minute waited out, by every caller");
+
+        // Then 3 more: a bare 429 held a minute and asked once more, a second not asked again; a 429 saying 30; one after.
+        let paused = master(62).await.unwrap_err();
+        let held = turn.paused_until();
+        assert_eq!(at(62).len(), 2, "asked once more, never a third time");
+        assert_eq!(at(62)[0] - first[60], gap(25), "gap(25) once it says 25");
+        assert_eq!(gap(25), Duration::from_millis(2450));
+        assert_eq!(at(62)[1] - at(62)[0], Duration::from_secs(60), "a bare 429: every caller a minute, then asked once more");
+        assert_eq!(class(&paused), Failure::Paused { until: t0 + 120 }, "the second in a row: the pause, doubled (TN.3)");
+        assert_eq!(held, Some(t0 + 120), "and it holds every caller");
+        assert!(master(63).await.unwrap().is_some());
+        assert_eq!(at(63)[0] - at(62)[1], Duration::from_secs(120), "another caller held by it");
+        assert_eq!(at(63)[1] - at(63)[0], Duration::from_secs(30), "Retry-After: 30 holds 30 s");
+        assert!(master(64).await.unwrap().is_some());
+        assert_eq!(at(64)[0] - at(63)[1], gap(25));
+
+        // Switched off: nothing asked.
+        let was = crate::app::switches::set_for_tests(crate::app::switches::DISCOGS, false);
+        let off = master(65).await;
+        crate::app::switches::set_for_tests(crate::app::switches::DISCOGS, was);
+        PER_MINUTE.store(per_minute_was, Ordering::Relaxed);
+        assert!(off.unwrap().is_none() && at(65).is_empty(), "switched off, asked nothing");
+        assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
     }
 
     #[test]

@@ -25,16 +25,17 @@ const KEEP_MOST: usize = 64;
 /// The most of a page of Bandcamp's read (O1), and of a search box's answer.
 const PAGE_MOST: usize = 8 << 20;
 const SEARCH_MOST: usize = 1 << 20;
-/// At most one page of Bandcamp's read in this long, server-wide (Discover's look, previews, a track's details): the
-/// owner asked, 2026-10-25, whether Cratarr is polite to it. A stream played is not paced: it is a listener's.
-const PACE: Duration = crate::app::turn::BANDCAMP.apart;
+/// Bandcamp's one turn (O4, TN): at most one page of Bandcamp's read a second, server-wide (Discover's look, previews, a track's
+/// details: the owner asked, 2026-10-25, whether Cratarr is polite to it); none while it asked to be left alone, after "too many"
+/// (429) or "unavailable" (503), or for a day after its bot check (its own hold, `hold_until`). A stream played is not paced: it is a
+/// listener's.
+pub static TURN: crate::app::turn::Turn = crate::app::turn::Turn::new(crate::app::turn::BANDCAMP);
 /// How long Bandcamp is left alone after it says "too many" (429) or "unavailable" (503) without saying how long.
 const BACK_OFF: Duration = crate::app::turn::BANDCAMP.first;
 /// How long Bandcamp is left alone after its bot check (O4): a day, nothing done to get past it.
 pub const CHECK_HOLD_SECS: i64 = crate::app::turn::BANDCAMP.longest.as_secs() as i64;
-/// Until when it is left alone so (epoch s; 0: it is not).
-pub static HELD_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-/// Where that is kept across a restart (Y8): the user data's server choices, epoch seconds.
+/// Where its hold is kept across a restart (Y8, OQ-T3): the user data's server choices, epoch seconds.
+#[cfg(test)]
 const HELD_CHOICE: &str = "bandcamp:held_until";
 
 /// A Bandcamp album page as a view offers it for its preview (G1): none while Bandcamp is switched off, as its preview would only
@@ -49,78 +50,61 @@ fn shown_if(page: Option<String>, on: bool) -> Option<String> {
     page.filter(|_| on)
 }
 
-/// Until when Cratarr leaves Bandcamp alone after its bot check (O4), where it does at `now`. Never longer than the check's own day
-/// from now (U11, as V8 has it for the kept one): a hold set while the clock ran ahead is cut to that, and held so.
+/// Until when Cratarr leaves Bandcamp alone after its bot check (O4), where it does at `now`: its turn's own hold. Never longer than
+/// the check's own day from now (U11, as V8 has it for the kept one): a hold set while the clock ran ahead is cut to that, and held so.
 pub fn held_until(now: i64) -> Option<i64> {
-    let mut until = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
-    if until > now + CHECK_HOLD_SECS {
-        let cut = now + CHECK_HOLD_SECS;
-        let _ = HELD_UNTIL.compare_exchange(until, cut, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
-        until = cut;
-    }
-    (until > now).then_some(until)
+    TURN.own_until(now)
 }
 
 /// Bandcamp left alone for a day after its bot check, or a search answer that is no JSON (O4): said in the log once, a failure for
-/// Health's connections, nothing done to get past it. Kept in the server's user data (Y8).
+/// Health's connections, nothing done to get past it. Kept where its turn is, the server's user data (Y8, OQ-T3).
 pub fn hold() {
-    hold_in(crate::serve::view::get().as_deref().map(|s| &**s.userdata()));
+    hold_in(None);
 }
 
-/// `hold`, kept in `ud` where there is one (Y8), so a restart the evening of a check still leaves Bandcamp alone until the day is out
-/// (`hold_kept`).
-fn hold_in(ud: Option<&crate::userdata::UserData>) {
+/// `hold`, its turn holding every reader for the day, kept in `ud` where given (else where the turn is kept: Y8), so a restart the
+/// evening of a check still leaves Bandcamp alone until the day is out (`Turn::keep`).
+pub fn hold_in(ud: Option<&crate::userdata::UserData>) {
     let now = crate::app::moment::now_secs();
-    let until = now + CHECK_HOLD_SECS;
-    if HELD_UNTIL.swap(until, std::sync::atomic::Ordering::Relaxed) <= now {
+    if held_until(now).is_none() {
         tracing::warn!(target: "bandcamp", "Bandcamp asked for a browser check: Cratarr stopped asking it for a day");
     }
-    if let Some(ud) = ud
-        && let Err(e) = ud.set_import_choice(HELD_CHOICE, &until.to_string())
-    {
-        tracing::warn!(target: "bandcamp", "Bandcamp's hold is not kept for a restart: {e:#}");
-    }
+    TURN.hold_until(now + CHECK_HOLD_SECS, ud);
     crate::app::reach::failed("bandcamp", "Bandcamp asked for a browser check".into());
 }
 
-/// The hold kept before a restart taken up again, at start (Y8): nothing is asked of Bandcamp until it is out, and Health says so.
-/// Never longer than the check's own day from now (V8): one kept while the clock ran ahead is cut to that, in the user data too, so
-/// the next start does not take it up again.
+/// Tests: the hold kept before a restart taken up again, as the start does (`Turn::keep`, Y8): nothing is asked of Bandcamp until it
+/// is out, and Health says so. Never longer than the check's own day from now (V8): one kept while the clock ran ahead is cut to that,
+/// in the user data too, so the next start does not take it up again.
+#[cfg(any(test, feature = "test-support"))]
 pub fn hold_kept(ud: &crate::userdata::UserData) {
-    let Some(kept) = ud.import_choice(HELD_CHOICE).ok().flatten().and_then(|v| v.trim().parse::<i64>().ok()) else { return };
-    let until = kept.min(crate::app::moment::now_secs() + CHECK_HOLD_SECS);
-    if until < kept
-        && let Err(e) = ud.set_import_choice(HELD_CHOICE, &until.to_string())
-    {
-        tracing::warn!(target: "bandcamp", "Bandcamp's hold, cut to a day, is not kept for a restart: {e:#}");
-    }
-    HELD_UNTIL.fetch_max(until, std::sync::atomic::Ordering::Relaxed);
+    TURN.take_up(ud);
 }
 
-/// Bandcamp switched on or off by an administrator (O4): switched on, its bot check's hold is lifted (V8), in memory and in the user
-/// data `ud` where there is one, so it is asked again at once and a restart takes up nothing. Switched off, the hold stays.
+/// Bandcamp switched on or off by an administrator (O4): switched on, its bot check's hold is lifted (V8) through its turn, in memory
+/// and in the user data `ud` where there is one, so it is asked again at once and a restart takes up nothing. Switched off, the hold
+/// stays.
 pub fn switched(ud: Option<&crate::userdata::UserData>, on: bool) {
-    if !on {
-        return;
-    }
-    HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
-    if let Some(ud) = ud
-        && let Err(e) = ud.set_import_choice(HELD_CHOICE, "")
-    {
-        tracing::warn!(target: "bandcamp", "Bandcamp's hold, lifted, is still kept for a restart: {e:#}");
+    if on {
+        TURN.lift(ud);
     }
 }
 
-/// Tests: Bandcamp held back after its bot check until `until` (0: not), as its own tests hold it; what it was.
+/// Tests: Bandcamp held back after its bot check until `until` (0: not), as its own tests hold it (its turn's own hold, nothing
+/// kept); until when it was held so (0: it was not).
 #[cfg(any(test, feature = "test-support"))]
 pub fn hold_for_tests(until: i64) -> i64 {
-    HELD_UNTIL.swap(until, std::sync::atomic::Ordering::Relaxed)
+    let was = held_until(crate::app::moment::now_secs()).unwrap_or(0);
+    TURN.lift(None);
+    TURN.hold_until(until, None);
+    was
 }
 
-/// Why nothing is asked of Bandcamp now (O4): switched off, or left alone after its bot check (`NotRead`).
+/// Why nothing is asked of Bandcamp now (O4): switched off (`SwitchedOff`: no pause, TN.12), or left alone after its bot check
+/// (`NotRead`).
 fn refused() -> Result<()> {
     if !crate::app::switches::is_on(crate::app::switches::BANDCAMP) {
-        bail!("Bandcamp is switched off");
+        return Err(crate::app::references_turn::SwitchedOff("Bandcamp").into());
     }
     if held_until(crate::app::moment::now_secs()).is_some() {
         return Err(NotRead.into());
@@ -207,8 +191,6 @@ pub struct Bandcamp {
     /// Its streams' client: Bandcamp's media hosts only (O1).
     media: reqwest::Client,
     kept: Mutex<HashMap<String, (Instant, Album)>>,
-    /// When the next page may be read (PACE apart; later after a back-off).
-    next: tokio::sync::Mutex<Instant>,
 }
 
 impl Bandcamp {
@@ -217,7 +199,7 @@ impl Bandcamp {
         // Its pages on Bandcamp's own hosts, its streams on its media hosts (O1): a redirect off them is not followed.
         let http = client(Purpose::BandcampPages).timeout(Duration::from_secs(20)).build()?;
         let media = client(Purpose::BandcampMedia).build()?;
-        Ok(Self { http, media, kept: Mutex::new(HashMap::new()), next: tokio::sync::Mutex::new(Instant::now()) })
+        Ok(Self { http, media, kept: Mutex::new(HashMap::new()) })
     }
 
     /// The one reader, for the server's life.
@@ -226,23 +208,18 @@ impl Bandcamp {
         ONE.get_or_init(|| Bandcamp::new().expect("an HTTP client"))
     }
 
-    /// A request of Bandcamp's (a page, a search), in turn: PACE after the one before, none while it asked to be left
-    /// alone.
+    /// A request of Bandcamp's (a page, a search), in its turn (`TURN`): a second after the one before, none while it asked to be left
+    /// alone. A back-off is waited out up to a page's patience, else told until when (OQ-T1 (a)).
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
         // Switched off, or left alone after its bot check (O4): nothing asked.
         refused()?;
-        let mut next = self.next.lock().await;
-        tokio::time::sleep_until((*next).into()).await;
+        let taken = TURN.take_within(false, crate::app::musicbrainz::PATIENCE).await;
         // Looked at again in its turn (Y8): a read that waited in line, or out a back-off, while the check came is not sent after it.
         refused()?;
-        let resp = req.sent().await;
-        *next = Instant::now() + PACE;
-        let resp = resp.context("cannot reach Bandcamp")?;
-        let status = resp.status();
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            let wait = back_off(resp.headers(), crate::app::moment::now_secs());
-            *next = Instant::now() + wait;
-            tracing::warn!("Bandcamp answered {status}: left alone for {}s", wait.as_secs());
+        taken?;
+        let resp = req.sent().await.context("cannot reach Bandcamp")?;
+        if let Err(p) = TURN.heard_answer(resp.status(), resp.headers()) {
+            tracing::warn!("Bandcamp answered {}: left alone until {}", resp.status(), p.until);
         }
         Ok(resp)
     }
@@ -301,7 +278,7 @@ impl Bandcamp {
     pub async fn stream(&self, url: &str, n: u32, range: Option<&str>) -> Result<(reqwest::Response, Option<f64>)> {
         // Switched off, its streams stop too, as the switch says (Y12): an album kept in memory's as well.
         if !crate::app::switches::is_on(crate::app::switches::BANDCAMP) {
-            bail!("Bandcamp is switched off");
+            return Err(crate::app::references_turn::SwitchedOff("Bandcamp").into());
         }
         let a = self.album(url).await?;
         let t = a.tracks.iter().find(|t| t.n == n).context("No such track on that album")?;
@@ -866,14 +843,14 @@ mod tests {
     #[tokio::test]
     async fn the_bandcamp_hold_survives_a_restart() {
         let _one = crate::app::switches::TEST_STATE.lock().await;
-        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let was = TURN.as_held();
         let ud = crate::userdata::UserData::open(None).unwrap();
         let now = crate::app::moment::now_secs();
         hold_in(Some(&ud));
-        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        TURN.lift(None);
         hold_kept(&ud);
         let until = held_until(now);
-        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        TURN.put_back(was);
         assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "taken up again at start: {until:?}");
     }
 
@@ -882,14 +859,14 @@ mod tests {
     #[tokio::test]
     async fn a_kept_hold_beyond_a_day_is_cut_to_a_day() {
         let _one = crate::app::switches::TEST_STATE.lock().await;
-        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let was = TURN.as_held();
         let ud = crate::userdata::UserData::open(None).unwrap();
         let now = crate::app::moment::now_secs();
         ud.set_import_choice(HELD_CHOICE, &(now + 30 * 86_400).to_string()).unwrap();
-        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        TURN.lift(None);
         hold_kept(&ud);
         let until = held_until(now);
-        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        TURN.put_back(was);
         let kept = ud.import_choice(HELD_CHOICE).unwrap().and_then(|v| v.parse::<i64>().ok());
         let a_day = now + CHECK_HOLD_SECS..=now + CHECK_HOLD_SECS + 60;
         assert!(until.is_some_and(|u| a_day.contains(&u)), "a day from now: {until:?}");
@@ -901,12 +878,13 @@ mod tests {
     #[tokio::test]
     async fn a_hold_set_while_the_clock_ran_ahead_is_a_day_at_most() {
         let _one = crate::app::switches::TEST_STATE.lock().await;
-        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let was = TURN.as_held();
         let now = crate::app::moment::now_secs();
-        HELD_UNTIL.store(now + 200 * 86_400, std::sync::atomic::Ordering::Relaxed);
+        TURN.lift(None);
+        TURN.hold_until(now + 200 * 86_400, None);
         let until = held_until(now);
         let after = held_until(now + CHECK_HOLD_SECS + 1);
-        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        TURN.put_back(was);
         assert_eq!(until, Some(now + CHECK_HOLD_SECS), "a day from now");
         assert_eq!(after, None, "a day on: over");
     }
@@ -925,7 +903,7 @@ mod tests {
     #[tokio::test]
     async fn switching_bandcamp_on_again_lifts_its_hold() {
         let _one = crate::app::switches::TEST_STATE.lock().await;
-        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let was = TURN.as_held();
         let ud = crate::userdata::UserData::open(None).unwrap();
         let now = crate::app::moment::now_secs();
         hold_in(Some(&ud));
@@ -935,7 +913,7 @@ mod tests {
         let on = held_until(now);
         hold_kept(&ud);
         let restarted = held_until(now);
-        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        TURN.put_back(was);
         assert!(off.is_some(), "switched off: held still");
         assert_eq!((on, restarted), (None, None), "switched on: asked again, and a restart takes up nothing");
     }
@@ -944,16 +922,17 @@ mod tests {
     #[tokio::test]
     async fn a_read_waiting_when_the_check_comes_is_not_sent() {
         let _one = crate::app::switches::TEST_STATE.lock().await;
-        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let was = TURN.as_held();
         let bc = Bandcamp::new().unwrap();
-        *bc.next.lock().await = Instant::now() + Duration::from_millis(400);
+        // In line behind a read just taken: the next goes a second on.
+        TURN.turn().await;
         let waiting = bc.send(reqwest::Client::new().get("http://127.0.0.1:9/"));
         let check = async {
             tokio::time::sleep(Duration::from_millis(100)).await;
             hold_in(None);
         };
         let (sent, ()) = tokio::join!(waiting, check);
-        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        TURN.put_back(was);
         assert!(sent.is_err_and(|e| not_read(&e)), "not sent after the check");
     }
 
