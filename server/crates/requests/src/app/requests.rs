@@ -2441,7 +2441,7 @@ pub mod tests {
     #[test]
     fn a_dead_fetcher_shows_on_health() {
         const FETCHER: &str = "the test's fetcher";
-        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let _one = crate::app::switches::TEST_STATE.blocking_write();
         let was = DOWN.lock().unwrap_or_else(|p| p.into_inner()).get(FETCHER).copied();
         fetcher_said_at(FETCHER, false, 1_000);
         fetcher_said_at(FETCHER, false, 2_000);
@@ -3851,7 +3851,7 @@ pub mod tests {
         const SLSKD_AWAY: &str = "slskd could not be reached: error sending request for url (http://192.168.1.20:5030/api/v0/transfers/downloads)";
         const ACOUSTID: &str = "AcoustID could not be asked: error sending request for url (http://192.168.1.20:8080/v2/lookup)";
         const NO_LIST: &str = "MusicBrainz has no list of it: 503 from http://192.168.1.30:5000/ws/2/release";
-        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let _state = crate::app::switches::TEST_STATE.write().await;
         let (serve, dir) = room_shape_above("rq01-4", 96_400);
         with_accounts(&serve);
         serve.catalogue().number_above(9_610).unwrap();
@@ -3977,7 +3977,7 @@ pub mod tests {
         const G: [&str; 3] = ["00000000-0000-4000-8000-000000002851", "00000000-0000-4000-8000-000000002852", "00000000-0000-4000-8000-000000002853"];
         const ID: &str = "ss-rq01-7";
         const HANDED: &str = "Lidarr is looking for it; Soulseek searches for it";
-        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let _state = crate::app::switches::TEST_STATE.write().await;
         let (serve, dir) = room_shape_above("rq01-7", 96_700);
         with_accounts(&serve);
         let cat = serve.catalogue().clone();

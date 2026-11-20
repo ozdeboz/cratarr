@@ -816,7 +816,7 @@ mod tests {
     /// Bandcamp's checks, are changed under the one test lock (`switches::TEST_STATE`, Y12).
     #[tokio::test]
     async fn bandcamp_switched_off_is_asked_nothing() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let was = crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
         let bc = Bandcamp::new().unwrap();
         let said = bc.search("Glass Harbour", "Two Rooms").await.unwrap_err().to_string();
@@ -827,7 +827,7 @@ mod tests {
     /// Y12: Bandcamp switched off, its streams stop too, as the switch says: an album kept in memory plays nothing.
     #[tokio::test]
     async fn with_bandcamp_off_its_streams_stop() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let (page, stream) = ("https://glassharbour.bandcamp.com/album/low-tide", "http://127.0.0.1:9/low-tide/1");
         fake_media_at(stream);
         let bc = Bandcamp::new().unwrap();
@@ -842,7 +842,7 @@ mod tests {
     /// Y8: the day's hold after the check survives a restart: kept in the user data as it is set, taken up again at start.
     #[tokio::test]
     async fn the_bandcamp_hold_survives_a_restart() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
         let ud = crate::userdata::UserData::open(None).unwrap();
         let now = crate::app::moment::now_secs();
@@ -858,7 +858,7 @@ mod tests {
     /// ahead is cut to a day, in the user data too.
     #[tokio::test]
     async fn a_kept_hold_beyond_a_day_is_cut_to_a_day() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
         let ud = crate::userdata::UserData::open(None).unwrap();
         let now = crate::app::moment::now_secs();
@@ -877,7 +877,7 @@ mod tests {
     /// held so: a day on, it is over.
     #[tokio::test]
     async fn a_hold_set_while_the_clock_ran_ahead_is_a_day_at_most() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
         let now = crate::app::moment::now_secs();
         TURN.lift(None);
@@ -902,7 +902,7 @@ mod tests {
     /// and a restart takes up nothing. Switched off, the hold stays.
     #[tokio::test]
     async fn switching_bandcamp_on_again_lifts_its_hold() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
         let ud = crate::userdata::UserData::open(None).unwrap();
         let now = crate::app::moment::now_secs();
@@ -921,7 +921,7 @@ mod tests {
     /// Y8: a read waiting in line when the check comes is not sent: it looks at the hold again in its turn.
     #[tokio::test]
     async fn a_read_waiting_when_the_check_comes_is_not_sent() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
         let bc = Bandcamp::new().unwrap();
         // In line behind a read just taken: the next goes a second on.
@@ -941,7 +941,7 @@ mod tests {
     #[tokio::test]
     async fn a_stream_address_outside_bcbits_is_refused() {
         // A stream reads Bandcamp's switch (Y12).
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let bc = Bandcamp::new().unwrap();
         let page = "https://glassharbour.bandcamp.com/album/tide-tables";
         let track = |n: u32, stream: &str| Track { n, title: format!("Tide {n}"), artist: None, duration_secs: None, stream: Some(stream.into()), page: None };

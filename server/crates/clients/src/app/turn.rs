@@ -755,7 +755,7 @@ mod tests {
     /// only grows.
     #[tokio::test(start_paused = true)]
     async fn a_429_holds_the_turn_for_its_retry_after() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let t0 = Pinned::now();
         let t0 = t0.0;
         let turn = Turn::new(ACOUSTID);
@@ -827,7 +827,7 @@ mod tests {
     /// is out. A kept deadline beyond its cap (kept while the clock ran ahead) is cut to it as it is taken up, in the user data too.
     #[tokio::test(start_paused = true)]
     async fn a_restart_mid_pause_asks_nothing_early() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let t0 = 1_800_000_000;
         let _pinned = Pinned(t0);
         let clock = |secs: i64| super::super::moment::PINNED.store(t0 + secs, Ordering::Relaxed);

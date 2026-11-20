@@ -146,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn a_running_pass_stops_at_the_pause() {
         use super::super::switches::{BACKGROUND, PAUSED, TEST_STATE, set_for_tests};
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
         crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
@@ -255,7 +255,7 @@ mod tests {
     async fn a_page_is_told_until_when_not_held() {
         use std::sync::{Arc, Mutex};
         use super::super::turn::{Failure, Pinned, class, fakes};
-        let _one = super::super::switches::TEST_STATE.lock().await;
+        let _one = super::super::switches::TEST_STATE.write().await;
         let pinned = Pinned::now();
         let t0 = pinned.0;
         let asked = Arc::new(Mutex::new(Vec::<(std::time::Instant, String)>::new()));
