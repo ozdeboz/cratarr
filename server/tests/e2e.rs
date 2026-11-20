@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod sk4_upgrade;
 mod sk6_harness;
 use sk6_harness::*;
 
