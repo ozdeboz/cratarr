@@ -17,4 +17,8 @@ impl SearchHost for App {
     fn playlists(&self) -> &Arc<super::playlists::PlaylistService> {
         &self.playlists
     }
+
+    fn crates(&self) -> &Arc<super::crates::CrateService> {
+        &self.crates
+    }
 }

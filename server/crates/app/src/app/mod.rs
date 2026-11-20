@@ -4,6 +4,7 @@
 //! - `library`: the servers in use, the folders behind their libraries, the playlist store, the catalogue;
 //! - `playing`: what plays, the controls, adding it to a playlist;
 //! - `playlists`: playlist files, edits, repairs, Play;
+//! - `crates`: crates, Sounds like, the fits and the taste, Home's crates, what is excluded everywhere;
 //! - `incoming`: new music, verdicts, Delete and Undo, Lidarr;
 //! - `collection`: the albums of the Music library;
 //! - `shelf`: reading album lists, shared by Incoming and Collection;
@@ -11,8 +12,8 @@
 //! - `sync`: the user's own server playlists, kept in step with the files;
 //! - `settings`: the Settings page.
 
-pub use cratarr_health::app::{albums, albums_base, along_base, analysis_import, analysis_pass, analysis_pass_base, around, around_records, artists, audiomuse, backup_list, base_host, beat_this, beyond, changes, classical, collection, cover_cache, covers, crates_from_radio, describe, device_covers, device_index, device_index_base, discogs, discogs_facts, discover, editions, error, excluded_artists, file_facts, file_facts_base, file_runs, file_runs_base, file_words, first_start, fix_plans, fixes, fixes_base, follow, harvest, health, health_base, health_findings, health_host, health_requests, heavy_base, history, home, import, incoming, incoming_base, incoming_host, incoming_served, incoming_settings, incomplete, incomplete_base, insights, insights_records, intake_card, intake_card_base, kodi, labels, lastfm, length_fixes, library, listenbrainz, listening, listening_base, matching, matching_base, moment, musicbrainz, originals, play, playing, playing_host, playlists, playlists_base, playlists_insights, playlists_served, playlists_settings, playon, playon_base, playon_players, playon_served, plays, queue, queue_base, queue_requests, queues_listening, radio, radio_base, reach, records_host, references, references_turn, refind, related, renumber, renumber_base, replace_base, requests, requests_base, requests_host, requests_turn, resume, retention, retention_base, retention_protected, room, runtime_base, scrobble, search_base, settings, settings_base, shelf, similar, soulseek, soulseek_base, spotify, step_017, switches, sync, tasks, taste, tempo, together, track_fetch, track_fetch_records, track_fetch_turn, track_intake, track_intake_base, turn, visuals, words, works};
-pub use cratarr_health::app::{AlbumFate, AlbumMore, AlbumRef, AlbumView, AlbumsView, ArtistView, ByName, CollectionService, CollectionView, CopySheet, CrateLook, CrateOrder, CratePage, CrateView, DeleteResult, Digging, FitSummary, FitView, FollowTarget, FreshIds, FromQueue, IncomingService, IncomingView, InsightsService, JobView, KeepPreview, KeepResult, Library, LidarrView, LikeCurve, MomentView, NamingView, NotArtist, OpsAnswer, PlayEvent, PlayOn, PlayOnCommand, PlayOnSettings, PlayOnSettingsView, PlayResult, PlayerReport, Players, PlayingService, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats, Plays, QueueTrack, QueueTracks, ReplaceAsk, ReplacePreview, ReplaceSheet, SettingsService, SettingsView, SourceTab, SourceView, StateView, TargetChoice, ToggleError, TrackStateView, VERSION, incoming_jobs_shown, plain, players, whose_players};
+pub use cratarr_health::app::{albums, albums_base, along_base, analysis_import, analysis_pass, analysis_pass_base, around, around_records, artists, audiomuse, backup_list, base_host, beat_this, beyond, changes, classical, collection, cover_cache, covers, crates, crates_from_radio, crates_insights, crates_served, describe, device_covers, device_index, device_index_base, discogs, discogs_facts, discover, editions, error, excluded_artists, file_facts, file_facts_base, file_runs, file_runs_base, file_words, first_start, fix_plans, fixes, fixes_base, follow, harvest, health, health_base, health_findings, health_host, health_requests, heavy_base, history, home, import, incoming, incoming_base, incoming_host, incoming_served, incoming_settings, incomplete, incomplete_base, insights, insights_records, intake_card, intake_card_base, kodi, labels, lastfm, length_fixes, library, listenbrainz, listening, listening_base, matching, matching_base, moment, musicbrainz, originals, play, playing, playing_host, playlists, playlists_base, playlists_settings, playon, playon_base, playon_players, playon_served, plays, queue, queue_base, queue_requests, queues_listening, radio, radio_base, reach, records_host, references, references_turn, refind, related, renumber, renumber_base, replace_base, requests, requests_base, requests_host, requests_turn, resume, retention, retention_base, retention_protected, room, runtime_base, scrobble, search_base, settings, settings_base, shelf, similar, soulseek, soulseek_base, spotify, step_017, switches, sync, tasks, taste, tempo, together, track_fetch, track_fetch_records, track_fetch_turn, track_intake, track_intake_base, turn, visuals, words, works};
+pub use cratarr_health::app::{AlbumFate, AlbumMore, AlbumRef, AlbumView, AlbumsView, ArtistView, ByName, CollectionService, CollectionView, CopySheet, CrateLook, CrateOrder, CratePage, CrateService, CrateView, DeleteResult, Digging, FitSummary, FitView, FollowTarget, FreshIds, FromQueue, IncomingService, IncomingView, InsightsService, JobView, KeepPreview, KeepResult, Library, LidarrView, LikeCurve, MomentView, NamingView, NotArtist, OpsAnswer, PlayEvent, PlayOn, PlayOnCommand, PlayOnSettings, PlayOnSettingsView, PlayResult, PlayerReport, Players, PlayingService, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats, Plays, QueueTrack, QueueTracks, ReplaceAsk, ReplacePreview, ReplaceSheet, SettingsService, SettingsView, SourceTab, SourceView, StateView, TargetChoice, ToggleError, TrackStateView, VERSION, incoming_jobs_shown, plain, players, whose_players};
 pub use cratarr_search::app::{search, search_host};
 
 mod app_albums;
@@ -83,6 +84,8 @@ pub struct App {
     pub sync: Arc<sync::SyncService>,
     pub playing: PlayingService,
     pub playlists: Arc<PlaylistService>,
+    /// Crates over the playlists (decision 0024).
+    pub crates: Arc<CrateService>,
     pub incoming: Arc<IncomingService>,
     pub collection: Arc<CollectionService>,
     pub insights: InsightsService,
@@ -130,6 +133,7 @@ impl App {
         let sync = Arc::new(sync::SyncService::new(library.clone(), sync_state, journal.clone()));
         sync.listen();
         let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone(), served.clone()));
+        let crates = Arc::new(CrateService::new(playlists.clone()));
         let files = crate::ports::disk();
         let shelves = Arc::new(shelf::Shelves::new(library.clone(), cfg.data_dir.as_deref()));
         let collection = Arc::new(CollectionService::new(library.clone(), shelves.clone()));
@@ -155,7 +159,7 @@ impl App {
             cfg.data_dir.as_deref(),
             origin,
         );
-        let insights = InsightsService::new(library.clone(), playlists.clone());
+        let insights = InsightsService::new(library.clone(), crates.clone());
         let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
         let plays = Plays::new(cfg.data_dir.as_deref(), served.as_ref().map(|s| s.userdata.clone()));
         // What offline writes keep (decision 0087) forgotten after its 30 days, hourly.
@@ -206,6 +210,7 @@ impl App {
             sync,
             playing,
             playlists,
+            crates,
             incoming,
             collection,
             insights,

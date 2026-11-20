@@ -387,8 +387,8 @@ fn marks_of(fits: &HashMap<String, f64>, skipped: &HashMap<String, f64>, uses: &
 /// `Marks::save` writes them.
 pub async fn own<H: PlayingHost + ?Sized>(app: &Arc<H>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
     let user = account.ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
-    let (fits, skipped, uses) = (app.playlists().taste_fits(&user, &[]).await?, app.playlists().skipped_fits(&user, &[]).await?, app.playlists().uses_by_track(&user).await?);
-    let rest = serde_json::to_string(&app.playlists().device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
+    let (fits, skipped, uses) = (app.crates().taste_fits(&user, &[]).await?, app.crates().skipped_fits(&user, &[]).await?, app.crates().uses_by_track(&user).await?);
+    let rest = serde_json::to_string(&app.crates().device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
     let bytes = crate::run::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).with_own(rest).save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
 }

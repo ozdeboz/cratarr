@@ -111,7 +111,8 @@ pub struct Serve {
     art_cache: art::Cache,
     /// One cover resized at a time: a client asks for hundreds at once, and decoding one takes tens of megabytes.
     resizing: tokio::sync::Semaphore,
-    /// Cratarr's playlist service, once the app is up (`set_playlists`): the Subsonic playlists are its files.
+    /// Cratarr's crate service, over the playlist service, once the app is up (`set_playlists`): the Subsonic playlists
+    /// are the playlists' files.
     playlists: std::sync::OnceLock<Arc<dyn services::Playlists>>,
     /// Playlists a client emptied, waiting briefly for the call that refills them (`playlists::Held`).
     pub held: playlists::Held,

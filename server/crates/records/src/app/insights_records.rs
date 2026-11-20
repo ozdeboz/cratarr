@@ -1,5 +1,5 @@
 //! What insights ask of the playlists, below them (the app split's phase 1): whose report it is, Cratarr's own library, and
-//! the tracks in the asking account's crates. `PlaylistService` implements it (`playlists_insights`); `InsightsService` holds
+//! the tracks in the asking account's crates. `CrateService` implements it (`crates_insights`); `InsightsService` holds
 //! it as this.
 
 use std::collections::HashSet;

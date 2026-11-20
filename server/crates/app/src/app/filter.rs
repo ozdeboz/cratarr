@@ -234,7 +234,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
     let shown = match &r.list {
         List::Crate { id, favourites, favourite_albums } => {
             let look = super::CrateLook { favourites: *favourites, favourite_albums: *favourite_albums, ..Default::default() };
-            app.playlists.crate_shown(id, &look).await?
+            app.crates.crate_shown(id, &look).await?
         }
         _ => Vec::new(),
     };
@@ -245,7 +245,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         List::Library | List::Artists | List::Artist { .. } => true,
         _ => false,
     };
-    let lib = app.playlists.crate_library_for(&all, want, if drawn { &r.without } else { &[] }).await?;
+    let lib = app.crates.crate_library_for(&all, want, if drawn { &r.without } else { &[] }).await?;
     let by_line = crates::by_line(lib.files());
     let none = Facts::default();
     let uses = lib.uses();

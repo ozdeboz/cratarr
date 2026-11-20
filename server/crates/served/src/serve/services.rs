@@ -1,7 +1,7 @@
 //! What `Serve` holds of the app above it, once the app is up: the playlist service, Incoming and the players
 //! (`Serve::set_playlists`, `set_incoming`, `set_play_on`), and what the crates' facts take from the app
 //! (`Serve::set_facts_from`). Each is a narrow trait of what Serve itself asks of it, implemented where the service is.
-//! Code above that knows a service takes it back as its own type (`as_any`: `PlaylistService::held_by` and the like).
+//! Code above that knows a service takes it back as its own type (`as_any`: `CrateService::held_by` and the like).
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -13,9 +13,9 @@ use anyhow::Result;
 
 use super::Serve;
 
-/// Cratarr's playlist service, as Serve asks of it: the Subsonic playlists are its files.
+/// Cratarr's crate service, over the playlist service, as Serve asks of it: the Subsonic playlists are the playlists' files.
 pub trait Playlists: Send + Sync {
-    /// What every account keeps in its crates follows ids a take moved (`PlaylistService::follow_tracks`).
+    /// What every account keeps in its crates follows ids a take moved (`CrateService::follow_tracks`).
     fn follow_tracks<'a>(&'a self, moved: &'a crate::moved::Moved) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
     /// The service as its own type, for code above that knows it.
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;

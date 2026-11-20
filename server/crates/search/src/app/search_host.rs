@@ -11,4 +11,6 @@ pub trait SearchHost: super::requests_host::RequestsHost + Send + Sync + 'static
     fn library(&self) -> &Arc<super::library::Library>;
     /// Playlist files, crates and what each account keeps of them (`App::playlists`).
     fn playlists(&self) -> &Arc<super::playlists::PlaylistService>;
+    /// Crates over the playlists (`App::crates`).
+    fn crates(&self) -> &Arc<super::crates::CrateService>;
 }

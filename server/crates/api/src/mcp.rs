@@ -246,14 +246,14 @@ impl Cratarr {
     #[tool(description = "The account's crates (saved and built-in), or one crate's tracks by its id.")]
     async fn crates(&self, Parameters(a): Parameters<CratesArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let who = who(&ctx)?;
-        let playlists = self.app.playlists.clone();
+        let crates = self.app.crates.clone();
         match a.id {
-            None => answer(&acting_as(who, async move { playlists.crates(None, &[]).await }).await.map_err(failed)?),
+            None => answer(&acting_as(who, async move { crates.crates(None, &[]).await }).await.map_err(failed)?),
             Some(id) => {
                 let (offset, limit) = (a.offset.unwrap_or(0), a.limit.unwrap_or(MOST).clamp(1, MOST));
                 let page = acting_as(who, async move {
-                    let def = playlists.crate_def(&id).await?;
-                    playlists.crate_page(&def.conditions, None, offset, limit, &crate::app::CrateLook::default()).await
+                    let def = crates.crate_def(&id).await?;
+                    crates.crate_page(&def.conditions, None, offset, limit, &crate::app::CrateLook::default()).await
                 })
                 .await
                 .map_err(failed)?;

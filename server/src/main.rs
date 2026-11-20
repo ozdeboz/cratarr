@@ -295,7 +295,7 @@ async fn main() -> Result<()> {
 
     // The crates' favourites are asked for once at start, as the media server may take a minute (decision 0024).
     let warm = app.clone();
-    crate::run::spawn(async move { warm.playlists.warm_favourites().await });
+    crate::run::spawn(async move { warm.crates.warm_favourites().await });
     app.collection.follow(&app.journal);
     // A run of file changes a stop cut off: read now, before anything can write what it was to write.
     crate::run::spawn(app::file_runs::settle_cut_off(app.journal.clone()));
@@ -316,7 +316,7 @@ async fn main() -> Result<()> {
     // The OpenSubsonic API (decision 0030), kept in step with the catalogue in the background. Opened before the app
     // (above), so the built-in Cratarr source can answer while the app starts (decision 0032).
     served.attach_catalogue(app.library.catalogue());
-    served.set_playlists(app.playlists.clone());
+    served.set_playlists(app.crates.clone());
     // Who is still in the directory's group, every hour (decision 0051).
     serve::accounts::watch_directory(served.clone());
     served.set_incoming(app.incoming.clone());

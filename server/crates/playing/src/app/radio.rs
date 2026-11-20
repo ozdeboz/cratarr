@@ -289,11 +289,11 @@ async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: V
 }
 
 /// The index with the account's taste on its songs (decision 0094): how each fits it (for Your taste only), and how
-/// like each is to what the account skips (none while its skipped source is off: `PlaylistService::skipped_fits`).
+/// like each is to what the account skips (none while its skipped source is off: `CrateService::skipped_fits`).
 pub async fn with_taste(app: &dyn PlayingHost, index: Arc<Index>, account: Option<&str>, taste: bool) -> Result<Arc<Index>, ToggleError> {
     let Some(user) = account else { return Ok(index) };
-    let fits = if taste { app.playlists().taste_fits(user, &[]).await? } else { HashMap::new() };
-    let skipped = app.playlists().skipped_fits(user, &[]).await?;
+    let fits = if taste { app.crates().taste_fits(user, &[]).await? } else { HashMap::new() };
+    let skipped = app.crates().skipped_fits(user, &[]).await?;
     if fits.is_empty() && skipped.is_empty() {
         return Ok(index);
     }
@@ -333,7 +333,7 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
         return Ok(c.index.clone());
     }
     // The playlists' songs: every account's playlists' lines through the catalogue (what people put together).
-    let lines = match super::PlaylistService::held_by(served) {
+    let lines = match super::CrateService::held_by(served).map(|c| c.playlists().clone()) {
         Some(p) => p.snapshot_all().await.map_err(|e| anyhow::anyhow!("reading the playlists: {e:?}"))?,
         None => Vec::new(),
     };
@@ -588,7 +588,7 @@ pub async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> 
     let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
     let index = index(&served, &dir).await?;
     let user = served.current_user();
-    let excluded = match super::PlaylistService::held_by(&served) {
+    let excluded = match super::CrateService::held_by(&served) {
         Some(p) => p.excluded_songs_of(user.as_deref()).await?,
         None => HashSet::new(),
     };

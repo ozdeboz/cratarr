@@ -1965,7 +1965,7 @@ async fn favorite_tracks(State(app): State<Arc<App>>, Path(source): Path<String>
     }
     let mut ids = app.playing.favorite_tracks(&source).await?;
     ids.truncate(FAVOURITE_ROWS);
-    Ok(Json(json!({ "source": source, "rows": app.playlists.song_rows(ids).await? })))
+    Ok(Json(json!({ "source": source, "rows": app.crates.song_rows(ids).await? })))
 }
 
 /// The favourite albums of a connected server (their ids): the Library's Favourites only and the album panel's heart.
@@ -2367,7 +2367,7 @@ fn without_of(query: Option<&str>) -> Vec<String> {
 
 /// The permanent crates and their sizes (decision 0024), from the libraries switched on (`without`).
 async fn crates(State(app): State<Arc<App>>, Query(f): Query<Follow>, RawQuery(q): RawQuery) -> Result<Json<Vec<crate::app::CrateView>>, ApiError> {
-    Ok(Json(app.playlists.crates(f.source.as_deref(), &without_of(q.as_deref())).await?))
+    Ok(Json(app.crates.crates(f.source.as_deref(), &without_of(q.as_deref())).await?))
 }
 
 /// A page of a crate's rows: `offset` and `limit` (at most 500, default 200; the page says the limit it kept); its
@@ -2419,7 +2419,7 @@ impl Page {
 
 async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>, RawQuery(raw): RawQuery) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 500);
-    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, &q.look(raw.as_deref())?).await?).into_response())
+    Ok(Json(app.crates.crate_rows(&id, q.source.as_deref(), q.offset, limit, &q.look(raw.as_deref())?).await?).into_response())
 }
 
 /// A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, counted on the server.
@@ -2429,7 +2429,7 @@ async fn crate_tempo(
     Query(q): Query<Page>,
     RawQuery(raw): RawQuery,
 ) -> Result<Json<crate::crates::TempoBands>, ApiError> {
-    Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), &q.look(raw.as_deref())?).await?))
+    Ok(Json(app.crates.crate_tempo(&id, q.source.as_deref(), &q.look(raw.as_deref())?).await?))
 }
 
 #[derive(serde::Deserialize)]
@@ -2455,7 +2455,7 @@ async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    Ok(Json(app.playlists.like_curve(&of, &weights, q.mode.unwrap_or_default(), q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
+    Ok(Json(app.crates.like_curve(&of, &weights, q.mode.unwrap_or_default(), q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
 }
 
 /// The Sounds like curve within a crate's other conditions (0.11, quick crates; the owner: "Filtered curve in 0.11"):
@@ -2479,7 +2479,7 @@ struct LikeCurveWithin {
 }
 
 async fn like_curve_within(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(b): Json<LikeCurveWithin>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
-    Ok(Json(app.playlists.like_curve(&b.of, &b.weights, b.mode.unwrap_or_default(), f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
+    Ok(Json(app.crates.like_curve(&b.of, &b.weights, b.mode.unwrap_or_default(), f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
 }
 
 #[derive(serde::Deserialize)]
@@ -2527,12 +2527,12 @@ struct CrateBody {
 }
 
 async fn crate_create(State(app): State<Arc<App>>, Json(b): Json<CrateBody>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let (id, undo) = app.playlists.crate_save(None, &b.name, b.conditions).await?;
+    let (id, undo) = app.crates.crate_save(None, &b.name, b.conditions).await?;
     Ok((StatusCode::CREATED, Json(json!({ "id": id, "undo": undo }))))
 }
 
 async fn crate_update(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<CrateBody>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (id, undo) = app.playlists.crate_save(Some(&id), &b.name, b.conditions).await?;
+    let (id, undo) = app.crates.crate_save(Some(&id), &b.name, b.conditions).await?;
     Ok(Json(json!({ "id": id, "undo": undo })))
 }
 
@@ -2548,14 +2548,14 @@ struct CrateGot {
 }
 
 async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<CrateGot>, ApiError> {
-    let mut def = app.playlists.crate_def(&id).await?;
+    let mut def = app.crates.crate_def(&id).await?;
     // Home's crates are a list of lines (Value::Within), not conditions anyone sets: sent without them (those the
     // account added to them stay, decision 0083).
     if crate::crates::home_crate(&id) {
         def.conditions.retain(|c| !matches!(c.value, crate::crates::Value::Within { .. }));
     }
-    let not_artists = app.playlists.crate_not_artists(&id).await?;
-    let names = app.playlists.condition_names(&def.conditions).await?;
+    let not_artists = app.crates.crate_not_artists(&id).await?;
+    let names = app.crates.condition_names(&def.conditions).await?;
     Ok(Json(CrateGot { def, not_artists, names }))
 }
 
@@ -2571,14 +2571,14 @@ struct ArtistNamed {
 /// the undo token (null when it left them out already).
 async fn crate_not_artist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<ArtistNamed>) -> Result<Json<serde_json::Value>, ApiError> {
     let name = b.name.unwrap_or_default();
-    let (not_artists, undo) = app.playlists.crate_not_artist(&id, &name).await?;
+    let (not_artists, undo) = app.crates.crate_not_artist(&id, &name).await?;
     Ok(Json(json!({ "crate": id, "not_artists": not_artists, "undo": undo })))
 }
 
 /// An artist a crate leaves out taken back, by their key: what it still leaves out, and the undo token (null when it
 /// named them nowhere).
 async fn crate_not_artist_back(State(app): State<Arc<App>>, Path((id, key)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (not_artists, undo) = app.playlists.crate_not_artist_back(&id, &key).await?;
+    let (not_artists, undo) = app.crates.crate_not_artist_back(&id, &key).await?;
     Ok(Json(json!({ "crate": id, "not_artists": not_artists, "undo": undo })))
 }
 
@@ -2590,12 +2590,12 @@ struct FitsAsked {
 /// How well these tracks fit the account's taste (decision 0094: Best match on every list the page orders itself):
 /// `{id: fit}` for those whose fit is known, the higher the better.
 async fn taste_fits(State(app): State<Arc<App>>, Json(b): Json<FitsAsked>) -> Result<Json<std::collections::HashMap<String, f64>>, ApiError> {
-    Ok(Json(app.playlists.fits_of(&b.ids).await?))
+    Ok(Json(app.crates.fits_of(&b.ids).await?))
 }
 
 /// The artists the account excluded everywhere (decision 0083), the newest first: `[{key, name, at}]`.
 async fn excluded_artists(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::userdata::ExcludedArtist>>, ApiError> {
-    Ok(Json(app.playlists.excluded_artist_list().await?))
+    Ok(Json(app.crates.excluded_artist_list().await?))
 }
 
 /// Exclude everywhere (decision 0083): the artist left out of every automatic pick of the account's, by any credit.
@@ -2603,25 +2603,25 @@ async fn excluded_artists(State(app): State<Arc<App>>) -> Result<Json<Vec<crate:
 /// listed, and the undo token (null when listed already).
 async fn exclude_artist(State(app): State<Arc<App>>, Path(key): Path<String>, Json(b): Json<ArtistNamed>) -> Result<Json<serde_json::Value>, ApiError> {
     let name = b.name.filter(|n| !n.trim().is_empty()).unwrap_or(key);
-    let (a, undo) = app.playlists.exclude_artist(&name).await?;
+    let (a, undo) = app.crates.exclude_artist(&name).await?;
     Ok(Json(json!({ "key": a.key, "name": a.name, "at": a.at, "undo": undo })))
 }
 
 /// An artist taken back off the account's everywhere list: picked again. Their key, and the undo token (null when they
 /// were not on it).
 async fn include_artist(State(app): State<Arc<App>>, Path(key): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (key, undo) = app.playlists.include_artist(&key).await?;
+    let (key, undo) = app.crates.include_artist(&key).await?;
     Ok(Json(json!({ "key": key, "undo": undo })))
 }
 
 async fn crate_delete(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let undo = app.playlists.crate_delete(&id).await?;
+    let undo = app.crates.crate_delete(&id).await?;
     Ok(Json(json!({ "deleted": id, "undo": undo })))
 }
 
 /// A crate's own picture (its card's), as JPEG.
 async fn crate_image(State(app): State<Arc<App>>, Path(id): Path<String>, headers: HeaderMap) -> Response {
-    let Some((bytes, modified)) = app.playlists.crate_image(&id).await else {
+    let Some((bytes, modified)) = app.crates.crate_image(&id).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "no picture" }))).into_response();
     };
     let etag = crate::covers::etag(modified, bytes.len() as u64);
@@ -2635,19 +2635,19 @@ async fn crate_image(State(app): State<Arc<App>>, Path(id): Path<String>, header
 
 /// Sets a crate's own picture: the body is the picture (any Cratarr can read).
 async fn crate_image_set(State(app): State<Arc<App>>, Path(id): Path<String>, body: axum::body::Bytes) -> Result<StatusCode, ApiError> {
-    app.playlists.set_crate_image(&id, body.to_vec()).await?;
+    app.crates.set_crate_image(&id, body.to_vec()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// The crate shows its albums' covers again.
 async fn crate_image_remove(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
-    app.playlists.remove_crate_image(&id).await?;
+    app.crates.remove_crate_image(&id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// The axes the builder draws its controls from, with their domains in the libraries switched on (`without`).
 async fn crate_axes(State(app): State<Arc<App>>, Query(f): Query<Follow>, RawQuery(q): RawQuery) -> Result<Json<Vec<crate::crates::AxisView>>, ApiError> {
-    Ok(Json(app.playlists.crate_axes(f.source.as_deref(), &without_of(q.as_deref())).await?))
+    Ok(Json(app.crates.crate_axes(f.source.as_deref(), &without_of(q.as_deref())).await?))
 }
 
 /// The builder's live preview: an unsaved crate's size and first rows, from the libraries not in `without`.
@@ -2680,11 +2680,11 @@ struct Previewed {
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, RawQuery(raw): RawQuery, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, explain: q.explain, search: search_of(raw.as_deref()), ..Default::default() };
-    let page = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?;
-    let names = app.playlists.condition_names(&p.conditions).await?;
+    let page = app.crates.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?;
+    let names = app.crates.condition_names(&p.conditions).await?;
     let n = p.covers.min(crate::app::home::CRATE_COVERS);
     let covers = if n > 0 { app.crate_covers(&p.conditions, q.source.as_deref(), &look, n).await? } else { Vec::new() };
-    let profile = if p.profile { Some(app.playlists.crate_profile(&p.conditions, q.source.as_deref(), &look.without).await?) } else { None };
+    let profile = if p.profile { Some(app.crates.crate_profile(&p.conditions, q.source.as_deref(), &look.without).await?) } else { None };
     Ok(Json(Previewed { page, names, covers, profile }).into_response())
 }
 
@@ -2719,7 +2719,7 @@ async fn crate_favourites(
     Json(req): Json<CrateFavouritesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // An own crate's: its Favourite condition, saved with the crate's Undo (one truth, the owner 2026-11-02).
-    let undo = app.playlists.set_crate_favourites(&id, req.favourites).await?;
+    let undo = app.crates.set_crate_favourites(&id, req.favourites).await?;
     Ok(Json(json!({ "crate": id, "favourites": req.favourites, "undo": undo })))
 }
 
@@ -2737,33 +2737,33 @@ struct LeftOutRequest {
 /// conditions and toggles, an album's tracks now and later.
 /// Every ranked crate whose fit holds anything, the account's (Settings' Musical taste).
 async fn crate_fits(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::app::FitSummary>>, ApiError> {
-    Ok(Json(app.playlists.crate_fits().await?))
+    Ok(Json(app.crates.crate_fits().await?))
 }
 
 /// A ranked crate's fit (its Not for sheet): the traits learned from what was turned down for it, its rules.
 async fn crate_fit(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::app::FitView>, ApiError> {
-    Ok(Json(app.playlists.crate_fit(&id).await?))
+    Ok(Json(app.crates.crate_fit(&id).await?))
 }
 
 async fn set_crate_fit(State(app): State<Arc<App>>, Path(id): Path<String>, Json(fit): Json<crate::crates::Fit>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.set_crate_fit(&id, fit).await?;
+    app.crates.set_crate_fit(&id, fit).await?;
     Ok(Json(json!({})))
 }
 
 async fn crate_leave_out(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<LeftOutRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (n, undo) = app.playlists.crate_leave_out(&id, req.source.as_deref(), &req.ids, &req.albums, true).await?;
+    let (n, undo) = app.crates.crate_leave_out(&id, req.source.as_deref(), &req.ids, &req.albums, true).await?;
     Ok(Json(json!({ "left_out": n, "undo": undo })))
 }
 
 /// Puts tracks or albums left out of a crate back.
 async fn crate_put_back(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<LeftOutRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (n, undo) = app.playlists.crate_leave_out(&id, req.source.as_deref(), &req.ids, &req.albums, false).await?;
+    let (n, undo) = app.crates.crate_leave_out(&id, req.source.as_deref(), &req.ids, &req.albums, false).await?;
     Ok(Json(json!({ "left_out": n, "undo": undo })))
 }
 
 /// A crate's tracks left out by hand, as rows, and its albums left out, for its editor.
 async fn crate_left_out(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (source, rows, albums) = app.playlists.crate_left_out(&id, f.source.as_deref()).await?;
+    let (source, rows, albums) = app.crates.crate_left_out(&id, f.source.as_deref()).await?;
     Ok(Json(json!({ "source": source, "rows": rows, "albums": albums })))
 }
 
@@ -2776,19 +2776,19 @@ struct ExcludeRequest {
 
 /// Excludes tracks from every automatic pick (decision 0024, amended 2026-10-19: global exclusions).
 async fn exclude(State(app): State<Arc<App>>, Json(req): Json<ExcludeRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (n, undo) = app.playlists.exclude(req.source.as_deref(), &req.ids, true).await?;
+    let (n, undo) = app.crates.exclude(req.source.as_deref(), &req.ids, true).await?;
     Ok(Json(json!({ "excluded": n, "undo": undo })))
 }
 
 /// Puts excluded tracks back.
 async fn include_again(State(app): State<Arc<App>>, Json(req): Json<ExcludeRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (n, undo) = app.playlists.exclude(req.source.as_deref(), &req.ids, false).await?;
+    let (n, undo) = app.crates.exclude(req.source.as_deref(), &req.ids, false).await?;
     Ok(Json(json!({ "excluded": n, "undo": undo })))
 }
 
 /// The tracks excluded everywhere: how many, and as rows, for the Library's list.
 async fn excluded(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (source, n, rows) = app.playlists.excluded_rows(f.source.as_deref()).await?;
+    let (source, n, rows) = app.crates.excluded_rows(f.source.as_deref()).await?;
     Ok(Json(json!({ "source": source, "excluded": n, "rows": rows })))
 }
 
@@ -2804,7 +2804,7 @@ async fn crate_favourite_albums(
     Path(id): Path<String>,
     Json(req): Json<CrateFavouriteAlbumsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let undo = app.playlists.set_crate_favourite_albums(&id, req.favourite_albums).await?;
+    let undo = app.crates.set_crate_favourite_albums(&id, req.favourite_albums).await?;
     Ok(Json(json!({ "crate": id, "favourite_albums": req.favourite_albums, "undo": undo })))
 }
 
@@ -2814,7 +2814,7 @@ async fn crate_playlist(
     Query(f): Query<Follow>,
     Json(req): Json<CratePlaylistRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let (added, undo) = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name, &req.without).await?;
+    let (added, undo) = app.crates.crate_to_playlist(&id, f.source.as_deref(), &req.name, &req.without).await?;
     Ok((StatusCode::CREATED, Json(json!({ "playlist": app.playlists.id_of_name(&req.name)?, "added": added, "undo": undo }))))
 }
 
@@ -6194,7 +6194,7 @@ async fn artist_picks(State(app): State<Arc<App>>, Query(q): Query<PicksQuery>) 
         Some(id) => Some(app.playing.artist_view(crate::source::cratarr::KIND.id, &q.name, Some(id), &without).await?.rows.into_iter().filter_map(|r| r.id).collect()),
         None => None,
     };
-    Ok(Json(json!({ "ids": app.playlists.artist_picks(&q.name, &without, PICKS, only).await? })))
+    Ok(Json(json!({ "ids": app.crates.artist_picks(&q.name, &without, PICKS, only).await? })))
 }
 
 /// The weather as Home Assistant tells it (the cratarr-ha integration, on each change): Home's moment.
@@ -6216,7 +6216,7 @@ struct MomentQuery {
 /// Home's moment: its name and a few albums near it, of the libraries switched on; its radio plays `like:now`.
 async fn home_moment(State(app): State<Arc<App>>, Query(q): Query<MomentQuery>) -> Result<Json<crate::app::MomentView>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.moment(q.source.as_deref(), &without, q.tz).await?))
+    Ok(Json(app.crates.moment(q.source.as_deref(), &without, q.tz).await?))
 }
 
 /// The asking account's taste and what it avoids (Insights › Listening › Profile).
@@ -6258,14 +6258,14 @@ async fn home_week(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> 
 
 /// Of these albums, those the asking account heard 5% or more of (Home's New for you leaves them out).
 async fn home_heard(State(app): State<Arc<App>>, Json(b): Json<HeardAlbums>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "heard": app.playlists.heard_albums(b.ids).await? })))
+    Ok(Json(json!({ "heard": app.crates.heard_albums(b.ids).await? })))
 }
 
 /// Home's Blast from the past (favourite tracks unplayed longest) and Grave digging (the albums most like the taste,
 /// unplayed longest), of the libraries switched on.
 async fn home_digging(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::Digging>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.digging(q.source.as_deref(), &without).await?))
+    Ok(Json(app.crates.digging(q.source.as_deref(), &without).await?))
 }
 
 /// How many artists Home's Artists to explore shows: the open one and the others.
@@ -6646,7 +6646,7 @@ async fn artist_photo(ctx: Ctx, Path(id): Path<String>) -> Response {
 
 async fn taste_profile(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.taste(q.source.as_deref(), &without, q.period.unwrap_or(crate::app::history::Period::All)).await?))
+    Ok(Json(app.crates.taste(q.source.as_deref(), &without, q.period.unwrap_or(crate::app::history::Period::All)).await?))
 }
 
 /// How many similar lists a list shows at its foot.
@@ -6663,7 +6663,7 @@ async fn similar_albums(Path((source, album)): Path<(String, String)>) -> Result
 
 /// Crates like a crate, among the account's own: `[{id, alike}]`, the closest first.
 async fn similar_crates(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let found = crate::app::similar::crates_like(&app.playlists, &id, SIMILAR_LISTS).await?;
+    let found = crate::app::similar::crates_like(&app.crates, &id, SIMILAR_LISTS).await?;
     Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
 }
 

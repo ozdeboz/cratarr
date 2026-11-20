@@ -626,7 +626,7 @@ async fn crate_members(app: &dyn SearchHost, without: &[String]) -> anyhow::Resu
             KeptUse::Behind => {
                 let making = MAKING.get_or_init(Default::default);
                 if making.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone()) {
-                    let (playlists, key) = (app.playlists().clone(), account.clone());
+                    let (crates, key) = (app.crates().clone(), account.clone());
                     crate::run::spawn(crate::serve::who::carried(async move {
                         // M6: the mark let go of however the making ends; a panic is a failure.
                         let gone = key.clone();
@@ -636,7 +636,7 @@ async fn crate_members(app: &dyn SearchHost, without: &[String]) -> anyhow::Resu
                             }
                             making.lock().unwrap_or_else(|p| p.into_inner()).remove(&gone);
                         });
-                        match playlists.crate_members(&key.1).await {
+                        match crates.crate_members(&key.1).await {
                             Ok(m) => {
                                 kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), (Instant::now(), Arc::new(m)));
                                 failed.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
@@ -653,7 +653,7 @@ async fn crate_members(app: &dyn SearchHost, without: &[String]) -> anyhow::Resu
             KeptUse::Inline => {}
         }
     }
-    match app.playlists().crate_members(without).await {
+    match app.crates().crate_members(without).await {
         Ok(m) => {
             let m: Members = Arc::new(m);
             kept.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone(), (Instant::now(), m.clone()));
@@ -981,7 +981,7 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
         let members = if deep.is_empty() { None } else { Some(crate_members(app, without).await?) };
         let names = match &members {
             Some(m) => m.iter().map(|(id, name, _)| (id.clone(), name.clone())).collect(),
-            None => app.playlists().crate_names().await?,
+            None => app.crates().crate_names().await?,
         };
         let mut found: Vec<Item> = Vec::new();
         for (id, name) in names {

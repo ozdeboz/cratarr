@@ -3,7 +3,7 @@
 //! no album without a cover (the owner the same day), and a queue that is an album's tracks shown as that album.
 //!
 //! - **New for you**: Cratarr's own library's newest albums (every folder in use), those the account heard 5% or more
-//!   of left out, three at most of one album artist; one rule with its crate (`PlaylistService::new_for_you`).
+//!   of left out, three at most of one album artist; one rule with its crate (`CrateService::new_for_you`).
 //! - **Jump back in**: the albums played last (14 days, four at most), the playlists played last (30 days, three), and
 //!   the asking player's queues left last (3 days, two), purely by when; a queue holding an album's tracks (nine in ten
 //!   of them or more, nothing else) is that album.
@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(ids, ["z", "w", "v", "y"], "the latest four within 14 days");
     }
 
-    /// The shelf and its crate are one rule (`PlaylistService::new_for_you`): the shelf shows the crate's albums in the
+    /// The shelf and its crate are one rule (`CrateService::new_for_you`): the shelf shows the crate's albums in the
     /// crate's order, whatever order the lists hold them in and whatever else they hold; one the lists have not read yet
     /// comes from the library.
     #[test]

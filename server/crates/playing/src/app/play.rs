@@ -322,7 +322,7 @@ pub async fn own_songs_with(app: &dyn PlayingHost, what: &Collection, owner: Opt
 /// The favourites of `owner`, or all of Cratarr's own library, less what `owner` excluded from automatic picks.
 async fn own_candidates(app: &dyn PlayingHost, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
     let Some(served) = app.served().clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
-    let excluded = app.playlists().excluded_songs_of(owner).await?;
+    let excluded = app.crates().excluded_songs_of(owner).await?;
     let favourites = matches!(what, Collection::Favourites);
     let owner = owner.map(str::to_string);
     let mut ids = blocking(move || {
@@ -344,7 +344,7 @@ async fn candidates(app: &dyn PlayingHost, want: Option<&str>, what: &Collection
     match what {
         Collection::Favourites | Collection::Library => own_candidates(app, what, owner).await,
         Collection::Crate { id, favourites, favourite_albums, without, filter, order, down } => {
-            let name = app.playlists().crate_def(id).await?.name;
+            let name = app.crates().crate_def(id).await?.name;
             let look = super::CrateLook {
                 favourites: *favourites,
                 favourite_albums: *favourite_albums,
@@ -355,8 +355,8 @@ async fn candidates(app: &dyn PlayingHost, want: Option<&str>, what: &Collection
                 down: *down,
                 ..Default::default()
             };
-            let shown = app.playlists().crate_shown(id, &look).await?;
-            let (source, lines) = app.playlists().crate_lines_in_order(&shown, want, &look).await?;
+            let shown = app.crates().crate_shown(id, &look).await?;
+            let (source, lines) = app.crates().crate_lines_in_order(&shown, want, &look).await?;
             let sid = source.clone();
             // A crate's lines are the libraries' files as the catalogue has them: there is no missing one to leave out.
             let (ids, lines): (Vec<String>, Vec<String>) = blocking(move || {

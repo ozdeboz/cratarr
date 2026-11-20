@@ -12,10 +12,10 @@ use super::{App, ToggleError};
 use crate::source;
 
 impl App {
-    /// Home's New for you: its crate's albums (`PlaylistService::new_for_you`), in its order, as Cratarr's own album
+    /// Home's New for you: its crate's albums (`CrateService::new_for_you`), in its order, as Cratarr's own album
     /// lists have them; one the lists have not read yet, as the library has it.
     pub async fn home_new(&self) -> Result<Vec<NewAlbum>, ToggleError> {
-        let picks = self.playlists.new_for_you().await?;
+        let picks = self.crates.new_for_you().await?;
         if picks.is_empty() {
             return Ok(Vec::new());
         }
@@ -124,7 +124,7 @@ impl App {
 
     /// Home's Sounds like your week, of the libraries switched on (`without`); none while it has no tracks.
     pub async fn home_week(&self, want: Option<&str>, without: Vec<String>) -> Result<Option<Week>, ToggleError> {
-        let def = self.playlists.crate_def(WEEK).await?;
+        let def = self.crates.crate_def(WEEK).await?;
         let played = def
             .conditions
             .iter()
@@ -134,7 +134,7 @@ impl App {
             })
             .unwrap_or(0);
         let look = super::CrateLook { without, ..Default::default() };
-        let page = self.playlists.crate_rows(WEEK, want, 0, WEEK_ROWS, &look).await?;
+        let page = self.crates.crate_rows(WEEK, want, 0, WEEK_ROWS, &look).await?;
         if page.total == 0 {
             return Ok(None);
         }
@@ -147,7 +147,7 @@ impl App {
     /// The first `n` records of a crate not saved (the search crate card's, 0.13) in `look`'s order, each by its first
     /// playable track: read a page at a time until they are found, so the card asks only the tracks it shows.
     pub async fn crate_covers(&self, conditions: &[crate::crates::Condition], want: Option<&str>, look: &super::CrateLook, n: usize) -> Result<Vec<WeekCover>, ToggleError> {
-        let (source, lines) = self.playlists.crate_lines_in_order(conditions, want, look).await?;
+        let (source, lines) = self.crates.crate_lines_in_order(conditions, want, look).await?;
         let coverless = coverless(self.served.as_deref()).await;
         let (mut seen, mut covers) = (HashSet::new(), Vec::new());
         for page in lines.chunks(COVER_ROWS).take(COVER_ROWS_AT_MOST / COVER_ROWS) {

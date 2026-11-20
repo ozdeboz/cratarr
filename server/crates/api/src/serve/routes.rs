@@ -402,7 +402,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let years = (p.number("fromYear").map(|y| y.max(0) as u32), p.number("toYear").map(|y| y.max(0) as u32));
             let folder = folder_of(p);
             // Never what the listener excluded from automatic picks (Cratarr's decision 0024, amended 2026-10-19).
-            let excluded = match crate::app::PlaylistService::held_by(serve) {
+            let excluded = match crate::app::CrateService::held_by(serve) {
                 Some(pl) => pl.excluded_songs_of(Some(me.as_str())).await.unwrap_or_default(),
                 None => Default::default(),
             };
@@ -672,7 +672,7 @@ fn mark_now(serve: &Serve, me: &str, kind: ChangeKind, item: &str, op: Op) {
 }
 
 fn playlist_service(serve: &Serve) -> Result<Arc<crate::app::PlaylistService>, Failed> {
-    crate::app::PlaylistService::held_by(serve).ok_or_else(|| Failed(0, "Playlists are not ready yet".into()))
+    crate::app::CrateService::held_by(serve).map(|c| c.playlists().clone()).ok_or_else(|| Failed(0, "Playlists are not ready yet".into()))
 }
 
 /// A playlist's key among everyone's (decision 0051: two accounts' playlists may have one name), for what is kept of

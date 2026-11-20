@@ -14,6 +14,10 @@ impl PlayingHost for App {
         &self.playlists
     }
 
+    fn crates(&self) -> &Arc<super::crates::CrateService> {
+        &self.crates
+    }
+
     fn playing(&self) -> &super::playing::PlayingService {
         &self.playing
     }

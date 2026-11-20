@@ -1,23 +1,23 @@
-//! The playlists as insights ask them (`insights_records::InsightsPlaylists`).
+//! The crates as insights ask them (`insights_records::InsightsPlaylists`).
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::ToggleError;
+use super::crates::CrateService;
 use super::insights_records::InsightsPlaylists;
-use super::playlists::PlaylistService;
 use super::settings_base::Later;
 
-impl InsightsPlaylists for PlaylistService {
+impl InsightsPlaylists for CrateService {
     fn asking_account(&self) -> Option<String> {
-        PlaylistService::asking_account(self)
+        self.playlists().asking_account()
     }
 
     fn served(&self) -> Option<Arc<crate::serve::Serve>> {
-        PlaylistService::served(self)
+        self.playlists().served()
     }
 
     fn crated_lines<'a>(&'a self, want: Option<&'a str>, without: &'a [String]) -> Later<'a, Result<HashSet<String>, ToggleError>> {
-        Box::pin(PlaylistService::crated_lines(self, want, without))
+        Box::pin(CrateService::crated_lines(self, want, without))
     }
 }

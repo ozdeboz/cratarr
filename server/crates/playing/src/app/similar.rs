@@ -5,7 +5,7 @@
 //! own. Here in playing, beside radio, whose index the one similarity reads (SP3-U: `similar_playlists` was the playlist
 //! service's).
 
-use super::{CrateLook, PlaylistService, ToggleError};
+use super::{CrateLook, CrateService, PlaylistService, ToggleError};
 use crate::crates::{GENRE, LIKE};
 
 /// How many of a crate's tracks stand for it: one page.
@@ -16,8 +16,8 @@ fn seeded(id: &str) -> bool {
 }
 
 /// A crate's tracks (Cratarr's own song ids), as saved, from every library: its first `SAMPLE`.
-async fn songs_of(playlists: &PlaylistService, id: &str) -> Result<Vec<String>, ToggleError> {
-    let page = playlists.crate_rows(id, Some(crate::source::cratarr::KIND.id), 0, SAMPLE, &CrateLook::default()).await?;
+async fn songs_of(crates: &CrateService, id: &str) -> Result<Vec<String>, ToggleError> {
+    let page = crates.crate_rows(id, Some(crate::source::cratarr::KIND.id), 0, SAMPLE, &CrateLook::default()).await?;
     Ok(page.rows.into_iter().filter_map(|r| r.id).collect())
 }
 
@@ -47,18 +47,18 @@ pub async fn similar_playlists(playlists: &PlaylistService, id: &str, count: usi
 }
 
 /// Crates like a crate, among the asking account's, the closest first, with how alike (0 to 100).
-pub async fn crates_like(playlists: &PlaylistService, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
+pub async fn crates_like(crates: &CrateService, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
     if seeded(id) {
         return Ok(Vec::new());
     }
-    let seed = songs_of(playlists, id).await?;
+    let seed = songs_of(crates, id).await?;
     let mut candidates = Vec::new();
-    for c in playlists.crates(Some(crate::source::cratarr::KIND.id), &[]).await? {
+    for c in crates.crates(Some(crate::source::cratarr::KIND.id), &[]).await? {
         if c.id == id || seeded(&c.id) {
             continue;
         }
         // One that cannot be read now (its favourites' server away) is left out.
-        if let Ok(songs) = songs_of(playlists, &c.id).await {
+        if let Ok(songs) = songs_of(crates, &c.id).await {
             candidates.push((c.id, songs));
         }
     }

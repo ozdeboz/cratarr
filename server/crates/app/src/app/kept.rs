@@ -112,7 +112,7 @@ async fn rows_of(app: &App, item: &Item, without: &[String]) -> Result<(String, 
         Kind::Crate => {
             let without = if crate::crates::home_crate(&item.id) { Vec::new() } else { without.to_vec() };
             let look = super::CrateLook { without, ..Default::default() };
-            app.playlists.crate_rows(&item.id, source, 0, usize::MAX, &look).await.map(|p| (p.source, p.rows)).map_err(|e| e.to_string())
+            app.crates.crate_rows(&item.id, source, 0, usize::MAX, &look).await.map(|p| (p.source, p.rows)).map_err(|e| e.to_string())
         }
         Kind::Artist => app.playing.artist_view(&item.source, &item.id, None, without).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
     }

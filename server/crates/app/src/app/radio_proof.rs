@@ -59,7 +59,7 @@ async fn open(data: &Path) -> (Arc<App>, Arc<Serve>) {
     crate::serve::set_instance(served.clone());
     let app = App::new(cfg, saved, crate::settings::Origin::File, Some(served.clone())).await.unwrap();
     served.attach_catalogue(app.library.catalogue());
-    served.set_playlists(app.playlists.clone());
+    served.set_playlists(app.crates.clone());
     (app, served)
 }
 
@@ -85,14 +85,14 @@ fn crate_within(id: &str) -> super::play::Collection {
 async fn crates_of(app: &Arc<App>, account: &str) -> (Vec<String>, Vec<String>) {
     let cat = app.library.catalogue();
     let (mut out, mut ids) = (Vec::new(), Vec::new());
-    for (id, _, lines) in app.playlists.crate_members(&[]).await.unwrap() {
+    for (id, _, lines) in app.crates.crate_members(&[]).await.unwrap() {
         let tracks: Vec<String> = cat.line_track_ids(KIND.id, &lines).unwrap().into_iter().zip(lines).map(|(track, line)| track.unwrap_or(line)).collect();
         out.push(format!("{account}\tcrate\t{id}\t{}", tracks.join(" ")));
         ids.push(id);
     }
     let mut made: BTreeSet<String> = cat.crate_facts().unwrap().iter().flat_map(|f| f.genres.iter()).map(|g| format!("{}{g}", crates::GENRE)).collect();
     made.insert(format!("{}{}", crates::LIKE, crates::NOW));
-    made.extend(app.playlists.crate_fits().await.unwrap().into_iter().map(|f| f.crate_id));
+    made.extend(app.crates.crate_fits().await.unwrap().into_iter().map(|f| f.crate_id));
     made.extend(ids.iter().cloned());
     for id in made {
         out.push(match super::play::own_songs(app, &crate_within(&id), Some(account)).await {
@@ -234,20 +234,20 @@ async fn listens(app: &Arc<App>, served: &Serve, account: &str, turn: usize, son
     let lines: Vec<String> = every(4).iter().filter_map(|s| crate::serve::playlists::line_of_song(&cat, s)).collect();
     app.playlists.create_with(list, &lines).await.unwrap();
     let calm = vec![Condition::new("energy", false, Value::Range { min: None, max: Some(60.0) })];
-    let (own, _) = app.playlists.crate_save(None, "Calm", calm).await.unwrap();
+    let (own, _) = app.crates.crate_save(None, "Calm", calm).await.unwrap();
     let like = Value::Like { of: vec![album.clone()], count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: crates::Avoid::default() };
-    app.playlists.crate_save(None, "Like a record", vec![Condition::new("like", false, like)]).await.unwrap();
-    app.playlists.crate_leave_out(&own, None, &every(13), &[], true).await.unwrap();
+    app.crates.crate_save(None, "Like a record", vec![Condition::new("like", false, like)]).await.unwrap();
+    app.crates.crate_leave_out(&own, None, &every(13), &[], true).await.unwrap();
     // Turned down for a Sounds like: what it learns to avoid. Kept for a playlist's: `crate_fits` lists both.
-    app.playlists.crate_leave_out(&format!("{}{album}", crates::LIKE), None, &every(9), &[], true).await.unwrap();
+    app.crates.crate_leave_out(&format!("{}{album}", crates::LIKE), None, &every(9), &[], true).await.unwrap();
     let dismissed = crates::Fit { dismissed: vec!["tempo".to_string()], ..crates::Fit::default() };
-    app.playlists.set_crate_fit(&format!("{}{}{list}", crates::LIKE, crates::LIST), dismissed).await.unwrap();
-    app.playlists.exclude(None, &every(17), true).await.unwrap();
+    app.crates.set_crate_fit(&format!("{}{}{list}", crates::LIKE, crates::LIST), dismissed).await.unwrap();
+    app.crates.exclude(None, &every(17), true).await.unwrap();
     // A fixed crate's toggles as saved, for every device.
-    app.playlists.set_crate_favourites("unlisted", [crates::Favourites::Only, crates::Favourites::None][turn]).await.unwrap();
-    app.playlists.set_crate_favourite_albums("unlisted", [crates::Favourites::All, crates::Favourites::Only][turn]).await.unwrap();
+    app.crates.set_crate_favourites("unlisted", [crates::Favourites::Only, crates::Favourites::None][turn]).await.unwrap();
+    app.crates.set_crate_favourite_albums("unlisted", [crates::Favourites::All, crates::Favourites::Only][turn]).await.unwrap();
     if turn == 1 {
-        app.playlists.exclude_artist("Kite Theory").await.unwrap();
+        app.crates.exclude_artist("Kite Theory").await.unwrap();
     }
 }
 
@@ -320,9 +320,9 @@ fn device_crate(device: &mut Device, id: &str, now: i64) -> Option<Vec<String>> 
 async fn crates_against(app: &Arc<App>, device: &mut Device, account: &str, now: i64) -> (usize, Vec<String>) {
     let cat = app.library.catalogue();
     let facts = cat.crate_facts().unwrap();
-    let mut ids: BTreeSet<String> = app.playlists.crate_members(&[]).await.unwrap().into_iter().map(|(id, _, _)| id).collect();
+    let mut ids: BTreeSet<String> = app.crates.crate_members(&[]).await.unwrap().into_iter().map(|(id, _, _)| id).collect();
     ids.extend(facts.iter().flat_map(|f| f.genres.iter()).map(|g| format!("{}{g}", crates::GENRE)));
-    ids.extend(app.playlists.crate_fits().await.unwrap().into_iter().map(|f| f.crate_id));
+    ids.extend(app.crates.crate_fits().await.unwrap().into_iter().map(|f| f.crate_id));
     ids.extend(facts.iter().step_by(7).filter_map(|f| Some(format!("{}{}", crates::LIKE, f.song()?))));
     ids.extend(facts.iter().step_by(11).filter_map(|f| Some(format!("{}{}", crates::LIKE, f.album.as_deref()?))));
     ids.insert(crates::SECOND_CHANCE.to_string());
@@ -342,7 +342,7 @@ async fn crates_against(app: &Arc<App>, device: &mut Device, account: &str, now:
 /// settings it is not set to are the server's alone (one pass over the library is a device's): where a device has none, they are not
 /// compared. How many crates, and what differs, one line each.
 async fn list_against(app: &Arc<App>, device: &mut Device, account: &str, now: i64) -> (usize, Vec<String>) {
-    let server = serde_json::to_value(app.playlists.crates(None, &[]).await.unwrap()).unwrap();
+    let server = serde_json::to_value(app.crates.crates(None, &[]).await.unwrap()).unwrap();
     let asked = serde_json::json!({ "ask": "crates", "without": [], "now": now });
     let here: serde_json::Value = serde_json::from_str(&device.ask(&asked.to_string()).unwrap()).unwrap();
     let (server, mut here) = (server.as_array().unwrap().clone(), here.as_array().unwrap().clone());
@@ -401,7 +401,7 @@ async fn picks_against(app: &Arc<App>, device: &mut Device, account: &str, seed:
         let album: Vec<String> = plain.albums[&song.album_n].iter().map(|&i| plain.songs[i].id.clone()).collect();
         against(None, &album, &song.id);
     }
-    for (id, _, _) in app.playlists.crate_members(&[]).await.unwrap() {
+    for (id, _, _) in app.crates.crate_members(&[]).await.unwrap() {
         let Ok(songs) = super::play::own_songs(app, &crate_within(&id), Some(account)).await else { continue };
         let places = plain.find(&songs);
         let Some(&first) = places.first() else { continue };

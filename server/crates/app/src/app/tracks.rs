@@ -86,7 +86,7 @@ pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &
     }
     // The tracks the conditions let through, by their catalogue track, worked out as a filter's are (app::filter).
     let passing: Option<HashSet<i64>> = if narrow.conditions.iter().any(|c| c.enabled) {
-        let lib = app.playlists.crate_library_for(&narrow.conditions, Some(crate::source::cratarr::KIND.id), without).await?;
+        let lib = app.crates.crate_library_for(&narrow.conditions, Some(crate::source::cratarr::KIND.id), without).await?;
         let (resolved, w) = (lib.resolved(&narrow.conditions), lib.world());
         Some(lib.files().filter(|f| crate::crates::passes(&[f], &resolved, &w)).filter_map(|f| f.track).collect())
     } else {
@@ -96,7 +96,7 @@ pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &
     let (words, order, user) = (crate::search::words(q), order.to_string(), served.current_user());
     // Best match (decision 0094): by the account's taste; no one asking, or no taste yet: the album order.
     let fit = match &user {
-        Some(user) if order == "bestMatch" => app.playlists.taste_fits(user, without).await?,
+        Some(user) if order == "bestMatch" => app.crates.taste_fits(user, without).await?,
         _ => HashMap::new(),
     };
     crate::run::spawn_blocking(move || -> Result<Listed> {

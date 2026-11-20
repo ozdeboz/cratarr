@@ -14,6 +14,8 @@ pub trait PlayingHost: Send + Sync + 'static {
     fn library(&self) -> &Arc<super::library::Library>;
     /// Playlist files, crates and what each account keeps of them (`App::playlists`).
     fn playlists(&self) -> &Arc<super::playlists::PlaylistService>;
+    /// Crates, Sounds like, the fits and the taste, the exclusions everywhere (`App::crates`).
+    fn crates(&self) -> &Arc<super::crates::CrateService>;
     /// What plays on the servers' players, the album and artist views (`App::playing`).
     fn playing(&self) -> &super::playing::PlayingService;
     /// Cratarr's players (`App::play_on`).
