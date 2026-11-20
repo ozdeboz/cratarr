@@ -108,8 +108,9 @@ fn seen_by(copy: &CopyFacts, viewer: &str) -> bool {
     }
 }
 
-/// Whole: every track of the shortest list paired; with no list kept, present at all.
-fn whole(copy: &CopyFacts, shortest: Option<u16>) -> bool {
+/// Whole: every track of the shortest list paired; with no list kept, present at all. The one whole rule: a caller that picks a
+/// whole copy (a request's asker's copy, RQ01.6) reads it here.
+pub fn whole(copy: &CopyFacts, shortest: Option<u16>) -> bool {
     copy.present > 0 && shortest.is_none_or(|of| copy.paired >= of)
 }
 

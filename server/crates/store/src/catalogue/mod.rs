@@ -11,6 +11,7 @@
 mod artists;
 mod editions;
 mod first;
+pub mod holding;
 mod id3;
 pub mod identity;
 mod index_log;

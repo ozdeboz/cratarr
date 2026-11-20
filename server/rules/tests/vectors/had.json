@@ -1,0 +1,4762 @@
+[
+  {
+    "case": "MUSIC whole, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC whole, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC whole, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC short, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "MUSIC short, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC short, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "MUSIC short, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC short, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "MUSIC short, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD2"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD2"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD2"
+  },
+  {
+    "case": "MUSIC gone, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC whole, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC whole, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC whole, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC short, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC short, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC short, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC short, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC short, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC short, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC gone, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC gone, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "MUSIC trashed, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 0
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN whole, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN short, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "IN short, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "IN short, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "IN short, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "IN short, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "IN short, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "IN ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "IN ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "IN ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "IN ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "IN ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "IN ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "IN gone, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN whole, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN short, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN short, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN short, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN short, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN short, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN short, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN gone, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN gone, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "IN trashed, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 1
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A whole, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A short, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-A short, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-A short, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-A short, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-A short, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-A short, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-A gone, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A whole, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A whole, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A short, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A short, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A short, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A short, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A short, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A short, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-A gone, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A gone, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-A trashed, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 2
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B whole, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B short, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-B short, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-B short, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-B short, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-B short, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-B short, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "OWN-B gone, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B whole, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B whole, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B short, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B short, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B short, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B short, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B short, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B short, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "OWN-B gone, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B gone, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "OWN-B trashed, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 3
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL whole, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL whole, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL whole, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL whole, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL whole, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL whole, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "UPL short, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    },
+    "named": null
+  },
+  {
+    "case": "UPL short, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "partly 7 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "UPL ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    },
+    "named": "HD2"
+  },
+  {
+    "case": "UPL ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL gone, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL whole, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL whole, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL whole, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL whole, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL whole, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL whole, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL short, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL short, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL short, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "UPL ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": "HD6"
+  },
+  {
+    "case": "UPL gone, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL gone, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "UPL trashed, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 6
+      }
+    },
+    "named": "HD9"
+  },
+  {
+    "case": "parked whole, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, a list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, a list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, a list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, a list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, a list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, a list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked whole, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked short, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked ten files, eight the list's, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked gone, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, no list",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, no list",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, no list",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, no list",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, no list",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "parked trashed, no list",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "none, ever",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "none, ever",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "none, ever",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "none, ever",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "none, ever",
+    "viewer": "root",
+    "music_off": false,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "none, ever",
+    "viewer": "root",
+    "music_off": true,
+    "today": "none",
+    "today_had": false,
+    "today_retired": null,
+    "holding": "not_had",
+    "named": null
+  },
+  {
+    "case": "MUSIC 1-6 and IN 5-10 (HD3)",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "partly 10 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 6,
+        "of": 10
+      }
+    },
+    "named": "HD3"
+  },
+  {
+    "case": "MUSIC 1-6 and IN 5-10 (HD3)",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "partly 10 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 6,
+        "of": 10
+      }
+    },
+    "named": "HD3"
+  },
+  {
+    "case": "MUSIC 1-6 and IN 5-10 (HD3)",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "partly 10 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 6,
+        "of": 10
+      }
+    },
+    "named": "HD3"
+  },
+  {
+    "case": "MUSIC 1-6 and IN 5-10 (HD3)",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "partly 10 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 6,
+        "of": 10
+      }
+    },
+    "named": "HD3"
+  },
+  {
+    "case": "MUSIC 1-6 and IN 5-10 (HD3)",
+    "viewer": "root",
+    "music_off": false,
+    "today": "partly 10 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 6,
+        "of": 10
+      }
+    },
+    "named": "HD3"
+  },
+  {
+    "case": "MUSIC 1-6 and IN 5-10 (HD3)",
+    "viewer": "root",
+    "music_off": true,
+    "today": "partly 10 of 10",
+    "today_had": true,
+    "today_retired": null,
+    "holding": {
+      "partly": {
+        "has": 6,
+        "of": 10
+      }
+    },
+    "named": "HD3"
+  },
+  {
+    "case": "IN whole and OWN-B whole (HD5)",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "IN whole and OWN-B whole (HD5)",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "IN whole and OWN-B whole (HD5)",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "IN whole and OWN-B whole (HD5)",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "IN whole and OWN-B whole (HD5)",
+    "viewer": "root",
+    "music_off": false,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "IN whole and OWN-B whole (HD5)",
+    "viewer": "root",
+    "music_off": true,
+    "today": "elsewhere",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "elsewhere",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole and IN whole",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole and IN whole",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC whole and IN whole",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole and IN whole",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": "HD7"
+  },
+  {
+    "case": "MUSIC whole and IN whole",
+    "viewer": "root",
+    "music_off": false,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "had",
+    "named": null
+  },
+  {
+    "case": "MUSIC whole and IN whole",
+    "viewer": "root",
+    "music_off": true,
+    "today": "done",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": "HD7"
+  },
+  {
+    "case": "IN whole and MUSIC 7",
+    "viewer": "alice",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole and MUSIC 7",
+    "viewer": "alice",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole and MUSIC 7",
+    "viewer": "bob",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole and MUSIC 7",
+    "viewer": "bob",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole and MUSIC 7",
+    "viewer": "root",
+    "music_off": false,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  },
+  {
+    "case": "IN whole and MUSIC 7",
+    "viewer": "root",
+    "music_off": true,
+    "today": "arrived",
+    "today_had": true,
+    "today_retired": null,
+    "holding": "arrived",
+    "named": null
+  }
+]
