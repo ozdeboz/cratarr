@@ -417,7 +417,9 @@ impl Slskd {
     }
 
     /// Asks `user` for one file, into its own folder (`cratarr/<batch>`); the batch's id, which names that folder. Through the
-    /// lane; an answer lost is slskd's trouble (`Away`), as ever for a single file.
+    /// lane. An answer lost is read back by the batch's id, made before it was sent (SK2.3's, for one file): slskd has it, it is
+    /// under way; slskd does not know it, it is sent again under that id, once; not read, slskd's trouble (`Away`). Never two
+    /// batches of one file.
     pub async fn fetch(&self, user: &str, file: &Offered) -> Result<String> {
         let batch = uuid();
         let body = json!({
@@ -426,7 +428,17 @@ impl Slskd {
             "files": [{ "filename": file.filename, "size": file.size }],
             "options": { "destination": format!("{FOLDER}/{batch}") },
         });
-        let r = self.operate(|| self.http.post(self.at("transfers/downloads/batches")).json(&body), || true).await.map_err(|e| if e.is::<Lost>() { Away(format!("{e:#}")).into() } else { e })?;
+        let mut again = true;
+        let r = loop {
+            match self.operate(|| self.http.post(self.at("transfers/downloads/batches")).json(&body), || true).await {
+                Err(e) if e.is::<Lost>() => match self.transfers(&batch).await {
+                    Ok(_) => return Ok(batch),
+                    Err(r) if r.is::<NotKnown>() && again => again = false,
+                    Err(_) => return Err(Away(format!("{e:#}")).into()),
+                },
+                other => break other?,
+            }
+        };
         let status = r.status();
         if status.as_u16() == 404 {
             bail!("{user} is offline");
@@ -648,6 +660,8 @@ pub(crate) mod scripted {
         files: Vec<String>,
         now: Now,
         dropped: bool,
+        /// A record's (`singles` says which are not): only records' batches meet the one-user rule (SC02.9).
+        record: bool,
     }
 
     impl Batch {
@@ -669,7 +683,9 @@ pub(crate) mod scripted {
         hold: Option<f64>,
         offline: BTreeSet<String>,
         read_busy: u32,
+        read_ok: u32,
         responses_busy: u32,
+        singles: BTreeSet<String>,
         in_flight: u32,
         ops: Vec<Op>,
         reads: Vec<(String, bool)>,
@@ -762,6 +778,22 @@ pub(crate) mod scripted {
         /// The next `n` reads answered 429 (a proxy in front of slskd).
         pub fn read_busy(self, n: u32) -> Self {
             self.with(|s| s.read_busy = n)
+        }
+        /// From now, the next `ok` reads answered, then `n` answered 429.
+        pub fn then_reads_busy(&self, ok: u32, n: u32) {
+            let mut s = self.s.lock().unwrap();
+            (s.read_ok, s.read_busy) = (ok, n);
+        }
+        /// slskd holding `batch` of `user` already (taken before the test began: a restart's), going at `percent`, with `files`.
+        pub fn knows(self, batch: &str, user: &str, files: &[String], percent: f64) -> Self {
+            self.with(|s| {
+                s.batches.insert(batch.to_string(), Batch { user: user.to_string(), files: files.to_vec(), now: Now::Going(percent), dropped: false, record: true });
+            })
+        }
+        /// A batch of these files alone is the bulk queue's or single-track fetch's, not a record's: the one-user rule (Soulseek's
+        /// records' alone, SC02.9) neither counts it nor holds it.
+        pub fn singles(self, files: &[&str]) -> Self {
+            self.with(|s| s.singles = files.iter().map(|f| f.to_string()).collect())
         }
         /// The next `n` reads of a search's answers answered 429.
         pub fn responses_busy(self, n: u32) -> Self {
@@ -940,7 +972,8 @@ pub(crate) mod scripted {
         let (status, write, cut) = {
             let mut s = me.s.lock().unwrap();
             s.in_flight -= 1;
-            let live = s.batches.values().any(|x| x.user == user && !x.done());
+            let record = !files.iter().all(|f| s.singles.contains(f));
+            let live = record && s.batches.values().any(|x| x.user == user && x.record && !x.done());
             let status = if s.offline.contains(&user) {
                 404
             } else if live {
@@ -964,7 +997,7 @@ pub(crate) mod scripted {
                 if now == Now::Succeeded {
                     write = s.writes_to.clone().map(|w| (w, s.content.clone()));
                 }
-                s.batches.insert(batch.clone(), Batch { user: user.clone(), files: files.clone(), now, dropped: false });
+                s.batches.insert(batch.clone(), Batch { user: user.clone(), files: files.clone(), now, dropped: false, record });
             }
             op.status = if cut { 0 } else { status };
             s.ops.push(op);
@@ -988,6 +1021,10 @@ pub(crate) mod scripted {
         let mut s = me.s.lock().unwrap();
         let during = s.in_flight > 0;
         s.reads.push((path, during));
+        if s.read_ok > 0 {
+            s.read_ok -= 1;
+            return None;
+        }
         if s.read_busy > 0 {
             s.read_busy -= 1;
             return Some((StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response());
@@ -1156,6 +1193,23 @@ mod tests {
         let (away, said) = failure_of(&Slskd::new(&format!("http://{gone}"), "key").unwrap()).await;
         assert!(away);
         assert!(said.starts_with("slskd could not be reached: "), "{said}");
+    }
+
+    /// The review of part 2, L1: a single file's answer lost is read back by its batch's id, as a record's is (SK2.3): slskd has it,
+    /// so it is under way; the connection cut before slskd took it, so it is sent again under that id, once. Never slskd away, never
+    /// two batches of one file.
+    #[tokio::test]
+    async fn a_single_files_lost_answer_is_read_back_and_never_fetched_twice() {
+        let lost = scripted::Scripted::new().lose_answer_of_first_post();
+        let batch = lost.client().fetch("peer-a", &offered()[0]).await.expect("slskd has it: under way");
+        assert_eq!(lost.batches_of("peer-a"), [batch.clone()], "one batch");
+        assert_eq!(lost.reads_of(&batch), 1, "read back by its id");
+        let cut = scripted::Scripted::new().cut_before_taking();
+        let batch = cut.client().fetch("peer-a", &offered()[0]).await.expect("sent again under its id");
+        let tries: Vec<String> = cut.posts().into_iter().filter(|o| o.status != 429).map(|o| o.batch).collect();
+        assert_eq!(tries, [batch.clone(), batch.clone()], "the same id, twice in all");
+        assert_eq!(cut.batches_of("peer-a"), [batch]);
+        assert!(lost.violations().is_empty() && cut.violations().is_empty(), "{:?} {:?}", lost.violations(), cut.violations());
     }
 
     async fn slskd_says(slskd: &Slskd) -> String {

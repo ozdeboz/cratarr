@@ -6144,7 +6144,7 @@ impl OneAtATime {
     }
 }
 
-/// A Want of root's for each of Tape Club's `albums`, on a running server (the Givens' approved requests: the coordinator's fix):
+/// A Want of root's for each of Tape Club's `albums`, on a running server (the Givens' approved requests):
 /// each request with its record, not had.
 async fn tape_club_wants(s: &Server, albums: &[String]) -> Vec<Value> {
     let mut out = Vec::new();
