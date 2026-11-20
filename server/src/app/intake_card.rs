@@ -417,7 +417,7 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     };
     let name = |folder: i64| app.incoming.library_name(crate::source::cratarr::KIND.id, folder);
     checks.push(in_library(kept.as_ref().map(|(better, folder, why)| (*better, name(*folder), why.as_str())), edition.map(name)));
-    let all_green = checks.iter().all(|c| c.state == "green");
+    let suggested = suggested(&checks);
     let year = tags.iter().find_map(|t| t.items.iter().find(|(_, n, _)| *n == Some("date")).and_then(|(_, _, v)| v.get(..4)?.parse().ok()));
     let card_tracks = tracks
         .iter()
@@ -444,8 +444,13 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
         format: format_of(&tags),
         checks,
         tracks: card_tracks,
-        suggested: all_green.then_some("keep"),
+        suggested,
     })
+}
+
+/// What Cratarr suggests for a record by its checks: Keep where every one is green; else nothing, the checks saying why.
+fn suggested(checks: &[Check]) -> Option<&'static str> {
+    checks.iter().all(|c| c.state == "green").then_some("keep")
 }
 
 /// A record waiting, as the list of them says it (its card opens on its own: `card`).
@@ -666,5 +671,35 @@ mod tests {
         assert_eq!(c[0].state, "amber");
         assert!(c[0].said.contains("2 album names"));
         assert_eq!(c[1].state, "amber");
+    }
+
+    /// SK5.3 (the owner, 2026-11-19): what Soulseek's check let through as notes shows on its arrival's card, amber, in the gate's
+    /// own words, as its hearing keeps them (`hear`: `Findings::why`): no red for notes alone, never green, and no Keep suggested
+    /// while a check is not green. Keep, Replace and Delete stay in the album's menu, as for any arrival.
+    #[test]
+    fn the_notes_show_amber_on_the_arrivals_card() {
+        use crate::analysis::flaws::Findings;
+        let track = |no: u32, title: &str| {
+            let file = format!("{no:02} {title}.flac");
+            Track { id: format!("tr-{no}"), path: PathBuf::from(&file), place: (0, format!("Tide Tables/{file}")), file, title: title.into(), ms: 240_000, disc: Some(1), no: Some(no) }
+        };
+        let tracks = [track(1, "Slack Water"), track(2, "Neap"), track(3, "Spring Tide")];
+        let heard = |no: u32, flaws: Findings| {
+            let t = &tracks[no as usize - 1];
+            HeardTrack { file: t.file.clone(), flaw: flaws.why(), recordings: vec![format!("rec-{no}")], ..HeardTrack::default() }
+        };
+        let h = Heard {
+            tracks: vec![
+                heard(1, Findings::default()),
+                heard(2, Findings { clips: 5, first_clip: Some(106.0), ..Findings::default() }),
+                heard(3, Findings { clicks: vec![130.0], pop_at_end: true, ..Findings::default() }),
+            ],
+            no_acoustid: false,
+        };
+        let (sound, acoustid) = heard_checks(Some(&h), &tracks, None);
+        assert_eq!(sound, Check { key: "sound", state: "amber", said: "Track 2: Clipped at 1:46; Track 3: A click at 2:10; a pop at the very end".into() });
+        assert_eq!(acoustid.state, "green", "AcoustID knows each");
+        assert_eq!(suggested(&[acoustid.clone(), sound]), None, "not every check green: Keep not suggested");
+        assert_eq!(suggested(&[acoustid]), Some("keep"));
     }
 }
