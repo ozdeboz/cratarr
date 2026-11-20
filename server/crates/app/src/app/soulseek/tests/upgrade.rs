@@ -103,6 +103,7 @@ const APPROVED: std::ops::RangeInclusive<u32> = 3..=22;
 /// item given its request's record at the first round; the dropped requests their dropped records, no item made of them.
 #[test]
 fn the_0163_queue_is_read_whole() {
+    let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
     let (d, p, mut k) = loaded("u41", QUEUE);
     // A stop before the first round loses none of the requests taken off the list: written while they are left.
     let written = serde_json::to_value(&k).unwrap();
@@ -156,6 +157,7 @@ fn the_0163_queue_is_read_whole() {
 /// peer-02's after b-01's and b-02's downloads end; each then fetching with its pick as 0.16.3 kept it, not Cratarr's; nobody failed.
 #[tokio::test]
 async fn the_approved_items_0163_held_for_slskds_429_go_ahead() {
+    let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
     let (d, _, k) = loaded("u42", QUEUE);
     let was = as_kept(QUEUE);
     assert!(k.items.iter().filter(|i| i.state == State::Approved).count() == 20);
@@ -207,6 +209,7 @@ async fn the_approved_items_0163_held_for_slskds_429_go_ahead() {
 /// b-01. Never a batch cancelled, a user blamed, b-03's files lost or two checks at once.
 #[tokio::test]
 async fn several_fetches_and_a_check_from_0163_are_followed() {
+    let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
     let (d, _, mut k) = loaded("u43", CHECKING);
     let was = as_kept(CHECKING);
     assert!(first_round(&mut k, REQUESTS_CHECKING).is_empty() && k.items.len() == 58, "none taken off for more than one under way");
@@ -258,6 +261,7 @@ async fn several_fetches_and_a_check_from_0163_are_followed() {
 /// is Part 3's (`the_found_items_of_0163_are_searched_again_and_start_where_certain`).
 #[tokio::test]
 async fn the_found_items_of_0163_are_searched_again_once_given_their_record() {
+    let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
     let (d, _, mut k) = loaded("u44", QUEUE);
     let found = ids_in(State::Found);
     assert_eq!(found.len(), 18);
@@ -292,6 +296,7 @@ async fn the_found_items_of_0163_are_searched_again_once_given_their_record() {
 /// folders as they are, nobody failed by the search again.
 #[tokio::test]
 async fn the_found_items_of_0163_are_searched_again_and_start_where_certain() {
+    let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
     let (d, _, mut k) = loaded("u44a", QUEUE);
     let found = ids_in(State::Found);
     let slskd = Scripted::new().hold_all(5.0);
@@ -388,6 +393,7 @@ async fn the_waiting_and_stuck_items_of_0163_go_on_as_today() {
 /// asker's room, (e) a rollback an hour on. Never a record fetched twice, nor a user blamed for anything but a real failure.
 #[tokio::test]
 async fn the_0163_upgrade_meets_restarts_slskd_room_and_the_floor() {
+    let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
     a_stop_after_five_posts().await;
     slskd_silent_at_first().await;
     below_the_floor().await;
@@ -548,6 +554,7 @@ fn a_rollback_an_hour_on() {
 /// the sweep as before. A later start does nothing again.
 #[test]
 fn users_refused_for_notes_alone_are_asked_again_after_the_upgrade() {
+    let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
     let (d, p, mut k) = loaded("u56", QUEUE);
     // The set-asides where the data folder keeps them; some past their 14 days.
     let aside = d.join(SET_ASIDE);

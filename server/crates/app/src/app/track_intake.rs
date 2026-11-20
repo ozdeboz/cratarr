@@ -552,7 +552,7 @@ async fn fetch_with<I: Intake>(id: &str, intake: &I) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: the queue reads it.
@@ -718,18 +718,18 @@ mod tests {
     use crate::app::track_fetch::ReleaseTrack;
     use crate::app::turn::{ACOUSTID, Pinned, Turn};
 
-    const T0: i64 = 1_800_000_000;
+    pub(crate) const T0: i64 = 1_800_000_000;
 
     /// The epoch clock pinned at t0 and moved on by the test (`moment::PINNED`), tokio's paused clock moved on as far with it.
-    struct Clock(std::cell::Cell<i64>);
+    pub(crate) struct Clock(std::cell::Cell<i64>);
 
     impl Clock {
-        fn at_t0() -> (Pinned, Self) {
+        pub(crate) fn at_t0() -> (Pinned, Self) {
             crate::app::moment::PINNED.store(T0, Ordering::Relaxed);
             (Pinned(T0), Clock(std::cell::Cell::new(0)))
         }
 
-        async fn to(&self, secs: i64) {
+        pub(crate) async fn to(&self, secs: i64) {
             let by = secs - self.0.replace(secs);
             crate::app::moment::PINNED.store(T0 + secs, Ordering::Relaxed);
             tokio::time::advance(Duration::from_secs(by as u64)).await;
@@ -756,20 +756,20 @@ mod tests {
     }
 
     /// The test done: the queue kept nowhere.
-    fn done(dir: &Path) {
+    pub(crate) fn done(dir: &Path) {
         stop();
         AT.with(|a| *a.borrow_mut() = None);
         std::fs::remove_dir_all(dir).ok();
     }
 
     /// `track-intake.json` as written, its items by id.
-    fn stored(dir: &Path) -> HashMap<String, Item> {
+    pub(crate) fn stored(dir: &Path) -> HashMap<String, Item> {
         let q: Queue = serde_json::from_slice(&std::fs::read(dir.join("track-intake.json")).unwrap()).unwrap();
         q.items.into_iter().map(|i| (i.id.clone(), i)).collect()
     }
 
     /// "Tide Tables"' tracks by Glass Harbour, each ten seconds long.
-    fn tide_tables() -> Vec<ReleaseTrack> {
+    pub(crate) fn tide_tables() -> Vec<ReleaseTrack> {
         [(1, "Slack Water", "rec-slack"), (2, "Neap", "rec-neap"), (3, "Spring Tide", "rec-spring")]
             .into_iter()
             .map(|(n, title, recording)| crate::app::track_fetch::track_for(1, n, title, "Glass Harbour", Some(10_000), recording))
@@ -777,7 +777,7 @@ mod tests {
     }
 
     /// One of "Tide Tables"' tracks queued.
-    fn waiting(id: &str, t: &ReleaseTrack) -> Item {
+    pub(crate) fn waiting(id: &str, t: &ReleaseTrack) -> Item {
         Item {
             album: AlbumRef { source: "cratarr".into(), id: "al-tide".into(), title: "Tide Tables".into(), artist: "Glass Harbour".into() },
             disc: t.disc,
@@ -795,7 +795,7 @@ mod tests {
     }
 
     /// Ten seconds of a tone as FLAC in `dir`, as the gate passes one (`track_fetch`'s old drive's file).
-    fn tone(dir: &Path) -> PathBuf {
+    pub(crate) fn tone(dir: &Path) -> PathBuf {
         let name = format!("intake-tone-{}", dir.file_name().unwrap().to_string_lossy());
         let w = crate::analysis::tests::wav(&name, 10.0, |t| 0.2 * (t * (440.0 + 200.0 * (t * 0.7).sin()) * std::f64::consts::TAU).sin() as f32);
         let out = dir.join("tone.flac");
@@ -804,20 +804,23 @@ mod tests {
         out
     }
 
-    /// slskd as the bulk queue meets it, answering within the test (`Slskd::within`). Its searches and batches answer as scripted
-    /// (else 200 and 201), each search finding what `found` holds for its words; a batch taken lands its file in slskd's folder, as
-    /// slskd's would. All asked is noted with the moment (epoch s) it was asked. A search or a batch while its 429 holds, or anything
-    /// that is not slskd's API as the bulk queue asks it, is a violation, answered 418.
+    /// slskd as the bulk queue and Soulseek meet it, answering within the test (`Slskd::within`). Its searches and batches answer as
+    /// scripted (else 200 and 201), each search finding what `found` holds for its words; a batch taken lands its files in slskd's
+    /// folder (each `file`), as slskd's would. All asked is noted with the moment (epoch s) it was asked. A search, a batch or a
+    /// batch's read while its 429 holds, or anything that is not slskd's API as they ask it, is a violation, answered 418. Until
+    /// `away_until` (epoch s) all it is asked is answered 503, slskd not up: 0.17's stand-in for a while slskd holds its askers off,
+    /// as slskd has no pause of its own there (round 1.3's lane: a 429 is asked again in it).
     #[derive(Default)]
-    struct FakeSlskd {
-        searches: Mutex<VecDeque<(u16, Option<&'static str>)>>,
-        batches: Mutex<VecDeque<u16>>,
-        found: HashMap<&'static str, Value>,
-        folder: PathBuf,
-        file: PathBuf,
-        asked: Mutex<Vec<(String, String, i64, Value)>>,
-        held: Mutex<i64>,
-        violations: Mutex<Vec<String>>,
+    pub(crate) struct FakeSlskd {
+        pub(crate) away_until: i64,
+        pub(crate) searches: Mutex<VecDeque<(u16, Option<&'static str>)>>,
+        pub(crate) batches: Mutex<VecDeque<u16>>,
+        pub(crate) found: HashMap<&'static str, Value>,
+        pub(crate) folder: PathBuf,
+        pub(crate) file: PathBuf,
+        pub(crate) asked: Mutex<Vec<(String, String, i64, Value)>>,
+        pub(crate) held: Mutex<i64>,
+        pub(crate) violations: Mutex<Vec<String>>,
     }
 
     impl FakeSlskd {
@@ -825,6 +828,9 @@ mod tests {
             let now = now();
             let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             self.asked.lock().unwrap().push((method.to_string(), path.to_string(), now, body.clone()));
+            if now < self.away_until {
+                return (StatusCode::SERVICE_UNAVAILABLE, "Service Unavailable").into_response();
+            }
             let held = *self.held.lock().unwrap();
             let parts: Vec<&str> = path.trim_start_matches("/api/v0/").split('/').collect();
             match (method.as_str(), parts.as_slice()) {
@@ -855,13 +861,18 @@ mod tests {
                     if status >= 300 {
                         return (StatusCode::from_u16(status).unwrap(), "Service Unavailable").into_response();
                     }
-                    let name = crate::slskd::base_name(body["files"][0]["filename"].as_str().unwrap_or_default()).to_string();
                     let to = self.folder.join(body["options"]["destination"].as_str().unwrap_or_default());
                     std::fs::create_dir_all(&to).unwrap();
-                    std::fs::copy(&self.file, to.join(name)).unwrap();
+                    // Each file of the batch (a track, or a record's folder), as slskd lands it.
+                    for f in body["files"].as_array().into_iter().flatten() {
+                        std::fs::copy(&self.file, to.join(crate::slskd::base_name(f["filename"].as_str().unwrap_or_default()))).unwrap();
+                    }
                     (StatusCode::CREATED, axum::Json(json!({ "batch": { "transfers": [] }, "failures": [] }))).into_response()
                 }
                 ("GET", ["transfers", "downloads", "batches", id]) => {
+                    if now < held {
+                        self.violation(format!("a batch read at {now}, held until {held}"));
+                    }
                     let done = json!({ "id": format!("t-{id}"), "filename": "x", "state": "Completed, Succeeded", "percentComplete": 100.0 });
                     axum::Json(json!({ "transfers": [done] })).into_response()
                 }
@@ -885,7 +896,7 @@ mod tests {
         }
 
         /// The searches it was asked for: each one's words, and when.
-        fn searches_asked(&self) -> Vec<(String, i64)> {
+        pub(crate) fn searches_asked(&self) -> Vec<(String, i64)> {
             let asked = self.asked.lock().unwrap();
             let searches = asked.iter().filter(|(m, p, ..)| m == "POST" && p.ends_with("/searches"));
             searches.map(|(_, _, at, b)| (b["searchText"].as_str().unwrap_or_default().to_string(), *at)).collect()
@@ -893,7 +904,7 @@ mod tests {
     }
 
     /// slskd at a test address, answered within the test by `fake`.
-    fn slskd_at(url: &str, fake: &Arc<FakeSlskd>) -> crate::slskd::Slskd {
+    pub(crate) fn slskd_at(url: &str, fake: &Arc<FakeSlskd>) -> crate::slskd::Slskd {
         let fake = fake.clone();
         let router = axum::Router::new().fallback(move |method: Method, uri: axum::http::Uri, body: axum::body::Bytes| {
             let fake = fake.clone();
@@ -905,17 +916,18 @@ mod tests {
     /// AcoustID as the gate asks it, through `acoustid::lookup_in`'s send (TN-a1's seam): its limit (HTTP 429, code 14, the stand-in
     /// body) where scripted, else ok, knowing the file as each of "Tide Tables"' recordings; each lookup's moment noted (epoch s, and
     /// tokio's). A lookup whose `meta` is not `recordingids` or without the key, one under 333 ms after the one before, or one while
-    /// its limit holds (its own default, a minute), is a violation.
+    /// its limit holds (its Retry-After where it says one, `said`, else its own default, a minute), is a violation.
     #[derive(Default)]
-    struct FakeAcoustid {
-        limits: Mutex<VecDeque<bool>>,
-        asked: Mutex<Vec<(i64, tokio::time::Instant)>>,
-        held: Mutex<i64>,
-        violations: Mutex<Vec<String>>,
+    pub(crate) struct FakeAcoustid {
+        pub(crate) limits: Mutex<VecDeque<bool>>,
+        pub(crate) said: Option<i64>,
+        pub(crate) asked: Mutex<Vec<(i64, tokio::time::Instant)>>,
+        pub(crate) held: Mutex<i64>,
+        pub(crate) violations: Mutex<Vec<String>>,
     }
 
     impl FakeAcoustid {
-        fn answer(&self, form: Vec<(&'static str, String)>) -> std::future::Ready<Result<crate::acoustid::Heard>> {
+        pub(crate) fn answer(&self, form: Vec<(&'static str, String)>) -> std::future::Ready<Result<crate::acoustid::Heard>> {
             let (now, at) = (now(), tokio::time::Instant::now());
             let field = |k: &str| form.iter().find(|(n, _)| *n == k).map(|(_, v)| v.as_str());
             let mut violations = self.violations.lock().unwrap();
@@ -931,21 +943,25 @@ mod tests {
                 violations.push(format!("a lookup at {now}, held until {held}"));
             }
             asked.push((now, at));
+            let mut headers = reqwest::header::HeaderMap::new();
             let (status, body) = if self.limits.lock().unwrap().pop_front().unwrap_or(false) {
-                *held = now + 60;
+                *held = now + self.said.unwrap_or(60);
+                if let Some(said) = self.said {
+                    headers.insert(reqwest::header::RETRY_AFTER, said.into());
+                }
                 (429, r#"{"status":"error","error":{"code":14,"message":"rate limit exceeded"}}"#.to_string())
             } else {
                 let known = json!([{ "id": "rec-slack" }, { "id": "rec-neap" }, { "id": "rec-spring" }]);
                 (200, json!({ "status": "ok", "results": [{ "score": 0.97, "recordings": known }] }).to_string())
             };
-            std::future::ready(Ok(crate::acoustid::Heard { status: reqwest::StatusCode::from_u16(status).unwrap(), headers: reqwest::header::HeaderMap::new(), body }))
+            std::future::ready(Ok(crate::acoustid::Heard { status: reqwest::StatusCode::from_u16(status).unwrap(), headers, body }))
         }
     }
 
     /// Single-track intake as the server runs it, through the fakes: "Tide Tables" as its release, slskd answered within the test,
     /// AcoustID asked in a turn of its own, slskd's folder and staging in the test's folder. Each search started is noted (its
     /// release read), and each file set aside or added (none is written into a library).
-    struct Through {
+    pub(crate) struct Through {
         slskd: crate::slskd::Slskd,
         folder: PathBuf,
         staging: PathBuf,
@@ -957,7 +973,7 @@ mod tests {
     }
 
     impl Through {
-        fn new(dir: &Path, slskd: crate::slskd::Slskd, heard: &Arc<FakeAcoustid>) -> Self {
+        pub(crate) fn new(dir: &Path, slskd: crate::slskd::Slskd, heard: &Arc<FakeAcoustid>) -> Self {
             Through {
                 slskd,
                 folder: dir.join("slskd"),
@@ -1006,6 +1022,27 @@ mod tests {
         fn add(&self, fetch: String) -> impl Future<Output = Result<Option<String>>> + Send {
             self.added.lock().unwrap().push(fetch);
             std::future::ready(Ok(Some("added-run".to_string())))
+        }
+    }
+
+    /// Tests elsewhere (TN.5): the bulk queue started on `dir` (`start_in`) with these items, nothing run.
+    pub(crate) fn start_with(dir: &Path, items: Vec<Item>) {
+        let given = Queue { running: false, next: items.len() as u64, items };
+        std::fs::write(dir.join("track-intake.json"), serde_json::to_vec(&given).unwrap()).unwrap();
+        start_in(dir);
+    }
+
+    /// Tests elsewhere (TN.5): the bulk worker's next step at `now`, taken as its loop takes it, through `intake`: the item it took.
+    pub(crate) async fn worked(intake: &Through, now: i64) -> Option<String> {
+        match next_of(&view().items, now)? {
+            Next::Search(id) => {
+                search_with(&id, intake).await;
+                Some(id)
+            }
+            Next::Fetch(id) => {
+                fetch_with(&id, intake).await;
+                Some(id)
+            }
         }
     }
 

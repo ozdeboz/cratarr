@@ -54,8 +54,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::track_fetch::{NotAsked, ReleaseTrack};
+use super::turn::Failure;
 use crate::lidarr::Progress;
-use crate::slskd::{Answer, Away, Offered, Slskd};
+use crate::slskd::{Answer, Offered, Slskd};
 
 /// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
 pub const FETCHER: &str = "soulseek";
@@ -288,20 +289,46 @@ static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
 /// Where it is kept: the data folder's `soulseek.json`, once known.
 static FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
+#[cfg(test)]
+thread_local! {
+    // A test's own list (`tests::own_list`): kept in its folder's `soulseek.json` on the test's thread alone, read from there when
+    // its memory is empty, so no other test's items mix with it and the store can be read as written.
+    static OWN: std::cell::RefCell<Option<(PathBuf, Option<Kept>)>> = const { std::cell::RefCell::new(None) };
+    // A test's own Soulseek library (`tests::own_list`): where its records are placed.
+    static OWN_LIBRARY: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 fn kept<T>(f: impl FnOnce(&mut Kept) -> T) -> T {
+    #[cfg(test)]
+    if OWN.with(|o| o.borrow().is_some()) {
+        return OWN.with(|o| {
+            let mut o = o.borrow_mut();
+            let (p, k) = o.as_mut().expect("a test's own list");
+            let k = k.get_or_insert_with(|| load(&*p));
+            let out = f(k);
+            keep_in(&*p, k);
+            out
+        });
+    }
     let mut g = KEPT.lock().unwrap_or_else(|e| e.into_inner());
     let k = g.get_or_insert_with(|| FILE.get().map(|p| load(p)).unwrap_or_default());
     let out = f(k);
-    if let Some(p) = FILE.get()
-        && !k.frozen
-        && let Ok(b) = serde_json::to_vec(k)
-    {
-        let part = p.with_extension("json.part");
-        if std::fs::write(&part, b).and_then(|_| std::fs::rename(&part, p)).is_err() {
-            tracing::warn!(target: "soulseek", file = %p.display(), "the Soulseek queue could not be kept");
-        }
+    if let Some(p) = FILE.get() {
+        keep_in(p, k);
     }
     out
+}
+
+/// The list written whole to `p` (through a part file), unless nothing may be written to it (`frozen`, R24).
+fn keep_in(p: &Path, k: &Kept) {
+    if k.frozen {
+        return;
+    }
+    let Ok(b) = serde_json::to_vec(k) else { return };
+    let part = p.with_extension("json.part");
+    if std::fs::write(&part, b).and_then(|_| std::fs::rename(&part, p)).is_err() {
+        tracing::warn!(target: "soulseek", file = %p.display(), "the Soulseek queue could not be kept");
+    }
 }
 
 /// The queue as the data folder keeps it (`soulseek.json`); none yet, an empty one (R24, N4). One 0.16 wrote, its items naming
@@ -449,8 +476,9 @@ fn item(id: &str) -> Option<Item> {
     kept(|k| k.items.iter().find(|i| i.id == id).cloned())
 }
 
+/// Now (epoch s), as the turns read it (`moment::now_secs`): a test moves it.
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    super::moment::now_secs()
 }
 
 // ---- The ladders
@@ -722,6 +750,25 @@ fn hold(i: &mut Item, why: String, wait: i64) {
     (i.why, i.due) = (Some(why), now() + wait);
 }
 
+/// When a record whose source could not answer for it is taken up again, by the failure's class (TN.1, TN.6): a pause at its
+/// deadline (a moment on at least), no attempt used; away (down, not answering, switched off, background reading paused) after
+/// `away` seconds. None where the failure says something of the user, the file or the record, or is not understood: each reader
+/// does with it what it did.
+fn again_at(e: &anyhow::Error, away: i64) -> Option<i64> {
+    let now = now();
+    match super::turn::class_at(e, now) {
+        Failure::Paused { until } => Some(until.max(now + 1)),
+        Failure::Away(_) => Some(now + away),
+        _ => None,
+    }
+}
+
+/// A record held until `due` for a source that could not answer (`again_at`), saying why: as it is, its tick, its folders and its
+/// batch with it (`hold`).
+fn held_to(i: &mut Item, e: &anyhow::Error, due: i64) {
+    (i.why, i.due) = (Some(format!("{e:#}")), due);
+}
+
 /// What a user's fetch held by the disk floor says (AL03.2): no transfer of it begins while the server is short of space.
 pub const SHORT_OF_SPACE: &str = "The server is short of space";
 /// A fetch the floor held is looked at again after this long, and at once when the server is no longer short (`space_again`).
@@ -734,6 +781,23 @@ pub fn space_again() {
         let n = held.len();
         for i in held {
             (i.due, i.why) = (0, None);
+        }
+        n
+    });
+    if taken > 0 {
+        wake();
+    }
+}
+
+/// slskd switched on again (Settings › Server): the records waiting because it was off are taken up now (TN.12), not a round later.
+pub fn switched_on() {
+    let off = super::references::SwitchedOff("slskd").to_string();
+    let now = now();
+    let taken = kept(|k| {
+        let waiting: Vec<&mut Item> = k.items.iter_mut().filter(|i| i.why.as_deref() == Some(off.as_str()) && i.due > now).collect();
+        let n = waiting.len();
+        for i in waiting {
+            i.due = now;
         }
         n
     });
@@ -1171,6 +1235,10 @@ pub fn forget_placed(record: i64) {
 
 /// The Incoming library whose fetcher is Soulseek (its folder, as Cratarr sees it).
 fn library() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(lib) = OWN_LIBRARY.with(|l| l.borrow().clone()) {
+        return Ok(lib);
+    }
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let dir = served.data_dir.clone().context("Cratarr's data folder is needed")?;
     let saved = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())?.context("Nothing is set up yet")?;
@@ -1639,8 +1707,8 @@ const RECORD_AGAIN: i64 = 60;
 /// How long an item waits after Bandcamp answered with its bot check (R23, N3): at most once a day, nothing done to get past it.
 const CHECKED_AGAIN_SECS: i64 = 86_400;
 
-/// A record's counting list, read through `read` (`references::tracklist`, kept there once read). None is read while background
-/// reading is paused (Y7): the item waits a round, never Stuck.
+/// A record's counting list, read through `read` (`references::tracklist`, kept there once read), else what not reading it comes to
+/// (`not_listed`). None is read while background reading is paused (Y7): the item waits a round, never Stuck.
 async fn listing<R, F>(it: &Item, cat: &Arc<crate::catalogue::Catalogue>, read: R) -> Listing
 where
     R: Fn(crate::catalogue::records::Ref) -> F,
@@ -1650,26 +1718,49 @@ where
     if it.record.record == 0 {
         return Listing::Later("Waits for its record".into(), RECORD_AGAIN);
     }
-    if super::switches::background_paused() {
-        return Listing::Later(super::switches::PAUSED.into(), ROUND_AT_LEAST);
-    }
-    match super::references::tracklist(cat, it.record.record, read).await {
-        Ok(Ok(lists)) => Listing::Ready(lists),
-        Ok(Err(why)) => Listing::None(why),
-        Err(e) if crate::bandcamp::not_read(&e) => Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS),
-        Err(e) => Listing::Later(format!("{e:#}"), ROUND_AT_LEAST),
+    let e = if super::switches::background_paused() {
+        anyhow::anyhow!(super::switches::PAUSED)
+    } else {
+        match super::references::tracklist(cat, it.record.record, read).await {
+            Ok(Ok(lists)) => return Listing::Ready(lists),
+            // No list to judge by: what someone must act on (TN.1).
+            Ok(Err(why)) => super::turn::Stuck(why).into(),
+            Err(e) => e,
+        }
+    };
+    not_listed(&e, now())
+}
+
+/// A record's list not read, by its failure's class at `now` (TN.1, TN.13): no list to judge by, Stuck; Bandcamp's bot check, a day
+/// (R23); a source paused (MusicBrainz's 503), held to its deadline, no try counted; away or not understood, a round. Pure.
+fn not_listed(e: &anyhow::Error, now: i64) -> Listing {
+    match super::turn::class_at(e, now) {
+        Failure::Stuck => Listing::None(format!("{e:#}")),
+        _ if crate::bandcamp::not_read(e) => Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS),
+        Failure::Paused { until } => Listing::Later(format!("{e:#}"), (until - now).max(1)),
+        _ => Listing::Later(format!("{e:#}"), ROUND_AT_LEAST),
     }
 }
 
 /// One record searched: its list first (once), then the ladder's rungs in turn until one finds folders.
 async fn search(id: &str) {
-    let Some(it) = item(id) else { return };
     let Some(served) = crate::serve::instance() else { return };
-    if !read_its_list(id, &it, served.catalogue(), super::references::read_reference).await {
+    let ready = async { super::track_fetch::slskd_ready().await.map(|(s, _)| s) };
+    search_in(id, served.catalogue(), super::references::read_reference, ready).await;
+}
+
+/// [`search`], its list read through `read`, slskd as `ready` gives it (the tests' stand in).
+async fn search_in<R, F>(id: &str, cat: &Arc<crate::catalogue::Catalogue>, read: R, ready: impl std::future::Future<Output = Result<Slskd>>)
+where
+    R: Fn(crate::catalogue::records::Ref) -> F,
+    F: std::future::Future<Output = Result<Option<super::references::Read>>>,
+{
+    let Some(it) = item(id) else { return };
+    if !read_its_list(id, &it, cat, read).await {
         return;
     }
-    let slskd = match super::track_fetch::slskd_ready().await {
-        Ok((s, _)) => s,
+    let slskd = match ready.await {
+        Ok(s) => s,
         Err(e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
     };
     search_through(id, &slskd).await;
@@ -1736,9 +1827,12 @@ where
                 }
                 heard.extend(a);
             }
-            // slskd away says nothing of the record: no miss, or a week's wait would meet it when slskd came back.
-            Err(e) if crate::slskd::not_now(&e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
-            Err(e) => why = Some(format!("{e:#}")),
+            // slskd away or paused says nothing of the record: no miss (TN.6), or a week's wait would meet it when slskd came back; a
+            // pause holds it to its source's deadline.
+            Err(e) => match again_at(&e, ROUND_AT_LEAST) {
+                Some(due) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), due)),
+                None => why = Some(format!("{e:#}")),
+            },
         }
     }
     // A fuller folder for the list (X3): every track of it there, and more; offered for the tick, saying what it takes of it.
@@ -2159,12 +2253,14 @@ async fn start_one(id: &str, slskd: &Slskd, folder: &Path, fresh: bool, held: Op
                     return false;
                 }
             }
-            // slskd away: read back when due; busy: at the next look.
-            Err(e) if e.is::<Away>() => {
-                with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN));
+            // slskd away: read back when due, by the failure's class (TN.6); busy (a read's 429, SK2.2), or anything else: at the
+            // next look.
+            Err(e) => {
+                if let Some(due) = again_at(&e, SLSKD_AGAIN).filter(|_| !e.is::<crate::slskd::Busy>()) {
+                    with_item(id, |i| held_to(i, &e, due));
+                }
                 return false;
             }
-            Err(_) => return false,
         }
     }
     loop {
@@ -2187,19 +2283,21 @@ async fn start_one(id: &str, slskd: &Slskd, folder: &Path, fresh: bool, held: Op
                     return false;
                 }
             },
-            // slskd itself could not take it (not reached, its key, a proxy): never sent, held, no user blamed.
-            Err(e) if e.is::<Away>() => {
-                with_item(id, |i| {
-                    i.batch = None;
-                    hold(i, format!("{e:#}"), SLSKD_AGAIN);
-                });
-                return false;
-            }
             Err(e) => {
-                with_item(id, |i| {
-                    on_failed(i, &f.user, format!("{e:#}"));
-                });
-                wake_starts();
+                match again_at(&e, SLSKD_AGAIN) {
+                    // slskd itself could not take it (not reached, its key, a proxy): never sent, held, no attempt used, no user
+                    // blamed (TN.6).
+                    Some(due) => with_item(id, |i| {
+                        i.batch = None;
+                        held_to(i, &e, due);
+                    }),
+                    None => {
+                        with_item(id, |i| {
+                            on_failed(i, &f.user, format!("{e:#}"));
+                        });
+                        wake_starts();
+                    }
+                }
                 return false;
             }
         }
@@ -2248,17 +2346,20 @@ async fn downloads() {
                     });
                 }
             }
-            Err(e) => {
-                let (why, t) = (format!("{e:#}"), now());
-                kept(|k| {
-                    for i in k.items.iter_mut().filter(|i| i.due <= t && matches!(i.state, State::Approved | State::Fetching)) {
-                        hold(i, why.clone(), SLSKD_AGAIN);
-                    }
-                });
-            }
+            Err(e) => not_ready(&every, &e),
         }
         let _ = tokio::time::timeout(Duration::from_secs(60), STARTS.notified()).await;
     }
+}
+
+/// slskd not ready (switched off, not set up): what of `within` would start or be followed now is held a while, saying why.
+fn not_ready(within: Within, e: &anyhow::Error) {
+    let (why, t) = (format!("{e:#}"), now());
+    kept(|k| {
+        for i in k.items.iter_mut().filter(|i| within(i) && i.due <= t && matches!(i.state, State::Approved | State::Fetching)) {
+            hold(i, why.clone(), SLSKD_AGAIN);
+        }
+    });
 }
 
 /// The checks' worker (SK1.3): one record at a time, in the order its download ended, checked and then placed; woken when a download
@@ -2331,9 +2432,11 @@ where
             std::fs::remove_dir_all(&dir).ok();
             return tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "not checked further: it left the list");
         }
-        Err(why) => {
-            tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %why, "held at its check");
-            return with_item(id, |i| hold(i, why, CHECK_AGAIN));
+        // No verdict: held at its check, its files kept, until AcoustID's deadline where it asked to be left alone (TN.6), else a while.
+        Err(e) => {
+            tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "held at its check");
+            let due = again_at(&e, CHECK_AGAIN).unwrap_or_else(|| now() + CHECK_AGAIN);
+            return with_item(id, |i| held_to(i, &e, due));
         }
     };
     // At its check its files are in: slskd's list decides nothing, and its transfers are let go.
@@ -2539,9 +2642,10 @@ async fn follow_one(id: &str, slskd: &Slskd, folder: &Path) {
                 }
                 let Some(it) = item(id).filter(|i| i.state == State::Fetching) else { return };
                 let (Some(batch), Some(user)) = (it.batch.clone(), chosen_user(&it).map(str::to_string)) else { return };
-                if e.is::<Away>() {
+                // slskd away: its batch stays, for slskd may well finish it, and it is followed again when due (TN.6).
+                if let Some(due) = again_at(&e, SLSKD_AGAIN) {
                     tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "held for slskd");
-                    return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN));
+                    return with_item(id, |i| held_to(i, &e, due));
                 }
                 let_go(slskd, folder, id, &user, &batch).await;
                 with_item(id, |i| {
@@ -2654,9 +2758,10 @@ type Verdict = std::result::Result<Vec<PathBuf>, BTreeMap<String, String>>;
 
 /// Every file of the fetched folder gated against its track (by `gate`), one at a time, each on the one decode turn (`HEAVY`, taken
 /// for the file and let go after: the light rule): the verdict, or, where AcoustID could not be asked and no file has failed so far,
-/// none: what it said, as nothing is known yet. `still` is asked before each file and after the last: where it says no (its item
-/// left the list, SK1.6), the check ends there, with no verdict (`None`).
-async fn check_while<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G, still: &(dyn Fn() -> bool + Sync)) -> std::result::Result<Option<Verdict>, String>
+/// none: why (`NotAsked`, AcoustID's deadline with it where it asked to be left alone), as nothing is known yet. `still` is asked
+/// before each file and after the last: where it says no (its item left the list, SK1.6), the check ends there, with no verdict
+/// (`None`).
+async fn check_while<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G, still: &(dyn Fn() -> bool + Sync)) -> Result<Option<Verdict>>
 where
     G: Fn(PathBuf, ReleaseTrack) -> Fut,
     Fut: std::future::Future<Output = Result<f32>>,
@@ -2664,7 +2769,7 @@ where
     let on_disk = files_under(dir);
     // None of its files there at all (X4): slskd's folder is set wrong, or gone. No user's failure: held, as with AcoustID away.
     if on_disk.is_empty() && !f.files.is_empty() {
-        return Err("Its files are not in slskd's folder: check slskd's folder in Settings › Server".into());
+        bail!("Its files are not in slskd's folder: check slskd's folder in Settings › Server");
     }
     let mut out = Vec::new();
     let mut why = BTreeMap::new();
@@ -2687,7 +2792,7 @@ where
             Ok(_) => out.push(path),
             // None after it is asked about: AcoustID would not answer them either, and each would be decoded whole to find
             // out. A file failed already settles the folder.
-            Err(e) if e.is::<NotAsked>() && why.is_empty() => return Err(format!("{e:#}")),
+            Err(e) if e.is::<NotAsked>() && why.is_empty() => return Err(e),
             Err(e) if e.is::<NotAsked>() => break,
             Err(e) => {
                 why.insert(name, format!("{e:#}"));
@@ -2702,7 +2807,7 @@ where
 
 /// [`check_while`] of a folder whose item stays.
 #[cfg(test)]
-async fn check<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G) -> std::result::Result<Verdict, String>
+async fn check<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G) -> Result<Verdict>
 where
     G: Fn(PathBuf, ReleaseTrack) -> Fut,
     Fut: std::future::Future<Output = Result<f32>>,
@@ -3096,6 +3201,7 @@ mod tests {
 
     #[test]
     fn a_failed_user_hands_the_record_to_its_next_folder_or_back_to_the_search() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let f = |user: &str| Folder { user: user.into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: Vec::new(), unchecked: None };
         let mut i = Item {
             id: "ss-1".into(),
@@ -3207,6 +3313,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_check_acoustid_cannot_answer_holds_the_record_and_holds_it_against_nobody() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-held", "b-held");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("held", batch);
@@ -3247,7 +3354,7 @@ mod tests {
         assert_eq!(why.into_iter().collect::<Vec<_>>(), [("01 One.flac".to_string(), "2 frames would not decode".to_string())]);
         // The other way round nothing has failed yet: no verdict, though a file after it might.
         let second = |file: PathBuf, _| std::future::ready(if file.ends_with("01 One.flac") { Err(acoustid_away()) } else { Err(anyhow::anyhow!("2 frames would not decode")) });
-        assert_eq!(check(&dir, &f, &release, &second).await.unwrap_err(), "AcoustID could not be reached");
+        assert_eq!(check(&dir, &f, &release, &second).await.unwrap_err().to_string(), "AcoustID could not be reached");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -3263,6 +3370,7 @@ mod tests {
 
     #[tokio::test]
     async fn slskd_gone_leaves_an_approved_record_as_it_is_and_blames_no_user() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-away";
         listed(id, State::Approved, None);
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-away-{}", std::process::id()));
@@ -3278,6 +3386,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_user_who_refuses_still_hands_the_record_to_the_next_folder() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-refused";
         listed(id, State::Approved, None);
         let refused = axum::Router::new().route("/api/v0/transfers/downloads/batches", axum::routing::post(|| std::future::ready(axum::http::StatusCode::NOT_FOUND)));
@@ -3289,6 +3398,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fetch_slskd_stops_answering_keeps_its_batch_and_is_followed_again() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-reads", "b-reads");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("reads", batch);
@@ -3307,6 +3417,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_batch_slskd_answers_it_does_not_know_is_a_fetch_gone_and_held_for_nothing() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-gone", "b-gone");
         listed(id, State::Fetching, Some(batch));
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-gone-{}", std::process::id()));
@@ -3326,6 +3437,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_search_slskd_could_not_make_is_no_miss() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-search";
         listed(id, State::Searching, None);
         with_item(id, |i| i.misses = 3);
@@ -3342,6 +3454,7 @@ mod tests {
     /// what came of them removed. Nobody blamed; the record stays off the list.
     #[tokio::test]
     async fn a_record_at_work_can_leave_the_list_and_its_transfers_stop() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         listed("ss-work", State::Checking, Some("b-work"));
         with_item("ss-work", |i| hold(i, "AcoustID is not set up".into(), CHECK_AGAIN));
         assert_eq!(dropped("ss-work").and_then(|i| i.batch).as_deref(), Some("b-work"), "its batch, for its folder to go");
@@ -3377,6 +3490,7 @@ mod tests {
 
     #[test]
     fn the_library_is_the_incoming_one_whose_fetcher_is_soulseek() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use crate::settings::{Libraries, LibraryKind, LibrarySetting, Saved, SourceConfig};
         let libraries = Libraries(vec![
             LibrarySetting::new("/music", LibraryKind::Main),
@@ -3425,6 +3539,7 @@ mod tests {
 
     #[test]
     fn only_approved_requests_are_wanted_and_one_taken_off_stays_off() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, Some("rg1")), asked(2, None), asked(3, Some("rg3")), asked(4, None), asked(5, None)], &[of(101), of(102), of(103), None, of(101)], &[]);
         // Every record, with a release group or none (C51b); one with no record yet waits for one; one record taken once.
@@ -3508,6 +3623,7 @@ mod tests {
     /// are judged by the list without them, by titles and count: a folder is found, and no search more is made for it.
     #[tokio::test]
     async fn a_list_without_lengths_is_used_only_when_lists_with_lengths_find_nothing() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let r = waiting_with("ss-r33-only", vec![track(1, "One", 100), track(2, "Two", 200)], vec![no_length(1, "One"), no_length(2, "Two")]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
         search_with("ss-r33-only", answering(vec![vec![titled_folder("near")]], &asked)).await;
@@ -3519,6 +3635,7 @@ mod tests {
     /// R33: a folder found by titles alone says so beside its tick, and its files are gated by the list it was found by.
     #[tokio::test]
     async fn a_fallback_folder_says_it_has_no_lengths_to_check() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         waiting_with("ss-r33-says", Vec::new(), vec![no_length(1, "One"), no_length(2, "Two")]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
         search_with("ss-r33-says", answering(vec![vec![titled_folder("near")]], &asked)).await;
@@ -3532,6 +3649,7 @@ mod tests {
     /// is not.
     #[tokio::test]
     async fn with_lists_with_lengths_finding_a_folder_no_fallback_is_offered() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         waiting_with("ss-r33-strict", vec![track(1, "One", 100), track(2, "Two", 200)], vec![no_length(1, "One"), no_length(2, "Two")]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
         search_with("ss-r33-strict", answering(vec![vec![titled_folder("near")], vec![exact_folder("exact"), titled_folder("near")]], &asked)).await;
@@ -3544,6 +3662,7 @@ mod tests {
     /// again later, as a miss by the list with lengths is: nothing found is no dead end.
     #[tokio::test]
     async fn with_no_list_matching_even_by_titles_the_item_says_so() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         for (id, list) in [("ss-r33-none", vec![no_length(1, "One"), no_length(2, "Two"), no_length(3, "Three")]), ("ss-r33-count", vec![no_length(1, "One")])] {
             waiting_with(id, Vec::new(), list);
             let asked = std::sync::atomic::AtomicUsize::new(0);
@@ -3716,6 +3835,7 @@ mod tests {
     /// X4: a folder set aside is kept 14 days, then deleted and taken off its item.
     #[test]
     fn a_set_aside_is_kept_fourteen_days_then_deleted() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("aside");
         let (old, new) = (d.join(SET_ASIDE).join("ss-aside a"), d.join(SET_ASIDE).join("ss-aside b"));
         for p in [&old, &new] {
@@ -3870,6 +3990,7 @@ mod tests {
     /// end-to-end SK6.3 places it.
     #[tokio::test]
     async fn clipping_a_pop_and_clicks_are_notes_not_refusals() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-n1", "b-n1");
         tide_tables(id, State::Fetching, Some(batch), &["peer-a", "peer-b"]);
         let d = tide_tables_fetched("n1", batch);
@@ -3902,6 +4023,7 @@ mod tests {
     /// longer than the recording, 2 frames that would not decode, no decode at all, not in slskd's folder.
     #[tokio::test]
     async fn real_faults_still_set_a_folder_aside() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use crate::analysis::flaws::Sold;
         let neap = "02 Neap.flac";
         let walled = |sold: Sold| move |s: &mut Sound| (s.flaws.sold, s.flaws.cutoff_hz) = (sold, Some(16_000.0));
@@ -3971,6 +4093,7 @@ mod tests {
     /// once built, and its placing needs a library a unit test has none of, so it stops at its placing, its files kept.
     #[tokio::test]
     async fn a_clipping_master_is_placed_from_its_first_certain_folder() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-m";
         // The review of part 5, H1: three exact folders with free slots, fresh; Cratarr picks the first itself (Part 3).
         tide_tables(id, State::Found, None, &["peer-a", "peer-b", "peer-c"]);
@@ -4010,6 +4133,7 @@ mod tests {
     /// X4 (D17): a request whose record was retired follows the record its placed album joined or made; one on a live record stays.
     #[test]
     fn a_request_on_a_retired_record_follows_its_placed_album() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let cat = crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/incoming")]).unwrap();
         let folder = cat.folders().iter().next().map(|(id, _)| id).unwrap();
         let gone = cat.record_for_tests("Two Rooms", 2);
@@ -4058,6 +4182,7 @@ mod tests {
     /// before the rename.
     #[tokio::test]
     async fn a_placing_cut_after_its_rename_is_taken_as_placed() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y10-cut", "b-y10-cut");
         listed(id, State::Checking, Some(batch));
         let d = fetched_to("y10-cut", batch);
@@ -4099,6 +4224,7 @@ mod tests {
     /// fetch handed back to be cancelled.
     #[test]
     fn an_item_taken_off_after_its_placing_is_noted_is_judged_once_placed() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None)], &[of(101), of(102)], &[]);
         for (i, batch) in k.items.iter_mut().zip(["b-v4-1", "b-v4-2"]) {
@@ -4174,6 +4300,7 @@ mod tests {
     /// says Soulseek can't place albums, with why.
     #[tokio::test]
     async fn three_failed_placings_hold_the_record_a_day() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y12-unplaced", "b-y12-unplaced");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("y12-unplaced", batch);
@@ -4205,6 +4332,7 @@ mod tests {
     /// Y12: a placing that comes through ends a row of failed ones (here one a stop cut after its rename, taken as placed).
     #[tokio::test]
     async fn a_placing_that_comes_through_ends_the_row_of_failed_placings() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y12-reset", "b-y12-reset");
         listed(id, State::Checking, Some(batch));
         let d = fetched_to("y12-reset", batch);
@@ -4221,6 +4349,7 @@ mod tests {
     /// X4: too little free space for a folder's files holds the record before anything is fetched, and blames no user.
     #[tokio::test]
     async fn too_little_free_space_holds_the_record_and_blames_no_user() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-room";
         listed(id, State::Approved, None);
         with_item(id, |i| i.folders.iter_mut().flat_map(|f| f.files.iter_mut()).for_each(|o| o.size = i64::MAX / 4));
@@ -4237,6 +4366,7 @@ mod tests {
     /// removed, and the same folder fetched again later.
     #[tokio::test]
     async fn slskd_unable_to_store_a_file_blames_no_user() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-full", "b-full");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("full", batch);
@@ -4268,6 +4398,7 @@ mod tests {
     /// carries (the uploader's own disk's), and the next folder is tried.
     #[tokio::test]
     async fn a_remote_refusal_with_disk_words_fails_the_user() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         assert!(local_failure(&ended("Completed, Errored", "System.IO.IOException: No space left on device")));
         assert!(local_failure(&ended("Completed, Errored", "Access to the path '/downloads/cratarr/b1/01 One.flac' is denied.")));
         assert!(local_failure(&ended("Completed, Errored", "System.UnauthorizedAccessException: Access to the path '/downloads/cratarr' is denied.")));
@@ -4291,6 +4422,7 @@ mod tests {
     /// disk read-only, access denied, and slskd's own folder gone (U1).
     #[tokio::test]
     async fn a_name_too_long_fails_the_user_not_the_disk() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let too_long = "System.IO.PathTooLongException: The path '/downloads/cratarr/b1/01 One.flac' is too long, or a component of the specified path is too long.";
         assert!(!local_failure(&ended("Completed, Errored", too_long)));
         assert!(!local_failure(&ended("Completed, Errored", "The path '/downloads/cratarr/b1/01 One.flac' is too long, or a component of the specified path is too long.")));
@@ -4313,6 +4445,7 @@ mod tests {
     /// the record a day with Health's line. A peer's names cannot make part of slskd's own path missing.
     #[tokio::test]
     async fn a_missing_slskd_folder_blames_no_user() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let gone = "System.IO.DirectoryNotFoundException: Could not find a part of the path '/downloads/cratarr/b1'.";
         assert!(local_failure(&ended("Completed, Errored", gone)));
         assert!(local_failure(&ended("Completed, Errored", "Could not find a part of the path '/downloads/cratarr/b1'.")));
@@ -4349,6 +4482,7 @@ mod tests {
     /// store files, with why; no user is failed.
     #[tokio::test]
     async fn three_local_failures_hold_the_record_a_day() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y9-full", "b-y9-full");
         listed(id, State::Fetching, Some(batch));
         let d = data_folder("y9-full");
@@ -4377,6 +4511,7 @@ mod tests {
     /// Y9: a fetch that comes through ends a row of failures on Cratarr's side: the next one counts from one, and holds a while only.
     #[tokio::test]
     async fn a_fetch_that_comes_through_ends_the_row_of_local_failures() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y9-reset", "b-y9-reset");
         listed(id, State::Fetching, Some(batch));
         with_item(id, |i| i.local_failures = 2);
@@ -4394,6 +4529,7 @@ mod tests {
     /// X4: a user who fails partway leaves nothing behind in slskd's folder.
     #[tokio::test]
     async fn a_failed_user_leaves_no_batch_folder_behind() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-partway", "b-partway");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("partway", batch);
@@ -4412,7 +4548,7 @@ mod tests {
         let d = data_folder("nowhere");
         let f = Folder { user: "a".into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: vec![file(r"d\01 One.flac", 100)], unchecked: None };
         let release = vec![super::super::track_fetch::track_for(1, 1, "One", "Air", None, "r")];
-        let held = check(&d.join("no-such-batch"), &f, &release, &never_gated).await.unwrap_err();
+        let held = check(&d.join("no-such-batch"), &f, &release, &never_gated).await.unwrap_err().to_string();
         assert!(held.starts_with("Its files are not in slskd's folder"), "{held}");
         std::fs::remove_dir_all(&d).ok();
     }
@@ -4421,6 +4557,7 @@ mod tests {
     /// again); the record is placed again from them later.
     #[tokio::test]
     async fn a_failed_placing_keeps_its_checked_files_and_lets_its_batch_go() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-unplaced", "b-unplaced");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("unplaced", batch);
@@ -4442,6 +4579,7 @@ mod tests {
     /// its queue 0.17's, copies nothing over that copy.
     #[test]
     fn the_016_queue_is_kept_aside_once() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("keep-016");
         let p = d.join("soulseek.json");
         let old = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
@@ -4457,6 +4595,7 @@ mod tests {
     /// R24 (N4): a queue that cannot be read is set aside whole and a new one begun, never emptied in its place.
     #[test]
     fn an_unreadable_queue_is_set_aside_not_emptied() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("unreadable");
         let p = d.join("soulseek.json");
         std::fs::write(&p, b"{\"next\": 3, \"items\": [ not json").unwrap();
@@ -4472,6 +4611,7 @@ mod tests {
     /// placed for its record as the list holds it once the fetch is done.
     #[test]
     fn an_old_item_fetched_first_at_start_is_placed_for_its_record() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"fetching","batch":"b-1"}]}"#;
         let mut k: Kept = serde_json::from_str(raw).unwrap();
         let at_start = k.items[0].record.clone();
@@ -4508,6 +4648,7 @@ mod tests {
     /// X3: a folder holding more files than the list is a fallback after folders of the list's own count, saying what it takes.
     #[tokio::test]
     async fn a_fuller_folder_is_a_fallback_after_exact_ones() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         waiting_with("ss-x3-fuller", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
         let fuller = answer("big", true, vec![file(r"z\01 One.flac", 100), file(r"z\02 Two.flac", 200), file(r"z\03 Three.flac", 300)]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
@@ -4524,6 +4665,7 @@ mod tests {
     /// none, it goes with it, one being fetched too, handed back to be cancelled (Y2).
     #[test]
     fn a_ticked_item_goes_with_its_request_or_to_the_other() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(101), of(103)], &[]);
         assert_eq!(k.items.len(), 2, "one item a record");
@@ -4541,6 +4683,7 @@ mod tests {
     /// X2: a record taken off the list stays off, whichever request of it there is.
     #[test]
     fn out_of_the_list_is_kept_by_record() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
         let i = k.items.remove(0);
@@ -4554,6 +4697,7 @@ mod tests {
     /// X1: Soulseek's first search is five minutes after the request was handed to Lidarr, which goes first.
     #[test]
     fn soulseek_waits_five_minutes_for_lidarr() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let r = crate::userdata::Request { decided_at: Some(1_000), fetched: Some("Lidarr added it and is looking for it".into()), ..asked(1, None) };
         assert_eq!(first_search(&r, None, true), 1_000 + LIDARR_FIRST);
         let mut k = Kept::default();
@@ -4574,6 +4718,7 @@ mod tests {
     /// does one whose release is to come.
     #[test]
     fn a_failed_grab_hands_over_to_soulseek() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(102), of(103)], &[5_000, 5_000, 90_000]);
         let groups: HashMap<i64, String> = [(1, "g1".to_string()), (2, "g2".to_string()), (3, "g3".to_string())].into();
@@ -4586,6 +4731,7 @@ mod tests {
     /// (handed back to be cancelled in slskd); one placed is that arrival, and stays (Y2).
     #[test]
     fn the_first_arrival_cancels_soulseeks_fetch() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None)], &[of(101), of(102)], &[]);
         (k.items[0].state, k.items[0].batch) = (State::Fetching, Some("b1".into()));
@@ -4599,6 +4745,7 @@ mod tests {
     /// is placed (that arrival itself, Y2); one being fetched or checked goes too, its fetch cancelled (X1).
     #[test]
     fn soulseek_takes_no_record_already_had() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         let both = [asked(1, None), asked(2, None)];
         take_requests(&mut k, &both, &[had(101), of(102)], &[]);
@@ -4615,6 +4762,7 @@ mod tests {
     /// the placed ones.
     #[test]
     fn clearing_placed_does_not_search_them_again() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
         k.items[0].state = State::Placed;
@@ -4643,6 +4791,7 @@ mod tests {
     /// in slskd and its batch folder removed. Only a placed one is that arrival: nothing is seen before its placing (X4).
     #[tokio::test]
     async fn a_checked_item_goes_when_the_other_fetchers_copy_arrives() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let batch = "b-y2-held";
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
@@ -4673,6 +4822,7 @@ mod tests {
     /// nothing, and its files go with it.
     #[tokio::test]
     async fn an_item_whose_placing_failed_is_never_placed_once_its_record_arrived() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y2-unplaced", "b-y2-unplaced");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("y2-unplaced", batch);
@@ -4701,6 +4851,7 @@ mod tests {
     /// is never placed for nobody.
     #[test]
     fn a_held_item_of_a_cancelled_request_is_not_placed() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(102), of(103)], &[]);
         (k.items[0].state, k.items[0].batch) = (State::Checking, Some("b-y2-left".into()));
@@ -4717,6 +4868,7 @@ mod tests {
     /// another copy alone: no pass has read it yet, and once one has, its record is had.
     #[test]
     fn a_placed_copy_partly_there_lets_soulseek_look_again() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RecordOf};
         let partly = |n: i64, has: u32, list: u32| Some(RecordOf { holder: Some(n), holding: Holding::Partly { has, of: list }, ..of(n).unwrap() });
         let placed = |k: &mut Kept| {
@@ -4743,6 +4895,7 @@ mod tests {
     /// way: it goes, and the record's next request is searched again, reading Soulseek's search, never "fetching 100%".
     #[test]
     fn a_deleted_soulseek_copy_lets_the_next_request_be_searched() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RecordOf, RequestState, request_state};
         let arrived = Some(RecordOf { holder: Some(101), holding: Holding::Arrived, ..of(101).unwrap() });
         let mut k = Kept::default();
@@ -4765,6 +4918,7 @@ mod tests {
     /// copy, its last one deleted from Incoming (U7), never does, and that request is searched for.
     #[test]
     fn a_placed_item_is_never_handed_to_a_request_whose_record_it_no_longer_holds() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let placed = |read: bool| {
             let mut k = Kept::default();
             take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
@@ -4784,6 +4938,7 @@ mod tests {
     /// that went to an Incoming library's trash lets it.
     #[test]
     fn a_kept_album_deleted_from_music_is_not_searched_again() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
         (k.items[0].state, k.items[0].folders, k.items[0].chosen) = (State::Placed, vec![two_tracks("a")], Some(0));
@@ -4825,6 +4980,7 @@ mod tests {
     /// file went before its other file was kept into Music and deleted there, in Music's trash still.
     #[test]
     fn a_placed_copy_removed_from_incoming_by_hand_is_looked_for_again() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RequestState, request_state};
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
         let records: Vec<i64> = ["By Hand", "Kept Then Trashed", "Kept Then Removed", "Kept After", "Fetched Again"].iter().map(|n| cat.record_for_tests(n, 2)).collect();
@@ -4894,6 +5050,7 @@ mod tests {
     /// shape stays: its own files gone, and new rows on the other record's tracks in the folder, once the catalogue retires them.
     #[test]
     fn a_placed_copy_read_as_another_record_frees_its_item() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RequestState, request_state};
         use crate::catalogue::{AlbumCopy, identity};
         for (case, kept) in [("retagged in Incoming", false), ("kept into Music, retagged there", true)] {
@@ -4997,6 +5154,7 @@ mod tests {
     /// state, batch, folder, tick and names kept, no second item made for it, and written back with its record.
     #[test]
     fn an_old_item_in_flight_keeps_its_record() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let raw = r#"{"next":3,"dropped":[],"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg-moon","release":"rel-moon","request":7},
             "state":"fetching","tracks":[{"disc":1,"position":1,"title":"La Femme d'argent","length_ms":431000,"recording":"rec-1"}],
             "folders":[{"user":"whole","dir":"Music\\Air\\Moon Safari","format":"flac","lossless":true,"free_slot":true,"queue":0,"speed":100,"extra":0,"files":[]}],
@@ -5028,6 +5186,7 @@ mod tests {
     /// request reads now, one item still.
     #[test]
     fn a_merged_records_soulseek_item_names_the_record_it_went_into() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
         let (older, newer) = (cat.record_for_tests("Stone Sky", 0), cat.record_for_tests("Stone Sky", 0));
         let asked = crate::userdata::Request {
@@ -5066,6 +5225,7 @@ mod tests {
     /// alice's is taken off, her request waiting on his: never two searching, never one under way taken off.
     #[test]
     fn a_merge_by_a_master_leaves_one_item_searching() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         for (case, bobs_fetching) in [("none ticked", false), ("bob's fetching", true)] {
             let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
             let (older, newer) = (cat.record_for_tests("Two Rooms", 0), cat.record_for_tests("Two Rooms", 0));
@@ -5203,6 +5363,7 @@ mod tests {
     /// its share, nothing taken off. The same for "Kite LP": an album joins, an EP does not.
     #[test]
     fn the_fold_joins_a_wants_record_to_a_had_one_only_where_the_type_agrees() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         for (case, title, tracks, typed, joins) in [
             ("EP, a had EP", "Kite EP", 4, None, true),
             ("EP, a had album set to EP by hand", "Kite EP", 10, Some("ep"), true),
@@ -5326,6 +5487,7 @@ mod tests {
     /// flight keeps what it has.
     #[test]
     fn search_now_reads_the_counting_list_again() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let item = |state: State| Item {
             id: "ss-1".into(),
             record: record("Air", "Moon Safari", Some(1998)),
@@ -5398,6 +5560,7 @@ mod tests {
 
     #[test]
     fn a_kept_item_reads_back_and_a_time_that_cannot_be_read_counts_as_due() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
         let k: Kept = serde_json::from_str(raw).unwrap();
         assert_eq!((k.items[0].due, k.items[0].misses, k.items[0].record.request), (0, 0, 7), "no time kept: due");
@@ -5409,6 +5572,7 @@ mod tests {
     /// searched again, and never reads wanted.
     #[tokio::test]
     async fn a_delivered_album_deleted_from_a_kept_library_is_not_searched_again() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use crate::app::requests::tests::{Copies, Strict, with_accounts};
         use crate::app::requests::{DELIVERED, Hands, RequestState, round_with};
         use crate::app::room::tests::{MUSIC, Roomy, room_shape};
@@ -5543,6 +5707,7 @@ mod tests {
     /// taken off the list), its reads beside them, and the six downloads' transfers run together once started.
     #[tokio::test]
     async fn slskds_operations_go_one_at_a_time_whoever_asks() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let slskd = Scripted::new().slow(200).hold_all(20.0);
         let client = slskd.client();
         let d = data_folder("sk21");
@@ -5591,6 +5756,7 @@ mod tests {
     /// so once a minute.
     #[tokio::test]
     async fn a_busy_slskd_is_asked_again_shortly_and_blames_no_one() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk22");
         let seen: Arc<Mutex<Vec<Item>>> = Arc::default();
         let kept_seen = seen.clone();
@@ -5662,6 +5828,7 @@ mod tests {
     /// batches of one item, never a hold, nobody failed.
     #[tokio::test]
     async fn a_lost_answer_is_read_back_by_its_batch_and_never_fetched_twice() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk23");
         let noted: Arc<Mutex<Vec<(String, Option<String>)>>> = Arc::default();
         let kept_noted = noted.clone();
@@ -5852,6 +6019,7 @@ mod tests {
     /// ends; each item downloading its own batch, its percent its own batch's alone.
     #[tokio::test]
     async fn picked_records_download_at_once() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let slskd = Scripted::new().slow(50).hold_all(10.0);
         let d = data_folder("sk11");
         let ids: Vec<String> = (1..=25).map(|n| format!("ss-sk11-{n:02}")).collect();
@@ -5880,6 +6048,7 @@ mod tests {
     /// done downloading (gone to its check). Variants: ss-1's failure, or its request leaving, lets ss-2 go at once.
     #[tokio::test]
     async fn no_two_records_from_one_user_at_once() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk12");
         let slskd = Scripted::new().hold_all(5.0).offline("peer-c").writes_to(&d, None);
         picked("ss-sk12-1", &["peer-a"]);
@@ -5953,6 +6122,7 @@ mod tests {
     /// go on meanwhile.
     #[tokio::test]
     async fn checks_go_one_at_a_time_while_downloads_run() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk13");
         let places = places_in(&d);
         let slskd = Scripted::new().hold_all(20.0).writes_to(&d, None);
@@ -6001,6 +6171,7 @@ mod tests {
     /// starts at the next look.
     #[tokio::test]
     async fn downloads_under_way_count_against_the_free_space() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         const GB: u64 = 1 << 30;
         let d = data_folder("sk14");
         let slskd = Scripted::new().hold_all(1.0).writes_to(&d, None);
@@ -6040,6 +6211,7 @@ mod tests {
     /// administrator's tick goes; space again, all of them go at once, no cap.
     #[tokio::test]
     async fn below_the_floor_no_users_download_starts() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk14f");
         let slskd = Scripted::new().hold_all(1.0);
         let alices = ["ss-sk14f-a1", "ss-sk14f-a2", "ss-sk14f-a3"];
@@ -6065,6 +6237,7 @@ mod tests {
     /// record to its next folder at once; the user's turn free, so their other record goes by its own try; another download untouched.
     #[tokio::test]
     async fn a_user_gone_offline_fails_that_record_alone() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk15");
         let slskd = Scripted::new().hold_all(5.0).writes_to(&d, None);
         picked("ss-sk15-1", &["peer-a", "peer-b"]);
@@ -6193,6 +6366,7 @@ mod tests {
     /// peer-a. (d) Forgotten a second time in a row: peer-a failed for ss-1 as ever, its next folder fetched.
     #[tokio::test]
     async fn a_slskd_restart_blames_no_user_and_fetches_each_again_once() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk17");
         let slskd = Scripted::new().hold_all(30.0);
         picked("ss-sk17-1", &["peer-a", "peer-d"]);
@@ -6240,6 +6414,7 @@ mod tests {
     /// new one would be: below the floor a user's waits (AL03.2), short of room it holds (X4); one slskd has is followed as ever.
     #[tokio::test]
     async fn a_kept_batch_sent_again_waits_below_the_floor_and_for_room() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("m1");
         let slskd = Scripted::new().hold_all(5.0);
         let client = slskd.client();
@@ -6269,6 +6444,7 @@ mod tests {
     /// back yet): its batch is let go once slskd answers, never left running unfollowed.
     #[tokio::test]
     async fn a_batch_in_flight_when_its_item_leaves_is_let_go() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk16-flight");
         let arrived = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let seen = arrived.clone();
@@ -6295,6 +6471,7 @@ mod tests {
     /// read again, never a miss, never "429" in a why.
     #[tokio::test]
     async fn a_busy_read_of_a_search_is_no_miss() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let found = serde_json::json!([{ "username": "peer-s", "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100, "files": [
             { "filename": r"x\Air\Moon Safari\01 One.flac", "size": 1000, "length": 100 }, { "filename": r"x\Air\Moon Safari\02 Two.flac", "size": 1000, "length": 200 } ] }]);
         // Every rung of the ladder meets them (three rungs here).
@@ -6324,6 +6501,7 @@ mod tests {
     /// files; the item fetching from folder 0, marked Cratarr's pick, no tick asked for; then checked and placed in Incoming.
     #[tokio::test]
     async fn a_certain_record_starts_by_itself() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk31");
         let slskd = Scripted::new().hold_all(5.0).writes_to(&d, None);
         found("ss-sk31", &[("peer-a", true), ("peer-b", true)], now(), 3101);
@@ -6349,6 +6527,7 @@ mod tests {
     /// tickable; root's tick of (a) is fetched as today, not Cratarr's pick.
     #[tokio::test]
     async fn uncertain_records_wait_for_a_pick() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk32");
         let slskd = Scripted::new().hold_all(5.0);
         let t = now();
@@ -6380,6 +6559,7 @@ mod tests {
     /// 181 s, and two such files: each paired once.
     #[test]
     fn certain_is_todays_judging() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let t0 = 1_800_000_000;
         let judged = |tracks: Vec<Track>, folders: Vec<Folder>| Item { tracks, folders, found_at: t0, state: State::Found, ..found_twice("ss-sk33") };
         // (d)
@@ -6421,6 +6601,7 @@ mod tests {
     /// one with no free slot waits for its pick, not searched again by this rule.
     #[tokio::test]
     async fn a_stale_free_slot_is_looked_at_again_before_a_start() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk34");
         let slskd = Scripted::new().hold_all(5.0);
         let t0 = now();
@@ -6444,6 +6625,7 @@ mod tests {
     /// each saying "Waits for space"; root's ticks meanwhile go as today; space again, every one waiting starts.
     #[tokio::test]
     async fn room_and_the_floor_hold_automatic_starts() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{WAITS_FOR_ROOM, WAITS_FOR_SPACE};
         let d = data_folder("sk35");
         let slskd = Scripted::new().hold_all(5.0);
@@ -6488,6 +6670,7 @@ mod tests {
     /// a record had or a request no longer open, read at the start itself; once neither, it starts.
     #[tokio::test]
     async fn automatic_starts_keep_lidarrs_five_minutes() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let t0 = 1_800_000_000;
         let want = crate::userdata::Request { decided_at: Some(t0), fetched: Some("Lidarr added it and is looking for it".into()), ..asked(1, None) };
         assert_eq!([first_search(&want, None, true), first_search(&want, Some(t0 + 7 * 86_400), true)], [t0 + 300, t0 + 7 * 86_400]);
@@ -6518,6 +6701,7 @@ mod tests {
     /// for a pick, no longer Cratarr's. An administrator's tick goes to its next folder as today.
     #[test]
     fn after_a_failure_cratarrs_pick_goes_on_only_where_certain() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let t = now();
         let picked_as = |id: &str, users: &[(&str, bool)], auto: bool| {
             found(id, users, t, 3700);
@@ -6540,6 +6724,7 @@ mod tests {
     /// nothing goes anywhere but the Incoming library given.
     #[tokio::test]
     async fn automatic_starts_keep_march_2026s_lesson() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk38");
         let slskd = Scripted::new().hold_all(5.0).writes_to(&d, None);
         found("ss-sk38", &[("peer-a", true)], now(), 3801);
@@ -6565,6 +6750,7 @@ mod tests {
     /// POST. (d) is `two_ticks_at_once_the_first_wins_and_a_gone_source_is_refused`.
     #[tokio::test]
     async fn cratarrs_pick_meets_a_persons_once() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk39");
         let slskd = Scripted::new().hold_all(5.0);
         let (client, look, t) = (slskd.client(), Look::roomy(), now());
@@ -6610,6 +6796,7 @@ mod tests {
     /// floor (anyone's) and its asker's room: back to found, saying why, no longer Cratarr's pick.
     #[tokio::test]
     async fn an_automatic_pick_not_yet_sent_waits_for_the_floor_and_room() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{WAITS_FOR_ROOM, WAITS_FOR_SPACE};
         let d = data_folder("g9");
         let slskd = Scripted::new().hold_all(5.0);
@@ -6635,6 +6822,7 @@ mod tests {
     /// for it a while, never Stuck a day for want of it; nor is it picked by Cratarr.
     #[tokio::test]
     async fn an_item_with_no_record_yet_is_neither_stuck_by_a_search_nor_picked() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let it = Item { state: State::Waiting, due: 0, record: Record { record: 0, ..found_twice("ss-r0").record }, ..found_twice("ss-r0") };
         let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
         kept(|k| k.items.push(it.clone()));
@@ -6650,6 +6838,7 @@ mod tests {
     /// and starts no pick of Cratarr's not yet sent: its own picks fail closed. A person's tick still goes.
     #[tokio::test]
     async fn a_look_that_could_not_read_the_server_picks_nothing() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("h2");
         let slskd = Scripted::new().hold_all(5.0);
         let client = slskd.client();
@@ -6713,6 +6902,7 @@ mod tests {
     /// kept, as only the library a unit test has not set up stops it); nobody failed, nothing set aside, no notes.
     #[tokio::test]
     async fn a_certain_folders_files_pass_every_check_and_acoustid_is_asked_of_each() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-g1", "b-g1");
         case_item(id, batch, &["peer-a"]);
         let d = fetched_from(crate::fixtures::gate::CLEAN, batch);
@@ -6728,6 +6918,7 @@ mod tests {
     /// the workers its user is failed and the item goes back to its search.
     #[tokio::test]
     async fn a_transcode_is_refused_before_acoustid_is_asked() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-g2", "b-g2");
         case_item(id, batch, &["peer-a"]);
         let d = fetched_from(crate::fixtures::gate::WALLED, batch);
@@ -6747,6 +6938,7 @@ mod tests {
     /// passed, nobody failed, nothing set aside; the item keeps its notes, by file.
     #[tokio::test]
     async fn notes_pass_every_check_and_acoustid_is_still_asked() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-g3", "b-g3");
         case_item(id, batch, &["peer-a"]);
         let d = fetched_from(crate::fixtures::gate::NOTES, batch);
@@ -6778,6 +6970,7 @@ mod tests {
     /// folder's.
     #[tokio::test]
     async fn notes_go_when_a_new_batch_starts_or_the_record_is_searched_again() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("l7");
         let slskd = Scripted::new().hold_all(5.0);
         let earlier = || [("02 Neap.flac".to_string(), "Clipped at 0:01".to_string())].into_iter().collect::<BTreeMap<_, _>>();
@@ -6797,6 +6990,7 @@ mod tests {
     /// picks it: picked once, one batch.
     #[tokio::test]
     async fn two_picks_of_one_user_at_once_start_one_download() {
+        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk18");
         let slskd = Scripted::new().hold_all(5.0);
         let (client, look, t) = (slskd.client(), Look::roomy(), now());
@@ -6831,6 +7025,7 @@ mod tests {
     /// fetch keeps its batch and its tick. Never a fetch from another peer than the one ticked.
     #[test]
     fn two_ticks_at_once_the_first_wins_and_a_gone_source_is_refused() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
         let pick = |id: &str, folder: usize, named: Option<(&str, &str)>| Pick { id: id.into(), folder: Some(folder), user: named.map(|n| n.0.to_string()), folder_name: named.map(|n| n.1.to_string()) };
         // (a)
         for named in [false, true] {
@@ -6858,5 +7053,526 @@ mod tests {
         let was = i.clone();
         search_again(&mut i);
         assert_eq!(i, was, "nothing changes: its fetch goes on");
+    }
+
+    // ---- TN: Soulseek's searches, fetches and checks read the class (TN.5, TN.6, TN.12, TN.13): a pause holds to its source's
+    // deadline and uses no attempt, through the bulk queue's slskd and AcoustID fakes (`track_intake::tests`) on tokio's paused clock.
+    // slskd has no pause of its own in 0.17 (round 1.3's lane: a 429 is asked again there, SK2.6): where TN's tests held slskd by its
+    // 429, slskd is away (503) for that while instead (`FakeSlskd::away_until`), and its records hold as away holds them.
+
+    use std::collections::VecDeque;
+
+    use crate::app::track_intake::tests as bulk;
+    use crate::app::turn::{Paused, Turn};
+    use crate::catalogue::records::Ref;
+    use bulk::{Clock, FakeAcoustid, FakeSlskd, T0};
+
+    /// A folder of the test's own with its list in it (`items`, its `soulseek.json`) and its Soulseek library, on this thread.
+    fn own_list(name: &str, items: Vec<Item>) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-own-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let k = Kept { next: items.len() as u64, items, ..Kept::default() };
+        std::fs::write(d.join("soulseek.json"), serde_json::to_vec(&k).unwrap()).unwrap();
+        OWN.with(|o| *o.borrow_mut() = Some((d.join("soulseek.json"), None)));
+        OWN_LIBRARY.with(|l| *l.borrow_mut() = Some(d.join("incoming")));
+        d
+    }
+
+    /// The test done: its list and its library kept nowhere, its folder gone.
+    fn own_done(d: &Path) {
+        OWN.with(|o| *o.borrow_mut() = None);
+        OWN_LIBRARY.with(|l| *l.borrow_mut() = None);
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    /// `soulseek.json` as written, its items by id.
+    fn on_disk(d: &Path) -> HashMap<String, Item> {
+        let k: Kept = serde_json::from_slice(&std::fs::read(d.join("soulseek.json")).unwrap()).unwrap();
+        k.items.into_iter().map(|i| (i.id.clone(), i)).collect()
+    }
+
+    /// "Tide Tables"' list as a record's, each track ten seconds long, its recording as AcoustID's fake knows it.
+    fn tide_list() -> Vec<Track> {
+        [(1, "Slack Water", "rec-slack"), (2, "Neap", "rec-neap"), (3, "Spring Tide", "rec-spring")]
+            .into_iter()
+            .map(|(n, title, rec)| Track { disc: 1, position: n, title: title.into(), length_ms: Some(10_000), recording: Some(rec.into()) })
+            .collect()
+    }
+
+    /// `user`'s folder of Glass Harbour's `album`, holding the list's three files.
+    fn folder_of(user: &str, album: &str) -> Folder {
+        let file = |t: &Track| Offered {
+            filename: format!("Glass Harbour\\{album}\\0{} {}.flac", t.position, t.title),
+            size: 1000,
+            extension: Some("flac".into()),
+            bit_rate: None,
+            bit_depth: None,
+            sample_rate: None,
+            length: Some(10),
+            is_locked: false,
+        };
+        let files = tide_list().iter().map(file).collect();
+        Folder { user: user.into(), dir: format!("Glass Harbour\\{album}"), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 100, extra: 0, files, unchecked: None }
+    }
+
+    /// slskd's answers to a search for `album`: `user`'s folder of it.
+    fn answers_of(user: &str, album: &str) -> serde_json::Value {
+        serde_json::json!([{ "username": user, "files": folder_of(user, album).files, "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100 }])
+    }
+
+    /// Glass Harbour's `album` on the list as `id`, at `state`, its list read; its record and its request both `record`.
+    fn tn_item(id: &str, record: i64, album: &str, state: State) -> Item {
+        Item {
+            id: id.into(),
+            record: Record { record, artist: "Glass Harbour".into(), album: album.into(), year: None, request: record },
+            state,
+            tracks: tide_list(),
+            untimed: Vec::new(),
+            folders: Vec::new(),
+            chosen: None,
+            failed: Vec::new(),
+            misses: 0,
+            due: 0,
+            why: None,
+            batch: None,
+            percent: 0.0,
+            placed: None,
+            set_aside: Vec::new(),
+            checked: None,
+            local_failures: 0,
+            placing: None,
+            placed_at: 0,
+            place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
+            notes: BTreeMap::new(),
+        }
+    }
+
+    /// `i` ticked: its folders `users`' (the first chosen), its batch `batch`.
+    fn ticked(i: Item, users: &[&str], batch: Option<&str>) -> Item {
+        let folders = users.iter().map(|u| folder_of(u, &i.record.album)).collect();
+        Item { folders, chosen: Some(0), batch: batch.map(Into::into), ..i }
+    }
+
+    /// `album`'s three files as slskd lands a batch of them (`<slskd>/cratarr/<batch>`), each a copy of `tone`.
+    fn landed(slskd_dir: &Path, batch: &str, album: &str, tone: &Path) {
+        let at = slskd_dir.join(crate::slskd::FOLDER).join(batch);
+        std::fs::create_dir_all(&at).unwrap();
+        for f in folder_of("peer-a", album).files {
+            std::fs::copy(tone, at.join(crate::slskd::base_name(&f.filename))).unwrap();
+        }
+    }
+
+    /// slskd as Soulseek's rounds have it (`track_fetch::slskd_on`): `slskd` while it is switched on, else why not.
+    async fn ready(slskd: &Slskd) -> Result<Slskd> {
+        super::super::track_fetch::slskd_on()?;
+        Ok(slskd.clone())
+    }
+
+    /// The next item the downloads' or the checks' worker takes up now (`next_of`): one held waits for its time.
+    fn next_fetch() -> Option<String> {
+        let t = now();
+        kept(|k| next_of(&k.items, t))
+    }
+
+    /// [`fetch_from`] as the downloads' worker takes it, slskd and its completed-downloads folder as `ready` gives them: not ready
+    /// (switched off, not set up), the item held as the worker holds it (`not_ready`).
+    async fn fetch_in<G, Fut>(id: &str, ready: impl std::future::Future<Output = Result<(Slskd, PathBuf)>>, gate: G)
+    where
+        G: Fn(PathBuf, ReleaseTrack) -> Fut,
+        Fut: std::future::Future<Output = Result<f32>>,
+    {
+        match ready.await {
+            Ok((slskd, folder)) => fetch_from(id, &slskd, &folder, gate).await,
+            Err(e) => not_ready(&|i: &Item| i.id == id, &e),
+        }
+    }
+
+    /// The gate as the server's (`gate_track`, background reading's switch with it), AcoustID asked through `heard` in `turn`.
+    fn gate_through(turn: Arc<Turn>, heard: Arc<FakeAcoustid>) -> impl Fn(PathBuf, ReleaseTrack) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f32>>>> {
+        move |file, track| {
+            let (turn, heard) = (turn.clone(), heard.clone());
+            Box::pin(async move {
+                let lookup = |print: crate::acoustid::Print| async move { crate::acoustid::lookup_in(&turn, |form| heard.answer(form), "key", &print).await };
+                super::super::track_fetch::gate_track_with(&file, &track, lookup).await
+            })
+        }
+    }
+
+    /// A list read standing in for MusicBrainz's (`read_reference`): "Tide Tables"' list.
+    fn listed_by_musicbrainz(_: Ref) -> std::future::Ready<Result<Option<crate::app::references::Read>>> {
+        std::future::ready(Ok(Some((tide_list(), None, Default::default()))))
+    }
+
+    /// TN.5's world at t0, slskd at `url`: away until t0+120 (503 to all it is asked before then: slskd has no pause of its own in 0.17);
+    /// ss-1 waiting with its list read (a miss before), due; ss-2 waiting with no list yet, its MusicBrainz release to read, due; ss-7 at
+    /// its check with its files in slskd's folder, due, AcoustID to ask; the bulk queue's ti-1 queued.
+    struct Tn5 {
+        d: PathBuf,
+        cat: Arc<crate::catalogue::Catalogue>,
+        neap: i64,
+        fake: Arc<FakeSlskd>,
+        slskd: Slskd,
+        heard: Arc<FakeAcoustid>,
+        acoustid: Arc<Turn>,
+        intake: bulk::Through,
+    }
+
+    async fn tn5(name: &str, url: &str) -> Tn5 {
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+        let neap = cat.record_for_tests("Neap Season", 0);
+        assert!(cat.set_reference(&crate::serve::ids::record(neap), &Ref::new("musicbrainz", "release", "r-neap"), "link").unwrap());
+        let items = vec![
+            Item { misses: 1, ..tn_item("ss-1", 9101, "Tide Tables", State::Waiting) },
+            Item { tracks: Vec::new(), ..tn_item("ss-2", neap, "Neap Season", State::Waiting) },
+            Item { percent: 100.0, ..ticked(tn_item("ss-7", 9107, "Harbour Lights", State::Checking), &["peer-a"], Some("b7")) },
+        ];
+        let d = own_list(name, items);
+        let tone = bulk::tone(&d);
+        landed(&d.join("slskd"), "b7", "Harbour Lights", &tone);
+        let fake = Arc::new(FakeSlskd {
+            away_until: T0 + 120,
+            found: HashMap::from([("Glass Harbour Tide Tables", answers_of("peer-a", "Tide Tables")), ("Glass Harbour Neap Season", answers_of("peer-b", "Neap Season"))]),
+            folder: d.join("slskd"),
+            file: tone,
+            ..Default::default()
+        });
+        let slskd = bulk::slskd_at(url, &fake);
+        let given = slskd.search("Glass Harbour").await.unwrap_err();
+        assert!(matches!(crate::app::turn::class(&given), Failure::Away(_)), "the given: slskd away, its 503: {given:#}");
+        let heard = Arc::new(FakeAcoustid::default());
+        let intake = bulk::Through::new(&d, slskd.clone(), &heard);
+        bulk::start_with(&d, vec![bulk::waiting("ti-1", &bulk::tide_tables()[0])]);
+        Tn5 { d, cat, neap, fake, slskd, heard, acoustid: Arc::new(Turn::new(crate::app::turn::ACOUSTID)), intake }
+    }
+
+    /// The searcher, the fetcher and the bulk worker taking their work at `now` as their loops do (`next_search`, `next_fetch`, the bulk
+    /// queue's next step), each until it has none: the items taken, in turn. Lists read through `read`.
+    async fn rounds_at<R, F>(w: &Tn5, read: &R, now: i64) -> Vec<String>
+    where
+        R: Fn(Ref) -> F,
+        F: std::future::Future<Output = Result<Option<crate::app::references::Read>>>,
+    {
+        let mut took = Vec::new();
+        for _ in 0..5 {
+            let Some(id) = next_search() else { break };
+            search_in(&id, &w.cat, read, ready(&w.slskd)).await;
+            took.push(id);
+        }
+        for _ in 0..5 {
+            let Some(id) = next_fetch() else { break };
+            fetch_from(&id, &w.slskd, &w.d.join("slskd"), gate_through(w.acoustid.clone(), w.heard.clone())).await;
+            took.push(id);
+        }
+        for _ in 0..5 {
+            let Some(id) = bulk::worked(&w.intake, now).await else { break };
+            took.push(id);
+        }
+        took
+    }
+
+    /// TN.5: while slskd is away (until t0+120) the other sources' work goes on at once: MusicBrainz is asked for ss-2's release and its
+    /// list kept (the item's and the catalogue's), AcoustID is asked for ss-7's three files, and ss-7 is placed. Never a loop asleep
+    /// while that work waits: all of it done long before slskd is back, by tokio's clock too, slskd asked once for each and no more.
+    #[tokio::test(start_paused = true)]
+    async fn another_source_goes_on_while_one_is_paused() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let (_pinned, _clock) = Clock::at_t0();
+        let w = tn5("goes-on", "http://192.168.1.20:5052").await;
+        let start = tokio::time::Instant::now();
+        let asked = Mutex::new(Vec::new());
+        let musicbrainz = |r: Ref| {
+            asked.lock().unwrap().push((r.source.clone(), r.value.clone(), tokio::time::Instant::now() - start));
+            listed_by_musicbrainz(r)
+        };
+        assert_eq!(rounds_at(&w, &musicbrainz, T0).await, ["ss-1", "ss-2", "ss-7", "ti-1"]);
+
+        // MusicBrainz asked for ss-2's release at once, its list kept.
+        let mb = asked.lock().unwrap().clone();
+        assert_eq!(mb.iter().map(|(s, v, _)| (s.as_str(), v.as_str())).collect::<Vec<_>>(), [("musicbrainz", "r-neap")]);
+        assert!(mb[0].2 < Duration::from_secs(1), "asked at once: {:?}", mb[0].2);
+        let held = on_disk(&w.d);
+        assert_eq!(held["ss-2"].tracks, tide_list(), "the item's list");
+        let kept_lists = w.cat.reference_tracks(w.neap).unwrap();
+        assert!(kept_lists.iter().any(|(s, l)| s == "musicbrainz" && l.len() == 3), "the catalogue's: {kept_lists:?}");
+        // AcoustID asked for ss-7's three files, and ss-7 placed in its library.
+        let acoustid = w.heard.asked.lock().unwrap().clone();
+        assert_eq!(acoustid.len(), 3, "{acoustid:?}");
+        assert!(acoustid.iter().all(|(at, when)| *at == T0 && *when - start < Duration::from_secs(5)), "{acoustid:?}");
+        let ss7 = &held["ss-7"];
+        assert_eq!((ss7.state, ss7.batch.as_deref(), ss7.failed.len()), (State::Placed, None, 0));
+        let placed = files_under(Path::new(ss7.placed.as_deref().expect("placed")));
+        assert_eq!(placed.iter().filter(|p| p.extension().is_some_and(|e| e == "flac")).count(), 3, "{placed:?}");
+        // No loop asleep: the rounds done long before slskd is back; ss-1 and ss-2 held a round as away holds a search, slskd asked once
+        // for each (the given, ss-1's and ss-2's searches, ss-7's transfers at its check, ti-1's search), each answered 503.
+        assert!(tokio::time::Instant::now() - start < Duration::from_secs(10), "{:?}", tokio::time::Instant::now() - start);
+        assert_eq!((held["ss-1"].due, held["ss-2"].due), (T0 + ROUND_AT_LEAST, T0 + ROUND_AT_LEAST));
+        assert_eq!(w.fake.asked.lock().unwrap().len(), 5, "slskd asked once for each, away");
+        assert!(w.fake.violations.lock().unwrap().is_empty(), "{:?}", w.fake.violations.lock().unwrap());
+        assert!(w.heard.violations.lock().unwrap().is_empty(), "{:?}", w.heard.violations.lock().unwrap());
+        bulk::done(&w.d);
+        own_done(&w.d);
+    }
+
+    /// The 0.17-shaped list (`soulseek.json`), one item in each state as production's store holds them (Placed, Found, Waiting,
+    /// Approved, Fetching, Checking, Stuck), with the users that failed them, folders set aside and failures in a row as such a store
+    /// has them.
+    fn soulseek_store() -> Vec<Item> {
+        let aside = |user: &str| SetAside { user: user.into(), path: format!("soulseek-set-aside/ss-5 {user}"), why: BTreeMap::from([("02 Neap.flac".to_string(), "2 frames would not decode".to_string())]) };
+        vec![
+            Item { placed: Some("Glass Harbour/Tide Tables".into()), ..ticked(tn_item("ss-1", 9201, "Tide Tables", State::Placed), &["peer-a"], None) },
+            Item { chosen: None, ..ticked(tn_item("ss-2", 9202, "Neap Season", State::Found), &["peer-a", "peer-b"], None) },
+            Item { misses: 2, failed: vec!["peer-c".into()], ..tn_item("ss-3", 9203, "Harbour Lights", State::Waiting) },
+            Item { failed: vec!["peer-d".into()], local_failures: 1, ..ticked(tn_item("ss-4", 9204, "Undertow", State::Approved), &["peer-a", "peer-c"], None) },
+            Item { percent: 40.0, set_aside: vec![aside("peer-e")], local_failures: 2, ..ticked(tn_item("ss-5", 9205, "Quiet Lanes", State::Fetching), &["peer-b"], Some("b5")) },
+            Item { percent: 100.0, place_failures: 1, ..ticked(tn_item("ss-6", 9206, "Two Rooms", State::Checking), &["peer-a"], Some("b6")) },
+            Item { tracks: Vec::new(), why: Some("No list to judge by".into()), due: T0 + 86_400, ..tn_item("ss-7", 9207, "Spring Tide", State::Stuck) },
+        ]
+    }
+
+    /// TN.6: slskd away until t0+300 (503 to ss-3's search, ss-4's batch and ss-5's reads: slskd has no pause of its own in 0.17), and
+    /// AcoustID's code 14 (Retry-After 120) at ss-6's check. In `soulseek.json` as written: ss-3 Waiting with its misses, due a round
+    /// on, saying slskd would not search; ss-4 Approved with its folder chosen and every folder, due t0+300; ss-5 Fetching with its
+    /// batch, due t0+300; ss-6 at its check with b6's files where they were, due t0+120; the users that failed each, its folders set aside
+    /// and its failures in a row as they were; the others untouched. Then ss-6 is gated at AcoustID's deadline, not before, and ss-5
+    /// followed again once slskd is back. Never a user failed, a folder set aside, a miss counted, an item Stuck or Waiting that was not,
+    /// a DELETE sent or b6's folder removed while slskd is away or AcoustID paused.
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limit_uses_no_attempt_and_fails_nothing() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let (_pinned, clock) = Clock::at_t0();
+        let d = own_list("rate-limit", soulseek_store());
+        let slskd_dir = d.join("slskd");
+        let tone = bulk::tone(&d);
+        landed(&slskd_dir, "b6", "Two Rooms", &tone);
+        let fake = Arc::new(FakeSlskd { away_until: T0 + 300, folder: slskd_dir.clone(), file: tone.clone(), ..Default::default() });
+        let slskd = bulk::slskd_at("http://192.168.1.20:5053", &fake);
+        let heard = Arc::new(FakeAcoustid { limits: Mutex::new(VecDeque::from([true])), said: Some(120), ..Default::default() });
+        let gate = gate_through(Arc::new(Turn::new(crate::app::turn::ACOUSTID)), heard.clone());
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+        let before = on_disk(&d);
+
+        // When: ss-3 searched, ss-4 fetched, ss-5 followed, ss-6 checked.
+        search_in("ss-3", &cat, never_read, ready(&slskd)).await;
+        for id in ["ss-4", "ss-5", "ss-6"] {
+            fetch_from(id, &slskd, &slskd_dir, &gate).await;
+        }
+
+        // Then, in soulseek.json as written.
+        let after = on_disk(&d);
+        let (ss3, ss4, ss5, ss6) = (&after["ss-3"], &after["ss-4"], &after["ss-5"], &after["ss-6"]);
+        assert_eq!((ss3.state, ss3.misses, ss3.due), (State::Waiting, 2, T0 + ROUND_AT_LEAST), "ss-3");
+        assert!(ss3.why.as_deref().is_some_and(|w| w.starts_with("slskd would not search: 503")), "{:?}", ss3.why);
+        assert_eq!((ss4.state, ss4.chosen, &ss4.folders, ss4.due, ss4.batch.as_deref()), (State::Approved, Some(0), &before["ss-4"].folders, T0 + 300, None), "ss-4");
+        assert_eq!((ss5.state, ss5.batch.as_deref(), ss5.due, ss5.percent, ss5.chosen), (State::Fetching, Some("b5"), T0 + 300, 40.0, Some(0)), "ss-5");
+        let acoustid_pause = Paused { source: "acoustid", until: T0 + 120 }.to_string();
+        assert_eq!((ss6.state, ss6.batch.as_deref(), ss6.due, ss6.why.as_deref()), (State::Checking, Some("b6"), T0 + 120, Some(acoustid_pause.as_str())), "ss-6");
+        for id in ["ss-3", "ss-4", "ss-5", "ss-6"] {
+            let (a, b) = (&after[id], &before[id]);
+            assert_eq!((&a.failed, &a.set_aside, a.local_failures, a.place_failures, a.misses), (&b.failed, &b.set_aside, b.local_failures, b.place_failures, b.misses), "{id}");
+        }
+        for id in ["ss-1", "ss-2", "ss-7"] {
+            assert_eq!(after[id], before[id], "{id} untouched");
+        }
+        let b6 = slskd_dir.join(crate::slskd::FOLDER).join("b6");
+        assert_eq!(files_under(&b6).len(), 3, "b6's files where they were");
+        assert_eq!(fake.asked.lock().unwrap().len(), 2 + READS as usize, "slskd asked once for each, away: ss-3's search, ss-4's batch, ss-5's reads in a row; no DELETE");
+        assert_eq!(heard.asked.lock().unwrap().len(), 1, "AcoustID asked once: ss-6's first file");
+
+        // AcoustID's deadline: ss-6 gated then, not before, on the files it had; slskd still away, b6's transfers left in its list.
+        clock.to(119).await;
+        assert_eq!(next_fetch(), None, "nothing taken up before t0+120");
+        clock.to(120).await;
+        assert_eq!(next_fetch().as_deref(), Some("ss-6"));
+        fetch_from("ss-6", &slskd, &slskd_dir, &gate).await;
+        assert_eq!(on_disk(&d)["ss-6"].state, State::Placed, "gated after");
+        assert_eq!(heard.asked.lock().unwrap().iter().map(|(at, _)| *at).collect::<Vec<_>>(), [T0, T0 + 120, T0 + 120, T0 + 120]);
+        assert_eq!(fake.asked.lock().unwrap().len(), 3 + READS as usize, "slskd asked nothing more before t0+300 but b6's transfers, answered 503");
+
+        // slskd back: ss-5 followed again (its batch done meanwhile), on to its check, and placed.
+        landed(&slskd_dir, "b5", "Quiet Lanes", &tone);
+        clock.to(299).await;
+        assert_eq!(next_fetch(), None, "nothing taken up before t0+300");
+        clock.to(300).await;
+        assert_eq!(next_fetch().as_deref(), Some("ss-5"));
+        fetch_from("ss-5", &slskd, &slskd_dir, &gate).await;
+        let last = on_disk(&d);
+        assert_eq!((last["ss-5"].state, last["ss-5"].failed.len()), (State::Placed, 0), "followed again");
+        let asked = fake.asked.lock().unwrap().clone();
+        assert!(asked.iter().any(|(m, p, at, _)| m == "GET" && p.ends_with("/batches/b5") && *at == T0 + 300), "{asked:?}");
+        assert!(asked.iter().filter(|(m, ..)| m == "DELETE").all(|(_, _, at, _)| *at >= T0 + 300), "no DELETE while slskd is away: {asked:?}");
+        assert!(last.values().all(|i| i.failed == before[&i.id].failed), "no user failed");
+        assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+        assert!(heard.violations.lock().unwrap().is_empty(), "{:?}", heard.violations.lock().unwrap());
+        own_done(&d);
+    }
+
+    /// TN.12, Soulseek's half: slskd away until t0+300 (503 to all it is asked: slskd has no pause of its own in 0.17); then, each alone.
+    /// Background reading paused: the gate's AcoustID is not asked, the record holds at its check a while (`CHECK_AGAIN`) saying so, no
+    /// deadline; a record's list is not read, it waits a round. MusicBrainz switched off: a record's list passes to its next source
+    /// (Discogs'); one with MusicBrainz's alone waits a round, away, not Stuck; slskd still away holds the other a round. slskd switched off
+    /// (at t0+10): records wait "slskd is switched off" a round or a while, away with no deadline; switched on at t0+100, while slskd is
+    /// still away, they are taken up at once and held for slskd away; switched off again and on at t0+301, slskd back, the one waiting on
+    /// it is asked at once. None of it moves a miss or fails a user.
+    #[tokio::test(start_paused = true)]
+    async fn the_switches_are_not_pauses() {
+        use crate::app::switches::{BACKGROUND, MUSICBRAINZ as MUSICBRAINZ_ON, PAUSED, SLSKD as SLSKD_ON, TEST_STATE, set_for_tests};
+        let _one = TEST_STATE.lock().await;
+        let (_pinned, clock) = Clock::at_t0();
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+        let (both, alone) = (cat.record_for_tests("Harbour Lights", 0), cat.record_for_tests("Neap Season", 0));
+        for (record, source, value) in [(both, "musicbrainz", "r-harbour"), (both, "discogs", "2000013"), (alone, "musicbrainz", "r-neap")] {
+            assert!(cat.set_reference(&crate::serve::ids::record(record), &Ref::new(source, "release", value), "link").unwrap());
+        }
+        let items = vec![
+            Item { percent: 100.0, ..ticked(tn_item("ss-c", 9301, "Two Rooms", State::Checking), &["peer-a"], Some("b-c")) },
+            Item { tracks: Vec::new(), misses: 1, ..tn_item("ss-b", both, "Harbour Lights", State::Waiting) },
+            Item { tracks: Vec::new(), ..tn_item("ss-n", alone, "Neap Season", State::Waiting) },
+            Item { misses: 2, ..tn_item("ss-s", 9304, "Low Water", State::Waiting) },
+            ticked(tn_item("ss-a", 9305, "Undertow", State::Approved), &["peer-a"], None),
+            Item { due: T0 + 7 * 86_400, ..tn_item("ss-x", 9306, "Spring Tide", State::Waiting) },
+        ];
+        let d = own_list("switches", items);
+        let slskd_dir = d.join("slskd");
+        let tone = bulk::tone(&d);
+        landed(&slskd_dir, "b-c", "Two Rooms", &tone);
+        let fake = Arc::new(FakeSlskd {
+            away_until: T0 + 300,
+            found: HashMap::from([("Glass Harbour Spring Tide", answers_of("peer-b", "Spring Tide"))]),
+            folder: slskd_dir.clone(),
+            file: tone.clone(),
+            ..Default::default()
+        });
+        let slskd = bulk::slskd_at("http://192.168.1.20:5054", &fake);
+        let given = slskd.search("Glass Harbour").await.unwrap_err();
+        assert!(matches!(crate::app::turn::class(&given), Failure::Away(_)), "the given: slskd away, its 503: {given:#}");
+        let heard = Arc::new(FakeAcoustid::default());
+        let gate = gate_through(Arc::new(Turn::new(crate::app::turn::ACOUSTID)), heard.clone());
+        let slskd_away = |w: Option<&str>| w.is_some_and(|w| w.starts_with("slskd would not search: 503"));
+        let away = |e: &anyhow::Error| matches!(crate::app::turn::class(e), Failure::Away(_));
+        let with_folder = |slskd: Result<Slskd>| slskd.map(|s| (s, slskd_dir.clone()));
+
+        // Background reading paused: AcoustID not asked at the check, a list not read; each waits a while saying so, no deadline.
+        let was = set_for_tests(BACKGROUND, false);
+        fetch_from("ss-c", &slskd, &slskd_dir, &gate).await;
+        search_in("ss-b", &cat, never_read, ready(&slskd)).await;
+        set_for_tests(BACKGROUND, was);
+        let held = on_disk(&d);
+        let (c, b) = (&held["ss-c"], &held["ss-b"]);
+        assert_eq!((c.state, c.batch.as_deref(), c.due, c.why.as_deref()), (State::Checking, Some("b-c"), T0 + CHECK_AGAIN, Some(PAUSED)), "held at its check");
+        assert!(heard.asked.lock().unwrap().is_empty(), "AcoustID not asked");
+        assert_eq!(files_under(&slskd_dir.join(crate::slskd::FOLDER).join("b-c")).len(), 3, "its files kept");
+        assert_eq!((b.state, b.due, b.why.as_deref(), b.tracks.len()), (State::Waiting, T0 + ROUND_AT_LEAST, Some(PAUSED), 0), "no list read");
+
+        // MusicBrainz switched off: Harbour Lights judged by Discogs' list, then held a round for slskd away; Neap Season, with
+        // MusicBrainz's list alone, waits a round, away, not Stuck.
+        let read = |r: Ref| async move { if r.source == "musicbrainz" { crate::app::references::read_reference(r).await } else { Ok(Some((tide_list(), None, Default::default()))) } };
+        let was = set_for_tests(MUSICBRAINZ_ON, false);
+        search_in("ss-b", &cat, &read, ready(&slskd)).await;
+        search_in("ss-n", &cat, &read, ready(&slskd)).await;
+        let off = crate::app::references::read_reference(Ref::new("musicbrainz", "release", "r-neap")).await.unwrap_err();
+        set_for_tests(MUSICBRAINZ_ON, was);
+        assert!(away(&off), "switched off: away, no deadline");
+        let held = on_disk(&d);
+        let (b, n) = (&held["ss-b"], &held["ss-n"]);
+        assert_eq!((b.state, b.tracks.len(), b.due), (State::Waiting, 3, T0 + ROUND_AT_LEAST), "Discogs' list; held a round for slskd away");
+        assert!(slskd_away(b.why.as_deref()), "{:?}", b.why);
+        assert_eq!((n.state, n.due, n.why.as_deref()), (State::Waiting, T0 + ROUND_AT_LEAST, Some("MusicBrainz is switched off")), "a round, not Stuck");
+
+        // slskd switched off at t0+10: Low Water and Undertow wait for it, a round and a while, away with no deadline.
+        clock.to(10).await;
+        let slskd_was = set_for_tests(SLSKD_ON, false);
+        let Err(off) = ready(&slskd).await else { panic!("slskd switched off is not ready") };
+        assert!(off.is::<crate::app::references::SwitchedOff>() && away(&off), "switched off: away, no deadline");
+        search_in("ss-s", &cat, never_read, ready(&slskd)).await;
+        fetch_in("ss-a", async { with_folder(ready(&slskd).await) }, &gate).await;
+        let held = on_disk(&d);
+        let (s, a) = (&held["ss-s"], &held["ss-a"]);
+        let switched_off = off.to_string();
+        assert_eq!(switched_off, "slskd is switched off");
+        assert_eq!((s.state, s.due, s.why.as_deref()), (State::Waiting, T0 + 10 + ROUND_AT_LEAST, Some(switched_off.as_str())), "Low Water");
+        assert_eq!((a.state, a.chosen, a.due, a.why.as_deref()), (State::Approved, Some(0), T0 + 10 + SLSKD_AGAIN, Some(switched_off.as_str())), "Undertow");
+
+        // Switched on at t0+100, slskd still away: both taken up at once, and held for slskd away (a round, a while), asked once each.
+        clock.to(100).await;
+        set_for_tests(SLSKD_ON, true);
+        switched_on();
+        assert_eq!((next_search().as_deref(), next_fetch().as_deref()), (Some("ss-s"), Some("ss-a")), "taken up at once");
+        search_in("ss-s", &cat, never_read, ready(&slskd)).await;
+        fetch_in("ss-a", async { with_folder(ready(&slskd).await) }, &gate).await;
+        let held = on_disk(&d);
+        assert_eq!((held["ss-s"].due, held["ss-a"].due, held["ss-a"].chosen), (T0 + 100 + ROUND_AT_LEAST, T0 + 100 + SLSKD_AGAIN, Some(0)), "held for slskd away");
+        assert_eq!(fake.asked.lock().unwrap().len(), 4, "slskd asked once for each while away: the given, ss-b's and ss-s's searches, ss-a's batch");
+        for (id, misses) in [("ss-c", 0), ("ss-b", 1), ("ss-n", 0), ("ss-s", 2), ("ss-a", 0)] {
+            assert_eq!((held[id].misses, held[id].failed.len(), held[id].set_aside.len()), (misses, 0, 0), "{id}: no miss, no user failed");
+        }
+
+        // Switched off again, Spring Tide waiting on it; switched on at t0+301, slskd back: asked at once.
+        set_for_tests(SLSKD_ON, false);
+        search_in("ss-x", &cat, never_read, ready(&slskd)).await;
+        assert_eq!(on_disk(&d)["ss-x"].why.as_deref(), Some(switched_off.as_str()));
+        clock.to(301).await;
+        set_for_tests(SLSKD_ON, true);
+        switched_on();
+        assert_eq!(item("ss-x").map(|i| i.due), Some(T0 + 301), "taken up at once");
+        search_in("ss-x", &cat, never_read, ready(&slskd)).await;
+        set_for_tests(SLSKD_ON, slskd_was);
+        assert_eq!(on_disk(&d)["ss-x"].state, State::Found);
+        assert_eq!(fake.searches_asked().last().cloned(), Some(("Glass Harbour Spring Tide".to_string(), T0 + 301)));
+        assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+        own_done(&d);
+    }
+
+    /// TN.13, Soulseek's list: MusicBrainz held a minute (its 503 saying Retry-After 60). At t0+1 Neap Season's list cannot be read:
+    /// the record waits to MusicBrainz's deadline, saying so, its misses as they were, not Stuck, and slskd is asked nothing; a record
+    /// with no list at all is Stuck (TN.1's class: someone must act). At t0+59 nothing is taken up; at t0+60 the list is read and the
+    /// record searched.
+    #[tokio::test(start_paused = true)]
+    async fn a_paused_musicbrainz_counts_no_try_against_a_list() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let (_pinned, clock) = Clock::at_t0();
+        let musicbrainz = Turn::new(crate::app::turn::MUSICBRAINZ);
+        assert_eq!(musicbrainz.heard(true, Some(Duration::from_secs(60))), Some(Duration::from_secs(60)), "MusicBrainz's 503, Retry-After 60");
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+        let (neap, quiet) = (cat.record_for_tests("Neap Season", 0), cat.record_for_tests("Quiet Lanes", 0));
+        assert!(cat.set_reference(&crate::serve::ids::record(neap), &Ref::new("musicbrainz", "release", "r-neap"), "link").unwrap());
+        let items = vec![Item { tracks: Vec::new(), misses: 2, ..tn_item("ss-p", neap, "Neap Season", State::Waiting) }, Item { tracks: Vec::new(), ..tn_item("ss-q", quiet, "Quiet Lanes", State::Waiting) }];
+        let d = own_list("musicbrainz-paused", items);
+        let fake = Arc::new(FakeSlskd { found: HashMap::from([("Glass Harbour Neap Season", answers_of("peer-a", "Neap Season"))]), ..Default::default() });
+        let slskd = bulk::slskd_at("http://192.168.1.20:5055", &fake);
+        let asked = Mutex::new(Vec::new());
+        let read = |r: Ref| {
+            let (turn, asked) = (&musicbrainz, &asked);
+            async move {
+                // As the background asks MusicBrainz, behind the pages, within its patience (OQ-T1 (a)).
+                turn.take_within(true, crate::app::musicbrainz::PATIENCE).await?;
+                asked.lock().unwrap().push((r.value, crate::app::moment::now_secs()));
+                Ok::<Option<crate::app::references::Read>, anyhow::Error>(Some((tide_list(), None, Default::default())))
+            }
+        };
+
+        clock.to(1).await;
+        search_in("ss-p", &cat, &read, ready(&slskd)).await;
+        search_in("ss-q", &cat, &read, ready(&slskd)).await;
+        let held = on_disk(&d);
+        let (p, q) = (&held["ss-p"], &held["ss-q"]);
+        let pause = Paused { source: "musicbrainz", until: T0 + 60 }.to_string();
+        assert_eq!((p.state, p.misses, p.due, p.why.as_deref(), p.tracks.len()), (State::Waiting, 2, T0 + 60, Some(pause.as_str()), 0), "held to MusicBrainz's deadline, no try");
+        assert_eq!((q.state, q.why.as_deref()), (State::Stuck, Some("No list to judge by")), "no list at all");
+        assert!(asked.lock().unwrap().is_empty() && fake.asked.lock().unwrap().is_empty(), "nothing asked");
+        clock.to(59).await;
+        assert_eq!(next_search(), None, "not before its deadline");
+        clock.to(60).await;
+        assert_eq!(next_search().as_deref(), Some("ss-p"));
+        search_in("ss-p", &cat, &read, ready(&slskd)).await;
+        assert_eq!(*asked.lock().unwrap(), [("r-neap".to_string(), T0 + 60)]);
+        assert_eq!((on_disk(&d)["ss-p"].state, on_disk(&d)["ss-p"].misses), (State::Found, 0));
+        assert_eq!(fake.searches_asked(), [("Glass Harbour Neap Season".to_string(), T0 + 60)]);
+        assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+        own_done(&d);
     }
 }

@@ -7226,6 +7226,7 @@ async fn put_slskd(ctx: Ctx, Json(b): Json<SlskdChoices>) -> Result<Json<serde_j
     }
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
+    let on = b.enabled;
     crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
         for (k, v) in [(SLSKD_URL, b.url), (SLSKD_KEY, b.key), (SLSKD_FOLDER, b.folder)] {
@@ -7241,6 +7242,10 @@ async fn put_slskd(ctx: Ctx, Json(b): Json<SlskdChoices>) -> Result<Json<serde_j
     .await
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    // Switched on: Soulseek's records waiting because it was off are taken up now (TN.12).
+    if on == Some(true) {
+        crate::app::soulseek::switched_on();
+    }
     get_slskd(ctx).await
 }
 

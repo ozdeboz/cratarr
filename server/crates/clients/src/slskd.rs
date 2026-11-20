@@ -109,12 +109,6 @@ impl std::fmt::Display for Declined {
 
 impl std::error::Error for Declined {}
 
-/// Whether slskd could not be asked now (TN): away, or busy (`Busy`: a read's 429, its lane's operations asking again). Nothing a
-/// user did, so nothing to hold against one.
-pub fn not_now(e: &anyhow::Error) -> bool {
-    e.is::<Away>() || e.is::<Busy>()
-}
-
 /// Whether an answer is slskd's own trouble, whoever was asked for: its key refused, or a proxy saying it is not up. A 429 is
 /// slskd busy (`Busy`), asked again.
 fn its_own(status: reqwest::StatusCode) -> bool {
@@ -447,12 +441,12 @@ impl Slskd {
         if its_own(status) || self.off_soulseek().await { Away(said).into() } else { Declined(said).into() }
     }
 
-    /// Whether slskd says it is not signed in to Soulseek, or does not answer. Its word as far as it goes: any other shape
-    /// of answer says nothing, and what it said stands.
+    /// Whether slskd says it is not signed in to Soulseek, or cannot answer now (away, or paused: TN.1's class). Its word as far as
+    /// it goes: any other shape of answer says nothing, and what it said stands.
     async fn off_soulseek(&self) -> bool {
         match self.get::<serde_json::Value>("application").await {
             Ok(v) => v["server"]["isLoggedIn"] == false,
-            Err(e) => not_now(&e),
+            Err(e) => matches!(crate::app::turn::class(&e), crate::app::turn::Failure::Away(_) | crate::app::turn::Failure::Paused { .. }),
         }
     }
 

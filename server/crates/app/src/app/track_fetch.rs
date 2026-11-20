@@ -79,12 +79,15 @@ fn served() -> Result<Arc<crate::serve::Serve>> {
 }
 
 async fn slskd() -> Result<(Slskd, PathBuf)> {
+    slskd_on()?;
     let ud = served()?.userdata.clone();
     let set = crate::run::spawn_blocking(move || slskd_set(&ud)).await??.context("slskd is not set up: Settings › Server")?;
-    if !super::switches::is_on(super::switches::SLSKD) {
-        bail!("slskd is switched off");
-    }
     Ok((Slskd::new(&set.url, &set.key)?, set.folder))
+}
+
+/// Whether slskd is switched on (Settings › Server). Off, it is away with no deadline (`SwitchedOff`, TN.12): no pause.
+pub(crate) fn slskd_on() -> Result<()> {
+    if super::switches::is_on(super::switches::SLSKD) { Ok(()) } else { Err(super::references::SwitchedOff("slskd").into()) }
 }
 
 // ---- 1. The release
@@ -679,7 +682,7 @@ pub fn track_for(disc: u32, position: u32, title: &str, artist: &str, length_ms:
 /// pop at the very end are notes, which its arrival's card in Incoming shows.
 #[cfg(test)]
 pub async fn gate_track(file: &Path, track: &ReleaseTrack) -> Result<f32> {
-    gate_track_with(file, track, |print| unless_paused(looked_up, print)).await
+    gate_track_with(file, track, looked_up).await
 }
 
 /// Soulseek's gate for a file, as [`gate_track_with`], with the notes its sound was heard to have (`Findings::notes()`: clipping,
@@ -699,14 +702,15 @@ pub(super) async fn gate_track_and_notes(file: &Path, track: &ReleaseTrack) -> R
     gate_track_noted(file, track, |print| unless_paused(looked_up, print)).await
 }
 
-/// [`gate_track`], asking `lookup` what AcoustID knows of the file (the tests' stands in).
+/// [`gate_track`], asking `lookup` what AcoustID knows of the file, background reading's switch with it (the tests' stand in for
+/// AcoustID).
 #[cfg(test)]
-async fn gate_track_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
+pub(crate) async fn gate_track_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
     F: FnOnce(crate::acoustid::Print) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
 {
-    judge_track(printed(file).await?, track, lookup).await
+    judge_track(printed(file).await?, track, |print| unless_paused(lookup, print)).await
 }
 
 /// [`gate_track`]'s verdict on a file already heard (`print`): Soulseek's tests script what their files were heard to have.
@@ -1905,6 +1909,7 @@ mod tests {
     #[tokio::test]
     async fn clipping_a_pop_and_clicks_are_notes_not_refusals() {
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let _one = crate::app::switches::TEST_STATE.lock().await; // the gate reads background reading's switch, which TN's tests move
         let asked = AtomicUsize::new(0);
         let asked = &asked;
         let knows = |recording: &'static str| {
