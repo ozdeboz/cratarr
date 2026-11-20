@@ -15,7 +15,7 @@ use crate::serve::copies::{Copy, Viewer, against, copy_for, in_order, judged, re
 use crate::settings::{LibraryKind, Quality, YOUR_MUSIC};
 use crate::source;
 pub(crate) use super::albums_base::{Chosen, want_copy};
-pub(super) use super::albums_base::{default_target, may_add, requester_of};
+pub(super) use super::albums_base::{default_target, may_add, may_delete_waiting, requester_of};
 
 /// Whether the viewer may delete from a kept library from a menu. An administrator deletes in a main library; in someone
 /// else's own music only from the Users panel, never a menu (the owner, 2026-11-04); own music is its owner's.
@@ -269,7 +269,7 @@ impl Albums<'_> {
                     may_delete(a.kind_of(l), mine, admin)
                 };
                 let kept_deletable_here = |a: &source::Album| a.path.is_some() && a.library.as_ref().is_some_and(|l| kept_deletable.iter().any(|(s, m)| s == &id && m == l) && may_delete_in(l));
-                let incoming_deletable = |a: &source::Album| i.is_some_and(|i| i.deletable.contains(&a.id)) && (admin || theirs(a));
+                let incoming_deletable = |a: &source::Album| i.is_some_and(|i| i.deletable.contains(&a.id)) && may_delete_waiting(admin, viewer.as_deref(), requester(a).map(String::as_str));
                 // Each listed copy says what the viewer may do with it, as the album's lists below say it by id. Those lists
                 // cannot tell a record's copies apart, so the two are worked out here, before the copies are folded.
                 let told = |a: &source::Album, deletable: bool, incoming: bool| {
