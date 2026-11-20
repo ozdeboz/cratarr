@@ -111,6 +111,9 @@ mod app_features;
 pub mod requests;
 #[cfg(test)]
 mod served_tests_requests;
+// Incoming's tests that run the one path on the whole app, moved up (the app split's phase 2).
+#[cfg(test)]
+mod incoming_tests_top;
 // What counts against each user's room (AL01).
 pub mod room;
 // Records not had that nobody sees, forgotten (RT01).
