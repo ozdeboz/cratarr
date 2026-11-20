@@ -477,7 +477,8 @@ async fn over_the_askers_room() {
     let slskd = slskd_of_0163(&k, &d);
     let prefix = "u46d-".to_string();
     let ours = ours(&prefix);
-    start_downloads(&ours, &slskd.client(), &d, &Look::roomy()).await;
+    // Part 3's look carries her room: over it, her six still go (ticked), none made Cratarr's own pick.
+    start_downloads(&ours, &slskd.client(), &d, &Look::roomy().full(&hers)).await;
     for n in ALICES {
         let i = the("u46d", n);
         assert!(i.state == State::Fetching && !i.auto, "ss-{n}: hers go: {i:?}");

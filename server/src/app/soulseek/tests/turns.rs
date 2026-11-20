@@ -49,8 +49,8 @@ async fn a_batch_let_go_unread_keeps_its_users_turn_till_it_is_dropped() {
     let b1 = batch_of("ss-turns-l4-1");
     // Queued at peer-a past its time: given up. Its read answered, the read as it is let go answered 429, and the next look's too.
     slskd.then_reads_busy(1, 2);
-    let long_ago = std::time::Instant::now().checked_sub(QUEUED_FOR + Duration::from_secs(60)).expect("this machine has been up an hour");
-    assert!(matches!(follow_step("ss-turns-l4-1", &client, &d, long_ago).await, Followed::Over));
+    // Followed past its time, however long the machine has been up (its time given, not read off the clock).
+    assert!(matches!(follow_step("ss-turns-l4-1", &client, &d, QUEUED_FOR + Duration::from_secs(60)).await, Followed::Over));
     assert_eq!(item("ss-turns-l4-1").unwrap().failed, ["peer-a"], "given up on peer-a");
     assert!(!slskd.deleted(&b1), "not dropped: slskd could not be read");
     start_downloads(&ours, &client, &d, &look).await;

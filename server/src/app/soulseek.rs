@@ -2430,7 +2430,7 @@ async fn drop_again(within: Within<'_>, slskd: &Slskd, folder: &Path) {
 /// user for this record alone, the next folder after (`on_failed`); Cratarr's own side (slskd could not store a file) blames no one
 /// and holds (Y9); slskd shut down, or a batch it forgot (a restart, OQ-C3 (a)) is fetched again from the same folder once, no one
 /// blamed; forgotten twice in a row, the user is failed as ever. slskd busy (a 429) is read again, and no failed read.
-async fn follow_step(id: &str, slskd: &Slskd, folder: &Path, since: std::time::Instant) -> Followed {
+async fn follow_step(id: &str, slskd: &Slskd, folder: &Path, followed_for: Duration) -> Followed {
     let Some(it) = item(id).filter(|i| i.state == State::Fetching) else { return Followed::Over };
     let (Some(batch), Some(user)) = (it.batch.clone(), chosen_user(&it).map(str::to_string)) else { return Followed::Over };
     let record = format!("{} - {}", it.record.artist, it.record.album);
@@ -2499,9 +2499,9 @@ async fn follow_step(id: &str, slskd: &Slskd, folder: &Path, since: std::time::I
         return Followed::Over;
     }
     let percent = ts.iter().map(|t| t.percent_complete).sum::<f64>() / ts.len() as f64;
-    let gave_up = if percent <= 0.0 && since.elapsed() > QUEUED_FOR {
+    let gave_up = if percent <= 0.0 && followed_for > QUEUED_FOR {
         Some(format!("It stayed in the user's queue over {} minutes", QUEUED_FOR.as_secs() / 60))
-    } else if since.elapsed() > FETCH_AT_MOST {
+    } else if followed_for > FETCH_AT_MOST {
         Some(format!("It took over {} hours", FETCH_AT_MOST.as_secs() / 3600))
     } else {
         None
@@ -2524,7 +2524,7 @@ async fn follow_one(id: &str, slskd: &Slskd, folder: &Path) {
     let since = std::time::Instant::now();
     let mut unread = 0;
     loop {
-        match follow_step(id, slskd, folder, since).await {
+        match follow_step(id, slskd, folder, since.elapsed()).await {
             Followed::Over => return,
             Followed::Going => {
                 unread = 0;
@@ -5717,7 +5717,7 @@ mod tests {
     async fn follow_round(within: Within<'_>, slskd: &Slskd, folder: &Path) {
         let ids: Vec<String> = kept(|k| k.items.iter().filter(|i| within(i) && i.state == State::Fetching).map(|i| i.id.clone()).collect());
         for id in ids {
-            follow_step(&id, slskd, folder, std::time::Instant::now()).await;
+            follow_step(&id, slskd, folder, Duration::ZERO).await;
         }
     }
 
@@ -6163,7 +6163,7 @@ mod tests {
         // ss-q2: its transfers dropped, its folder gone; its follower stops at its next read.
         assert!(slskd.deleted(&b2) && !d.join(crate::slskd::FOLDER).join(&b2).exists());
         let reads = slskd.reads_of(&b2);
-        assert!(matches!(follow_step(&id("q2"), &client, &d, std::time::Instant::now()).await, Followed::Over));
+        assert!(matches!(follow_step(&id("q2"), &client, &d, Duration::ZERO).await, Followed::Over));
         assert!(slskd.reads_of(&b2) <= reads + 1, "no more reads after the next");
         // ss-q3: its files removed, never heard; ss-q4: the file under way finished, nothing more heard, nothing placed or set aside.
         assert!(!d.join(crate::slskd::FOLDER).join(&b3).exists());
