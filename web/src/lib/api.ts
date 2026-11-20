@@ -1768,11 +1768,18 @@ export type HealthItem = {
   track?: string;
   /** Since when it stands so (epoch seconds, Missing music). */
   since?: number;
+  /** A held library's folder (LS04's `library:held`): the walk its guard holds back, let through by "They are gone". */
+  folder?: string;
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
 /** A track on Health's Missing music is `to` (A5): for good, so what names it follows it. */
 export const reconnectTrack = (track: string, to: string) => post<unknown>('/api/missing/reconnect', { track, to });
+/** Tracks of Missing music let go (LS02, administrators'): each with no file left retires as a reconnect retires one, its plays
+ *  kept should its file come back; a record left with no tracks retires too. */
+export const missingGone = (tracks: string[]) => post<unknown>('/api/missing/gone', { tracks });
+/** A held library's walk let through (LS03, administrators'): what was not found there leaves the library, its moves found. */
+export const missingAccept = (folder: string) => post<unknown>('/api/missing/accept', { folder });
 /** A record's own Health problems (0.14, `/api/albums/{source}/{id}/health`): each finding that names it, worst first, by
  *  its kind (the report's key) and row, with only the record's items; its tracks' file problems as `files:{kind}`
  *  findings, an item for each track (`track`, `files`, the problem in `line`). */
