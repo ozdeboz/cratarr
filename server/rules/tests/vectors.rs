@@ -4,11 +4,13 @@
 //! them over its own index, so those two are what the page's and the app's builds answer to (0101's point 27).
 //!
 //! Written again from the cases below with `CRATARR_RULES_WRITE=1 cargo test -p cratarr-rules -- --ignored write`: only
-//! when a rule changes on purpose (then every other build must change with it).
+//! when a rule changes on purpose (then every other build must change with it). The pairing's cases (`assign.json`) are
+//! the scenarios' rows, each answer its Then, written by hand and never by `write`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use cratarr_rules::assign::{Fit, Side, assign, fit};
 use cratarr_rules::crates::{self, Alike, Avoid, Condition, Facts, Favourites, LikeMode, Target, Trait, Use, Value, View, World, credited_names};
 use cratarr_rules::excluded_artists;
 use cratarr_rules::ids::song;
@@ -1158,4 +1160,44 @@ fn write() {
         ])
         .unwrap(),
     );
+}
+
+// --- The pairing (SCENARIOS-PAIR01 PAIR01.8): one function, the same pairs from the server's build and the device's ---
+
+const ASSIGN: &str = include_str!("vectors/assign.json");
+
+/// A track or a file as the cases write it. The caller's verdict is the cases' own stand-in for the title rule (identity's,
+/// C4): two titles written the same, then `fit`'s length rule.
+#[derive(Debug, Deserialize)]
+struct PairSide {
+    title: String,
+    #[serde(default)]
+    key: String,
+    disc: Option<u32>,
+    number: Option<u32>,
+    length_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssignCase {
+    about: String,
+    tracks: Vec<PairSide>,
+    files: Vec<PairSide>,
+    pairs: Vec<(usize, usize)>,
+}
+
+fn side(s: &PairSide) -> Side<'_> {
+    Side { disc: s.disc, number: s.number, key: &s.key, length_ms: s.length_ms }
+}
+
+#[test]
+fn the_device_pairs_as_the_server() {
+    let cases: Vec<AssignCase> = serde_json::from_str(ASSIGN).unwrap();
+    assert!(cases.len() >= 20, "PAIR01's rows");
+    for c in &cases {
+        let tracks: Vec<Side> = c.tracks.iter().map(side).collect();
+        let files: Vec<Side> = c.files.iter().map(side).collect();
+        let verdict = |t: usize, f: usize| if c.tracks[t].title == c.files[f].title { fit(c.tracks[t].length_ms, c.files[f].length_ms) } else { Fit::No };
+        assert_eq!(assign(&tracks, &files, verdict), c.pairs, "{}", c.about);
+    }
 }

@@ -25,9 +25,12 @@
 //!   with no server; what a device reads of it, and when it fetches what ([`index::sync`]).
 //! - **What those lean on**: what an id says by its shape ([`ids`]), a name's loose key ([`names`]) and the artists
 //!   excluded everywhere ([`excluded_artists`]). How a library makes its ids is the caller's.
+//! - **A record's tracklist paired with a copy's files** ([`assign`], PAIR01): the best one-to-one pairing, for Soulseek's
+//!   folders and the holding's copies alike.
 
 use serde::{Deserialize, Serialize};
 
+pub mod assign;
 pub mod brake;
 pub mod crates;
 pub mod excluded_artists;
