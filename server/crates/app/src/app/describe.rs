@@ -151,7 +151,7 @@ pub fn fill(serve: &crate::serve::Serve, tracks: &mut [super::QueueTrack]) {
 }
 
 /// A player's view with its track and queue described.
-pub fn fill_view(view: &mut super::playon::PlayerView) {
+pub fn fill_view(view: &mut super::playon_base::PlayerView) {
     let Some(serve) = crate::serve::instance() else { return };
     if let Some(t) = view.track.as_mut() {
         fill(&serve, std::slice::from_mut(t));

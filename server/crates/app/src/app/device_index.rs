@@ -29,21 +29,19 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::Path;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use axum::Json;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use cratarr_rules::index::{self, Artist, Builder, Gone, Index, Kind, Refused, Rows, Sounds, TrackHead};
+use cratarr_rules::index::{self, Artist, Builder, Gone, Index, Refused, Rows, Sounds, TrackHead};
 
-use super::changes::IndexStands;
-use super::{App, ToggleError};
+use super::playing_host::PlayingHost;
+use super::ToggleError;
 use crate::crates::Facts;
 use crate::serve::Serve;
 use crate::serve::ids;
-use crate::settings::LibraryKind;
 
 /// A refusal of the rules crate's, as the server reports it: rows that do not add up are a fault here, not a device's.
 fn refused(what: Refused) -> anyhow::Error {
@@ -54,43 +52,6 @@ fn refused(what: Refused) -> anyhow::Error {
 /// rest of this file leaves out.
 fn can_see(_library: &index::Library, _account: Option<&str>) -> bool {
     true
-}
-
-impl super::library::Library {
-    /// Every catalogue folder as a device names it: its library where one holds it, else its path, so a server's library not
-    /// answering for now does not take its rows off every device. By its id, a folder's, `order` saying the libraries' order. Blocking.
-    pub(super) fn index_libraries(&self, serve: &Serve) -> Vec<index::Library> {
-        let (kinds, live, folders) = (self.folder_kinds(), self.live(), self.catalogue().folders());
-        let of = |path: &Path| {
-            live.iter().find_map(|a| {
-                let placed = a.placement.libraries.iter().find(|p| p.folders.iter().any(|f| Path::new(f) == path))?;
-                Some((a, placed, a.libraries().into_iter().find(|u| u.id == placed.id)))
-            })
-        };
-        let mut rows: Vec<index::Library> = folders
-            .iter()
-            .enumerate()
-            .map(|(n, (folder, path))| {
-                let at = kinds.iter().position(|(f, _)| *f == folder);
-                let order = at.unwrap_or(kinds.len() + n) as u32;
-                let kind = match at.map_or(LibraryKind::Incoming, |at| kinds[at].1) {
-                    LibraryKind::Main => Kind::Main,
-                    LibraryKind::Own => Kind::Own,
-                    LibraryKind::Incoming => Kind::Incoming,
-                };
-                let (key, name) = (path.display().to_string(), path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned()));
-                match of(path.as_path()) {
-                    Some((a, placed, used)) => {
-                        let owner = used.and_then(|u| u.owner).filter(|o| serve.users.get(o).is_some_and(|u| u.active));
-                        index::Library { id: folder, key: placed.id.clone(), name: placed.name.clone(), kind, order, colour: a.colour_of(&placed.id), owner }
-                    }
-                    None => index::Library { id: folder, key, name, kind, order, colour: None, owner: None },
-                }
-            })
-            .collect();
-        rows.sort_by_key(|l| l.id);
-        rows
-    }
 }
 
 /// A track's facts as an account sees them: what lies in a library it cannot see goes from `folders` and `lines`, or the device
@@ -160,27 +121,7 @@ pub fn build(serve: &Serve, facts: &[Facts], libraries: &[index::Library], rev: 
     to.build(rev).map_err(refused)
 }
 
-/// What the log was last brought up to: all that can move a row without moving the log. The reading only weakly, so as not to
-/// hold on to it, and so its address stays taken: a reading made in the same place would pass for it (`Catalogue::crate_facts`).
-#[derive(Debug, Default)]
-pub struct Settled {
-    facts: Weak<Vec<Facts>>,
-    built: i64,
-    rev: i64,
-    libraries: Vec<index::Library>,
-}
-
-impl Settled {
-    /// Whether what was settled is what stands now: no row can differ, and nothing needs building.
-    fn holds(&self, facts: &Arc<Vec<Facts>>, built: i64, rev: i64, libraries: &[index::Library]) -> bool {
-        self.rev == rev && self.stands(facts, built, libraries)
-    }
-
-    /// `holds`, but for the log: the reading, the build and the libraries, which move rows with no word in it.
-    fn stands(&self, facts: &Arc<Vec<Facts>>, built: i64, libraries: &[index::Library]) -> bool {
-        std::ptr::eq(self.facts.as_ptr(), Arc::as_ptr(facts)) && self.built == built && self.libraries == libraries
-    }
-}
+pub use crate::serve::device_index_settled::Settled;
 
 /// The sounds of `index`'s tracks, as of its rev: a track's taken from the reading in its turn, and held in eight bits.
 pub(super) fn sounds_of(facts: &[Facts], index: &Index) -> Sounds {
@@ -347,16 +288,6 @@ fn sounds_feed(serve: &Serve, libraries: &[index::Library], account: Option<&str
     asking(serve, libraries, account, since, takes_gzip, sounds_feed_on)
 }
 
-/// Where the log stands for a device at `since`, nothing built: whether it has anything to ask for. Blocking.
-fn stands_for(serve: &Serve, libraries: &[index::Library], since: Option<i64>) -> Result<IndexStands> {
-    let turn = serve.device_turn();
-    let cat = serve.catalogue();
-    let (rev, floor) = (cat.index_rev()?, cat.index_floor()?);
-    let Some(since) = since.filter(|s| *s >= floor && *s <= rev) else { return Ok(IndexStands { rev, changed: true, reset: Some(true) }) };
-    let facts = cat.crate_facts()?;
-    Ok(IndexStands { rev, changed: cat.index_moved(since, rev)? || !turn.stands(&facts, serve.built_at(), libraries), reset: None })
-}
-
 /// Bytes as gzip: a device fetches these over whatever connection it has.
 fn gzipped(bytes: &[u8]) -> Result<Vec<u8>> {
     use std::io::Write;
@@ -399,22 +330,22 @@ pub fn takes_gzip(headers: &HeaderMap) -> bool {
 }
 
 /// `GET /api/index`: the whole index `account` can see, every library it can see in it, as `Index::save` writes it.
-pub async fn read(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn read<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let bytes = crate::run::spawn_blocking(move || Bytes::of(whole(&serve, libraries, account.as_deref())?.save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `GET /api/index/changes?since=<rev>`: what `account` lacks at `since`.
-pub async fn changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn changes<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let found = crate::run::spawn_blocking(move || feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `GET /api/index/sounds`: the sounds of every track `account` can see, as `Sounds::save` writes them.
-pub async fn sounds(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn sounds<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let bytes = crate::run::spawn_blocking(move || {
         let (index, facts) = whole_of(&serve, &libraries, account.as_deref())?;
         Bytes::of(sounds_of(&facts, &index).save(), takes_gzip)
@@ -423,8 +354,8 @@ pub async fn sounds(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, 
 }
 
 /// `GET /api/index/sounds/changes?since=<rev>`: what of the sounds `account` lacks at `since`.
-pub async fn sound_changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn sound_changes<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let found = crate::run::spawn_blocking(move || sounds_feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
@@ -454,19 +385,12 @@ fn marks_of(fits: &HashMap<String, f64>, skipped: &HashMap<String, f64>, uses: &
 
 /// `GET /api/index/own`: what the server last worked out for the account asking, and no one else: its fits and its counts, as
 /// `Marks::save` writes them.
-pub async fn own(app: &Arc<App>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+pub async fn own<H: PlayingHost + ?Sized>(app: &Arc<H>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
     let user = account.ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
-    let (fits, skipped, uses) = (app.playlists.taste_fits(&user, &[]).await?, app.playlists.skipped_fits(&user, &[]).await?, app.playlists.uses_by_track(&user).await?);
-    let rest = serde_json::to_string(&app.playlists.device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
+    let (fits, skipped, uses) = (app.playlists().taste_fits(&user, &[]).await?, app.playlists().skipped_fits(&user, &[]).await?, app.playlists().uses_by_track(&user).await?);
+    let rest = serde_json::to_string(&app.playlists().device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
     let bytes = crate::run::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).with_own(rest).save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
-}
-
-/// `/api/changes`' word on the index, for a device at `since`.
-pub async fn stands(app: &Arc<App>, serve: Arc<Serve>, since: Option<i64>) -> Result<IndexStands, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
-    let found = crate::run::spawn_blocking(move || stands_for(&serve, &libraries, since));
-    Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 #[cfg(test)]
@@ -474,8 +398,11 @@ pub(super) mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::app::changes::IndexStands;
+    use crate::app::device_index_base::stands_for;
     use crate::catalogue::{Catalogue, Rules};
     use crate::serve::copies::Kind as CopyKind;
+    use cratarr_rules::index::Kind;
 
     /// A server over folders on the disk, for a test named `name`: what `add` puts there is read, identified and built.
     pub(in crate::app) struct Served {

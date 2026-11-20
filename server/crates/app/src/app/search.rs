@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use super::features_host::FeaturesHost;
 use crate::search::{closeness, words};
+
+pub use super::search_base::{Item, Matched};
 
 /// What a search may find, and how much each kind weighs in `top`.
 const KINDS: [(&str, f32); 16] = [
@@ -107,66 +110,6 @@ fn entry(title: String, artist: String, album: String, w: &[String]) -> Entry {
     Entry { rank: (0, 0), on: "track", text: title }
 }
 
-/// Why a result is there: what it matched on (`name`, `artist`, `album`, `track`), the text, and how many.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Matched {
-    pub on: &'static str,
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub count: Option<u32>,
-}
-
-/// One result, the same shape for every kind.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Item {
-    pub kind: &'static str,
-    /// What the panel opens: `album:cratarr/<id>`, `artist:cratarr/<name>`, `playlist:<id>`, `crate:<id>`,
-    /// `crate:genre:<name>`; a track its album's.
-    pub subject: String,
-    pub title: String,
-    pub sub: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cover: Option<String>,
-    /// A track's own id, to play it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub track: Option<String>,
-    /// An album's artist where the panel needs it apart from `sub`: one not in the library, to look for on Bandcamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub artist: Option<String>,
-    /// A track's album and its id, and its length (0.12: the page opens a track's own menu from a search hit, and
-    /// no longer reads them out of `sub`, which a name holding " · " broke).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_secs: Option<u64>,
-    /// A missing album's page on Bandcamp where an open of it found one lately (0.9.5).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bandcamp: Option<String>,
-    /// A missing album's open request (0.9.5): wanted, or coming and how far.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<super::requests::Mark>,
-    /// Why Cratarr knows an album not in the library (0076, the indexed universe): "Missing from <artist>", "On your
-    /// Spotify", "Suggested", "Requested"; one album once, its reasons together.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub known: Vec<String>,
-    /// A classical record's, or its track's, composers (0.10); a record found by its composer says so in `matched`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub composers: Vec<crate::source::ComposerRef>,
-    /// An artist's library id (`ar-…`; 0.11, quick crates: what a Sounds like is seeded with from a search hit).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// An artist's number for their name (C55, G5): the page shows "Name (n)" where a list holds two of a name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub number: Option<i64>,
-    /// How many editions of one album a record's item stands for, its own among them (F12.1, `app::editions`); none: one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub editions: Option<u32>,
-    pub score: f32,
-    pub matched: Vec<Matched>,
-}
-
 #[derive(Debug, Default, Serialize)]
 pub struct Group {
     pub total: usize,
@@ -221,9 +164,14 @@ fn word_hits<'a>(index: &'a [(&'static str, String, usize)], kind: &str, w: &[St
 /// The library's genres with the other names they go by (0.12: one matcher, genre aliases; `GET /api/genres/aliases`,
 /// what the page's matcher is given as each genre's `aliases`), those with none left out: the genres the library reads
 /// from its files and those its words name (`words::search_index`, the genre crates' and search's), as written there.
-pub async fn genre_aliases(app: &super::App) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
-    let Some(served) = app.served.clone() else { return Ok(BTreeMap::new()) };
-    let cat = app.library.catalogue();
+pub async fn genre_aliases<H: FeaturesHost>(app: &Arc<H>) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+    genre_aliases_on(&**app).await
+}
+
+/// `genre_aliases`, on its host.
+async fn genre_aliases_on(app: &dyn FeaturesHost) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+    let Some(served) = app.served().clone() else { return Ok(BTreeMap::new()) };
+    let cat = app.library().catalogue();
     crate::run::spawn_blocking(move || -> anyhow::Result<BTreeMap<String, Vec<String>>> {
         let mut genres: Vec<String> = served.library.genres()?.into_iter().map(|(g, _, _)| g).collect();
         match super::words::search_index(&served, &cat, &std::collections::HashSet::new()) {
@@ -603,7 +551,7 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
 /// Every missing album of the library's artists: the same for every account. Made once; then the last answer comes at once and,
 /// older than `MISSING_KEEP`, is made again behind it, one making at a time (the owner, 2026-11-19, F45: a search waited 8.7 s
 /// while this list of every missing record was made again inside it).
-async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::discover::Missing>>> {
+async fn all_missing(app: &dyn FeaturesHost) -> anyhow::Result<Arc<Vec<crate::app::discover::Missing>>> {
     type Kept = Option<(Instant, Arc<Vec<crate::app::discover::Missing>>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
     static MAKING: AtomicBool = AtomicBool::new(false);
@@ -615,7 +563,7 @@ async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::dis
             KeptUse::Serve => return Ok(m.clone()),
             KeptUse::Behind => {
                 if !MAKING.swap(true, Ordering::AcqRel) {
-                    let cat = app.library.catalogue();
+                    let cat = app.library().catalogue();
                     crate::run::spawn(async move {
                         // M6: the mark let go of however the making ends; a panic is a failure.
                         let _making = OnDrop(|| {
@@ -641,7 +589,7 @@ async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::dis
             KeptUse::Inline => {}
         }
     }
-    match crate::app::discover::all_missing(app.library.catalogue()).await {
+    match crate::app::discover::all_missing(app.library().catalogue()).await {
         Ok((m, _)) => {
             let m = Arc::new(m);
             *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
@@ -662,12 +610,12 @@ async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::dis
 /// The asking account's crates with their tracks. Made once per account and libraries switched off; then the last answer comes at
 /// once and, older than `CRATES_KEEP`, is made again behind it as that account, one making at a time (F45: making every crate
 /// inside a search is not cheap).
-async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<Members> {
+async fn crate_members(app: &dyn FeaturesHost, without: &[String]) -> anyhow::Result<Members> {
     type Key = (Option<String>, Vec<String>);
     static KEPT: OnceLock<Mutex<HashMap<Key, (Instant, Members)>>> = OnceLock::new();
     static MAKING: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
     static FAILED: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
-    let account = (app.playlists.asking_account(), without.to_vec());
+    let account = (app.playlists().asking_account(), without.to_vec());
     let kept = KEPT.get_or_init(Default::default);
     let failed = FAILED.get_or_init(Default::default);
     let old = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned();
@@ -678,7 +626,7 @@ async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<M
             KeptUse::Behind => {
                 let making = MAKING.get_or_init(Default::default);
                 if making.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone()) {
-                    let (playlists, key) = (app.playlists.clone(), account.clone());
+                    let (playlists, key) = (app.playlists().clone(), account.clone());
                     crate::run::spawn(crate::serve::who::carried(async move {
                         // M6: the mark let go of however the making ends; a panic is a failure.
                         let gone = key.clone();
@@ -705,7 +653,7 @@ async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<M
             KeptUse::Inline => {}
         }
     }
-    match app.playlists.crate_members(without).await {
+    match app.playlists().crate_members(without).await {
         Ok(m) => {
             let m: Members = Arc::new(m);
             kept.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone(), (Instant::now(), m.clone()));
@@ -756,7 +704,12 @@ impl Laps {
 /// Answers a query for the asking account (its playlists and crates): every kind asked for (`kinds`, all when empty).
 /// `without`: the libraries switched off (`source/library` keys): a word's albums and a crate's tracks are counted, and
 /// found, in those switched on, as what they open shows them (the owner, 2026-11-02).
-pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
+pub async fn search<H: FeaturesHost>(app: &Arc<H>, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
+    search_on(&**app, q, kinds, limit, offset, without).await
+}
+
+/// `search`, on its host.
+async fn search_on(app: &dyn FeaturesHost, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
     let mut laps = Laps::new();
     let w = words(q);
     let mut answer = Answer { q: q.to_string(), ..Answer::default() };
@@ -775,7 +728,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     let mut totals: HashMap<&'static str, usize> = HashMap::new();
     // Classical (0.10): the records' composers, and the records found by them ("Brahms" finds Arrau's); and (0.12,
     // decision 0086: works reachable) the works.
-    let classical = match app.served.clone() {
+    let classical = match app.served().clone() {
         Some(s) if ["album", "artist", "track", "genre", "work"].iter().any(|k| wants(k)) => {
             crate::run::spawn_blocking(move || super::classical::index(&s)).await?.inspect_err(|e| tracing::debug!("search: Classical not read: {e:#}")).ok()
         }
@@ -788,7 +741,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         groups.insert("work", work_items(c, &w));
     }
     if ["album", "artist", "track", "genre"].iter().any(|k| wants(k))
-        && let Some(served) = app.served.clone()
+        && let Some(served) = app.served().clone()
     {
         let (lib, words_) = (served.library.clone(), w.clone());
         let found = crate::run::spawn_blocking(move || lib.find(&words_, reach)).await??;
@@ -830,7 +783,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             albums.extend(by);
         }
         // F12.1 (the owner: "One card, 2 editions"): Cratarr's editions of one album, one item.
-        let folded = super::editions::fold_items(&app.library, &mut albums, &app.library.folders_off(without)).await;
+        let folded = super::editions::fold_items(app.library(), &mut albums, &app.library().folders_off(without)).await;
         if let Some(t) = totals.get_mut("album") {
             *t = t.saturating_sub(folded);
         }
@@ -935,10 +888,10 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     // by how many albums carry it among equals. In place of the library's genres where they can be read.
     // The labels the same way (0.11, quick crates), each opening its crate (`crate:label:<label>`).
     if super::words::KINDS.iter().chain(&["label"]).any(|k| wants(k))
-        && let Some(served) = app.served.clone()
+        && let Some(served) = app.served().clone()
     {
-        let (s, cat) = (served.clone(), app.library.catalogue());
-        let off: std::collections::HashSet<i64> = app.library.folders_off(without).into_iter().collect();
+        let (s, cat) = (served.clone(), app.library().catalogue());
+        let off: std::collections::HashSet<i64> = app.library().folders_off(without).into_iter().collect();
         match crate::run::spawn_blocking(move || super::words::search_index(&s, &cat, &off)).await? {
             Ok(index) => {
                 for kind in super::words::KINDS.into_iter().chain(["label"]).filter(|k| wants(k)) {
@@ -980,13 +933,13 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     }
     laps.lap("words");
     // Playlists and crates by their names, and by the tracks in them (a track's title, artist or album).
-    let deep = if wants("playlist") || wants("crate") { found_lines(app.served.clone(), &w).await? } else { HashMap::new() };
+    let deep = if wants("playlist") || wants("crate") { found_lines(app.served().clone(), &w).await? } else { HashMap::new() };
     laps.lap("tracks in lists");
     if wants("playlist") {
         let lines: HashMap<String, Vec<String>> =
-            if deep.is_empty() { HashMap::new() } else { app.playlists.visible_lines().await?.into_iter().map(|(id, _, l)| (id, l)).collect() };
+            if deep.is_empty() { HashMap::new() } else { app.playlists().visible_lines().await?.into_iter().map(|(id, _, l)| (id, l)).collect() };
         let mut lists: Vec<Item> = Vec::new();
-        for p in app.playlists.view(None).await? {
+        for p in app.playlists().view(None).await? {
             let (score, matched) = if crate::search::matches(&p.name, &w) {
                 (score(&p.name, &w, 0, 1), matched_name(&p.name))
             } else if let Some((count, e)) = lines.get(&p.id).and_then(|l| holding(l, &deep)) {
@@ -1028,7 +981,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         let members = if deep.is_empty() { None } else { Some(crate_members(app, without).await?) };
         let names = match &members {
             Some(m) => m.iter().map(|(id, name, _)| (id.clone(), name.clone())).collect(),
-            None => app.playlists.crate_names().await?,
+            None => app.playlists().crate_names().await?,
         };
         let mut found: Vec<Item> = Vec::new();
         for (id, name) in names {
@@ -1046,9 +999,9 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     }
     laps.lap("crates");
     // What is not in the library (point 7): only from Cratarr's own library; the exclusions an account's own.
-    if let Some(served) = app.served.clone() {
+    if let Some(served) = app.served().clone() {
         if wants("missing") {
-            let marks = super::requests::marks(app, &served).await.inspect_err(|e| tracing::debug!("search: the requests' marks not read: {e:#}")).ok();
+            let marks = app.request_marks(&served).await.inspect_err(|e| tracing::debug!("search: the requests' marks not read: {e:#}")).ok();
             groups.insert("missing", missing_items(&all_missing(app).await?, &w, marks.as_deref()));
         }
         if wants("excluded")
@@ -1066,7 +1019,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         if let Some(account) = served.current_user()
             && (wants("requested") || wants("spotify") || wants("suggested"))
         {
-            let marks = super::requests::marks(app, &served).await.ok();
+            let marks = app.request_marks(&served).await.ok();
             if wants("requested") {
                 let (s, a) = (served.clone(), account.clone());
                 let open: Vec<crate::userdata::Request> = crate::run::spawn_blocking(move || s.userdata.requests(Some(&a), None, 1000))
@@ -1124,7 +1077,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     // An artist's number for their name (G5), read once for the artists found: the page shows "Name (n)" where it lists two.
     if let Some(artists) = groups.get_mut("artist") {
         let ids: Vec<i64> = artists.iter().filter_map(|i| i.id.as_deref().and_then(crate::serve::ids::artist_number)).collect();
-        let cat = app.library.catalogue();
+        let cat = app.library().catalogue();
         if !ids.is_empty()
             && let Ok(Ok(numbers)) = crate::run::spawn_blocking(move || cat.artist_numbers(&ids)).await
         {

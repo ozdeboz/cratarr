@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+
+pub use super::intake_card_base::{Heard, HeardTrack};
 
 /// The task that hears records (`app::tasks`).
 pub const KIND: &str = "intake:hear";
@@ -87,34 +89,6 @@ pub struct Snippets {
     pub start: i64,
     pub middle: i64,
     pub end: i64,
-}
-
-/// What hearing a record's copy found, kept per copy (`intake_heard`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Heard {
-    pub tracks: Vec<HeardTrack>,
-    /// AcoustID was not asked (no key set).
-    #[serde(default)]
-    pub no_acoustid: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct HeardTrack {
-    /// Its file's name.
-    pub file: String,
-    pub damaged: u32,
-    /// What its sound was heard to have wrong with it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub flaw: Option<String>,
-    /// Where its first flaw is (ms), when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub flaw_at_ms: Option<i64>,
-    /// The recordings AcoustID is sure of (its score at least `acoustid::SURE`).
-    #[serde(default)]
-    pub recordings: Vec<String>,
-    /// It could not be read at all.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failed: Option<String>,
 }
 
 /// One track as a card reads it.

@@ -324,7 +324,7 @@ fn tracklist_size(release: &Value) -> (usize, Option<u64>) {
         };
         for p in parts {
             n += 1;
-            secs = secs.zip(p["duration"].as_str().and_then(super::renumber::duration)).map(|(a, b)| a + u64::from(b));
+            secs = secs.zip(p["duration"].as_str().and_then(super::renumber_base::duration)).map(|(a, b)| a + u64::from(b));
         }
     }
     (n, secs.filter(|_| n > 0))

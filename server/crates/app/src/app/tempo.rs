@@ -63,10 +63,10 @@ pub fn adjusted(t: &TrackTempo, how: Adjust) -> Option<u32> {
 /// the yes; Undo is the run's): each of Cratarr's own tracks whose tag changes, its BPM now → after. With the tracks'
 /// tempos as they will be. The tempo is the track's, so every copy's file gets it, each from what it holds itself. Blocking
 /// for the plan; the run writes in the background.
-pub(super) fn proposal(served: &crate::serve::Serve, ids: &[String], how: Adjust) -> Result<(super::file_runs::Proposal, Vec<TrackTempo>)> {
+pub(super) fn proposal(served: &crate::serve::Serve, ids: &[String], how: Adjust) -> Result<(super::file_runs_base::Proposal, Vec<TrackTempo>)> {
     let cat = served.catalogue();
     let own = crate::source::cratarr::KIND.id;
-    let mut p = super::file_runs::Proposal { kind: "tempo".into(), ..Default::default() };
+    let mut p = super::file_runs_base::Proposal { kind: "tempo".into(), ..Default::default() };
     let (mut tempos, mut tracks) = (Vec::new(), 0);
     for id in ids {
         let Some(now) = tempo_of(cat, own, id) else { continue };

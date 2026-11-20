@@ -1860,7 +1860,7 @@ pub struct Missing {
     pub bandcamp: Option<String>,
     /// An open request's mark (0.9.5): wanted, or coming and how far; none without one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<super::requests::Mark>,
+    pub request: Option<super::requests_base::Mark>,
     /// A retired record's (OQ16): when it went from Music, "Was in Music until <date>".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub was_until: Option<i64>,
@@ -3386,7 +3386,7 @@ mod missing_tests {
         let _one = TEST_STATE.lock().await;
         let d = std::env::temp_dir().join(format!("cratarr-f2-joined-{}", std::process::id()));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
-        let lib = crate::app::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap())).await.unwrap();
+        let lib = crate::app::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap()), None).await.unwrap();
         let cat = lib.catalogue();
         let at = Arc::as_ptr(&cat) as usize;
         readings().lock().unwrap().retain(|(c, ..), _| *c != at);

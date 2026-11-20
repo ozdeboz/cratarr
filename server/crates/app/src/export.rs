@@ -71,7 +71,7 @@ pub enum Format {
     Mp3V0,
 }
 
-pub use crate::stream_forms::Mp3Kind;
+pub use crate::stream_forms_base::Mp3Kind;
 
 /// About what V0 comes to on music (kb/s): LAME's own figure for its `-V 0` is 220 to 260.
 const V0_KBPS: u64 = 245;
@@ -782,7 +782,7 @@ fn convert(t: &Track, how: Treatment, work: &Path, rt: &tokio::runtime::Handle) 
     if how == Treatment::AsIs {
         return Ok(None);
     }
-    let _permit = rt.block_on(crate::opus_copy::COPIES.acquire()).context("the copies' permits are closed")?;
+    let _permit = rt.block_on(crate::opus_copy_base::COPIES.acquire()).context("the copies' permits are closed")?;
     std::fs::create_dir_all(work).with_context(|| format!("creating {}", work.display()))?;
     let mut id = [0u8; 8];
     getrandom::fill(&mut id).map_err(|e| anyhow::anyhow!("random: {e}"))?;
@@ -796,13 +796,13 @@ fn convert(t: &Track, how: Treatment, work: &Path, rt: &tokio::runtime::Handle) 
         Treatment::Opus(kbps) => {
             let file = std::fs::File::create(&made.0).with_context(|| format!("creating {}", made.0.display()))?;
             let mut out = std::io::BufWriter::new(file);
-            if !crate::opus_copy::copy_at(&t.path, &mut out, (None, None), kbps as i32 * 1000)? {
+            if !crate::opus_copy_base::copy_at(&t.path, &mut out, (None, None), kbps as i32 * 1000)? {
                 return Ok(None);
             }
             std::io::Write::flush(&mut out)?;
         }
         Treatment::Mp3(kind) => {
-            if !crate::stream_forms::mp3_file(&t.path, &made.0, kind)? {
+            if !crate::stream_forms_base::mp3_file(&t.path, &made.0, kind)? {
                 return Ok(None);
             }
         }
@@ -1307,7 +1307,7 @@ mod tests {
     fn as_opus_a_lossless_file_becomes_a_copy_a_lossy_one_stays_and_the_lines_name_what_went_in() {
         let d = music();
         std::fs::create_dir_all(d.0.join("Alb")).unwrap();
-        crate::opus_copy::tests::wav(&d.0.join("Alb/01 One.wav"), 44_100, 0.5);
+        crate::opus_copy_base::tests::wav(&d.0.join("Alb/01 One.wav"), 44_100, 0.5);
         d.put("Alb/02 Two.mp3", b"not really an mp3");
         let found = ["Alb/01 One.wav", "Alb/02 Two.mp3"].iter().map(|r| Ok((d.0.join(r), r.to_string(), Facts { album: Some("Alb".into()), artist: Some("A".into()), ..Facts::default() }))).collect();
         let p = plan_files("Mix", found);
@@ -1330,7 +1330,7 @@ mod tests {
         let d = music();
         std::fs::create_dir_all(d.0.join("Alb")).unwrap();
         crate::convert::tests::write_wav24(&d.0.join("Alb/01 Hi.wav"), 96_000, &crate::convert::tests::sine(96_000, 440.0, 0.5, 0.3, 2));
-        crate::opus_copy::tests::wav(&d.0.join("Alb/02 Cd.wav"), 44_100, 0.3);
+        crate::opus_copy_base::tests::wav(&d.0.join("Alb/02 Cd.wav"), 44_100, 0.3);
         let cd_size = std::fs::metadata(d.0.join("Alb/02 Cd.wav")).unwrap().len();
         let found = ["Alb/01 Hi.wav", "Alb/02 Cd.wav"].iter().map(|r| Ok((d.0.join(r), r.to_string(), Facts::default()))).collect();
         let p = plan_files("Hi", found);
@@ -1373,7 +1373,7 @@ mod tests {
     fn one_track_converted_goes_with_its_new_extension_or_not_at_all() {
         let d = music();
         std::fs::create_dir_all(d.0.join("Alb")).unwrap();
-        crate::opus_copy::tests::wav(&d.0.join("Alb/01 One.wav"), 44_100, 0.5);
+        crate::opus_copy_base::tests::wav(&d.0.join("Alb/01 One.wav"), 44_100, 0.5);
         let one_of = |rel: &str| plan_files("Alb", vec![Ok((d.0.join(rel), rel.to_string(), Facts::default()))]);
         let p = one_of("Alb/01 One.wav");
         let o = Options { tracks: true, format: Format::Mp3V0, lists: false, ..Options::default() };

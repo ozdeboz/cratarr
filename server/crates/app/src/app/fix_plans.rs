@@ -46,7 +46,7 @@ fn on_path(_: &Fix) -> bool {
 /// The sheet's title: the finding's ("Missing years"), or the record's intake.
 fn title_of(kind: &str) -> String {
     match kind.split_once(':') {
-        Some((FIX, finding)) => super::health::name_of(finding).to_string(),
+        Some((FIX, finding)) => super::health_base::name_of(finding).to_string(),
         _ => "Before adding".to_string(),
     }
 }

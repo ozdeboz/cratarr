@@ -223,7 +223,11 @@ impl Active {
 }
 
 /// The user data's keys for the catalogue its track ids are of, and the highest id given out (0101).
-const CATALOGUE_KEY: &str = "catalogue";
+/// A step a start runs once the first start is done (0.17's, `step_017::run`), with what the library knows by then: the
+/// catalogue, the user data, each catalogue folder's kind and the tag rules. Blocking.
+pub type Upgrade = fn(&Catalogue, &crate::userdata::UserData, &[(i64, LibraryKind)], &crate::catalogue::Rules) -> Result<()>;
+
+pub(super) const CATALOGUE_KEY: &str = "catalogue";
 const TOP_KEY: &str = "catalogue_top";
 
 /// What the user data remembers of the catalogue, against the catalogue open now.
@@ -355,7 +359,8 @@ fn kinds_of(f: &Folders, in_use: &crate::catalogue::InUse) -> Vec<(i64, LibraryK
 
 impl Library {
     /// `last_music`: where the Music libraries were last found (or CRATARR_PLAYLIST_DIR), used until a server answers.
-    /// `playlists_db`: where the playlists are kept (the user data).
+    /// `playlists_db`: where the playlists are kept (the user data). `upgrade`: 0.17's step (`step_017::run`), as App::new
+    /// hands it in; none, no step.
     pub(super) async fn new(
         data_dir: Option<String>,
         last_music: Option<String>,
@@ -363,6 +368,7 @@ impl Library {
         tag_rules: crate::catalogue::Rules,
         naming: Option<String>,
         playlists_db: Arc<crate::userdata::UserData>,
+        upgrade: Option<Upgrade>,
     ) -> Result<Arc<Self>> {
         let naming = naming.and_then(|t| {
             t.parse::<Template>().inspect_err(|e| tracing::warn!("the saved naming template is not usable ({e}); using the library's")).ok()
@@ -415,9 +421,11 @@ impl Library {
         // anything reads them. With the ids lost it waits, as the first start does. Failed, it stops the start as the first
         // start does: what it has not carried would be read as never known. The parts it did are done; the next start goes on
         // from the one that failed. Its credits part makes the albums as the library's builds will (the kinds, the tag rules).
-        if !catalogue.ids_lost() {
+        if let Some(upgrade) = upgrade
+            && !catalogue.ids_lost()
+        {
             let (cat, ud, rules) = (catalogue.clone(), playlists_db.clone(), tag_rules.clone());
-            crate::run::spawn_blocking(move || super::step_017::run(&cat, &ud, &kinds, &rules)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
+            crate::run::spawn_blocking(move || upgrade(&cat, &ud, &kinds, &rules)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
         }
         follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
         if !catalogue.ids_lost() {
@@ -813,11 +821,11 @@ impl Library {
 }
 
 #[cfg(test)]
-mod switched_off_tests {
+pub(super) mod switched_off_tests {
     use super::*;
 
     /// A data folder of a test's own, and its user data.
-    fn data_folder(name: &str) -> (PathBuf, Arc<crate::userdata::UserData>) {
+    pub(in crate::app) fn data_folder(name: &str) -> (PathBuf, Arc<crate::userdata::UserData>) {
         let d = std::env::temp_dir().join(format!("cratarr-library-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
         std::fs::create_dir_all(&d).unwrap();
@@ -826,34 +834,7 @@ mod switched_off_tests {
     }
 
     async fn started(d: &Path, db: &Arc<crate::userdata::UserData>) -> Result<Arc<Library>> {
-        Library::new(Some(d.to_string_lossy().to_string()), None, Vec::new(), Default::default(), None, db.clone()).await
-    }
-
-    fn lost(d: &Path) {
-        for file in ["catalogue.sqlite", "catalogue.sqlite-wal", "catalogue.sqlite-shm"] {
-            std::fs::remove_file(d.join(file)).ok();
-        }
-    }
-
-    /// A catalogue lost after the first start and started afresh is the user data's, though it gave no record then: taken for one
-    /// from before the first start, it would stop every start from then on. P3.6 (W3): while its ids are lost the step waits, its
-    /// credits part too (no mark); started afresh, it runs.
-    #[tokio::test]
-    async fn a_lost_catalogue_started_afresh_after_the_first_start_still_starts() {
-        let (d, db) = data_folder("afresh");
-        drop(started(&d, &db).await.unwrap());
-        assert!(db.first_start_done().unwrap());
-        lost(&d);
-        let lib = started(&d, &db).await.unwrap();
-        assert!(lib.catalogue().ids_lost());
-        assert!(lib.catalogue().meta("017:credits").is_none(), "the ids lost: the credits part waits");
-        lib.fresh_track_ids().unwrap();
-        drop(lib);
-        let lib = started(&d, &db).await.expect("it starts");
-        assert!(!lib.catalogue().ids_lost());
-        assert!(lib.catalogue().meta("017:credits").is_some(), "started afresh: the step and its credits part ran");
-        drop(lib);
-        std::fs::remove_dir_all(&d).ok();
+        Library::new(Some(d.to_string_lossy().to_string()), None, Vec::new(), Default::default(), None, db.clone(), None).await
     }
 
     /// Before the first start the records are still to come, and a mark that they were given would leave every row unmatched.
@@ -885,80 +866,16 @@ mod switched_off_tests {
     async fn a_catalogue_lost_before_the_first_start_is_no_first_start() {
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
         db.set_starred("ann", crate::userdata::Kind::Song, &["tr-5".to_string()], true).unwrap();
-        let lib = Library::new(None, None, Vec::new(), Default::default(), None, db.clone()).await.unwrap();
+        let lib = Library::new(None, None, Vec::new(), Default::default(), None, db.clone(), None).await.unwrap();
         assert!(lib.catalogue().ids_lost());
         assert!(!db.first_start_done().unwrap());
         assert_eq!(db.meta(CATALOGUE_KEY).unwrap(), None, "the restored catalogue is the one remembered");
 
         // Nothing named: a new data folder, with its report.
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
-        let lib = Library::new(None, None, Vec::new(), Default::default(), None, db.clone()).await.unwrap();
+        let lib = Library::new(None, None, Vec::new(), Default::default(), None, db.clone(), None).await.unwrap();
         assert!(!lib.catalogue().ids_lost());
         assert!(db.first_start_done().unwrap());
-    }
-
-    /// FX01's data folder (0.16.2's), and its user data.
-    fn data_0_16(name: &str) -> (PathBuf, Arc<crate::userdata::UserData>) {
-        let d = std::env::temp_dir().join(format!("cratarr-library-{name}-{}", std::process::id()));
-        std::fs::remove_dir_all(&d).ok();
-        crate::fixtures::data_0_16(&d).unwrap();
-        let db = Arc::new(crate::userdata::UserData::open(Some(&d.join("userdata.sqlite"))).unwrap());
-        (d, db)
-    }
-
-    /// The parts of 0.17's step marked done in a data folder's catalogue.
-    fn marks_017(d: &Path) -> Vec<String> {
-        let db = rusqlite::Connection::open(d.join("catalogue.sqlite")).unwrap();
-        let mut st = db.prepare("SELECT key FROM meta WHERE key GLOB '017:*' ORDER BY key").unwrap();
-        st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
-    }
-
-    /// R5: a start runs 0.17's step on a data folder 0.16.2 left: every part marked, the report there; a second start leaves
-    /// both as they were.
-    #[tokio::test]
-    async fn a_start_runs_the_step_and_leaves_its_marks() {
-        let (d, db) = data_0_16("step-runs");
-        drop(started(&d, &db).await.unwrap());
-        let marks = marks_017(&d);
-        assert_eq!(marks.len(), crate::catalogue::records::PARTS_017.len() + 3, "and the band waves', the credits' and the fold's: {marks:?}");
-        let report = db.migration_report().unwrap()[crate::app::step_017::PART].clone();
-        drop(started(&d, &db).await.unwrap());
-        assert_eq!((marks_017(&d), db.migration_report().unwrap()[crate::app::step_017::PART].clone()), (marks, report));
-        std::fs::remove_dir_all(&d).ok();
-    }
-
-    /// R5: with the catalogue's ids lost, the step waits, as the first start does: nothing marked, no report, no reference.
-    #[tokio::test]
-    async fn the_step_waits_while_the_ids_are_lost() {
-        let (d, db) = data_0_16("step-waits");
-        db.set_meta(CATALOGUE_KEY, "another catalogue").unwrap();
-        let lib = started(&d, &db).await.unwrap();
-        assert!(lib.catalogue().ids_lost());
-        assert!(marks_017(&d).is_empty());
-        assert!(!db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
-        assert_eq!(rusqlite::Connection::open(d.join("catalogue.sqlite")).unwrap().query_row("SELECT count(*) FROM \"references\"", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        drop(lib);
-        std::fs::remove_dir_all(&d).ok();
-    }
-
-    /// R2: 0.17's step failing stops the start, as 0.16's first start does, the parts before the one that failed done; once
-    /// what stood in its way is gone, the next start finishes it.
-    #[tokio::test]
-    async fn a_step_that_fails_stops_the_start() {
-        let (d, db) = data_0_16("step-fails");
-        let catalogue = || rusqlite::Connection::open(d.join("catalogue.sqlite")).unwrap();
-        catalogue().execute_batch("CREATE TRIGGER no_pages BEFORE INSERT ON meta WHEN NEW.key = '017:pages' BEGIN SELECT RAISE(ABORT, 'no room for the pages'); END;").unwrap();
-        let marks = || marks_017(&d);
-        let err = started(&d, &db).await.err().expect("the start stops");
-        assert!(format!("{err:#}").contains("0.17's step did not finish"), "{err:#}");
-        assert_eq!(marks(), ["017:certain", "017:discography", "017:discogs", "017:files", "017:hand", "017:likely", "017:links"], "the parts before the pages done");
-        assert!(!db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
-
-        catalogue().execute_batch("DROP TRIGGER no_pages").unwrap();
-        drop(started(&d, &db).await.expect("it starts"));
-        assert_eq!(marks().len(), crate::catalogue::records::PARTS_017.len() + 3, "and the band waves', the credits' and the fold's");
-        assert!(db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
-        std::fs::remove_dir_all(&d).ok();
     }
 
     /// CR3: crates, queues and waiting jobs name albums too, in a store no table scan sees.
@@ -1034,7 +951,7 @@ mod switched_off_tests {
         let d = std::env::temp_dir().join(format!("cratarr-mains-{}", std::process::id()));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
-        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
+        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db, None).await.unwrap();
         assert_eq!(lib.main_folders(), [0]);
         assert!(lib.is_main(0));
         assert!(!lib.is_main(1) && !lib.is_main(-1), "no folder there");

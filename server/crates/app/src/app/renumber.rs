@@ -12,6 +12,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use super::musicbrainz::Asked as _;
+pub(super) use super::renumber_base::file_name;
+pub use super::renumber_base::ReleaseFacts;
+pub(super) use super::renumber_base::{Medium, Release, discogs_release};
 
 /// A track matches a release's when their lengths are this close (s).
 const LENGTH_SLACK: i64 = 5;
@@ -53,14 +56,6 @@ pub struct Row {
     pub title: String,
     pub now: Now,
     pub to: At,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ReleaseFacts {
-    pub title: String,
-    pub format: String,
-    pub country: Option<String>,
-    pub year: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,22 +103,12 @@ fn kind_of(format: &str) -> Kind {
     }
 }
 
-/// A release's medium: its tracks' titles and lengths (s), in order.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct Medium {
-    pub(super) format: String,
-    pub(super) tracks: Vec<(String, Option<u32>)>,
+/// A release's kind, here, as `Release` sits in base, below the kinds Renumber prefers.
+trait Kinded {
+    fn kind(&self) -> Kind;
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct Release {
-    /// MusicBrainz's id (none for a Discogs release).
-    pub(super) id: String,
-    pub(super) facts: ReleaseFacts,
-    pub(super) media: Vec<Medium>,
-}
-
-impl Release {
+impl Kinded for Release {
     /// Its kind: by its first medium's format (a release of mixed media is rare).
     fn kind(&self) -> Kind {
         self.media.first().map_or(Kind::Other, |m| kind_of(&m.format))
@@ -278,47 +263,6 @@ pub(super) async fn group_releases(http: &reqwest::Client, rg: &str) -> Result<V
 
 // ---- Discogs
 
-/// "4:05" as seconds.
-pub(super) fn duration(s: &str) -> Option<u32> {
-    let mut secs = 0u32;
-    for part in s.trim().split(':') {
-        secs = secs * 60 + part.trim().parse::<u32>().ok()?;
-    }
-    (secs > 0).then_some(secs)
-}
-
-/// A Discogs tracklist position's medium: "2-5" disc 2, "B3" side B, "3" the one.
-fn medium_of(position: &str) -> String {
-    let p = position.trim();
-    if let Some((d, _)) = p.split_once(['-', '.']) {
-        return d.to_string();
-    }
-    p.chars().take_while(|c| c.is_ascii_alphabetic()).collect()
-}
-
-pub(super) fn discogs_release(v: &Value) -> Release {
-    let format = v["formats"].as_array().and_then(|f| f.first()).and_then(|f| f["name"].as_str()).unwrap_or_default().to_string();
-    let mut media: Vec<(String, Medium)> = Vec::new();
-    for t in v["tracklist"].as_array().into_iter().flatten().filter(|t| t["type_"].as_str().is_none_or(|k| k == "track")) {
-        let key = medium_of(t["position"].as_str().unwrap_or_default());
-        let track = (t["title"].as_str().unwrap_or_default().to_string(), t["duration"].as_str().and_then(duration));
-        match media.last_mut() {
-            Some((k, m)) if *k == key => m.tracks.push(track),
-            _ => media.push((key, Medium { format: format.clone(), tracks: vec![track] })),
-        }
-    }
-    Release {
-        id: String::new(),
-        facts: ReleaseFacts {
-            title: v["title"].as_str().unwrap_or_default().to_string(),
-            format,
-            country: v["country"].as_str().map(str::to_string),
-            year: v["year"].as_u64().filter(|y| *y > 0).map(|y| y as u32),
-        },
-        media: media.into_iter().map(|(_, m)| m).collect(),
-    }
-}
-
 /// The master's releases, the likeliest formats first (files, CDs, records), a few read.
 async fn discogs(rg: Option<&str>, artist: &str, title: &str, tell: &(dyn Fn(u64, Option<u64>) + Sync)) -> Result<Vec<Release>> {
     let Some(master) = super::discogs::master_of(rg, artist, title).await? else { return Ok(Vec::new()) };
@@ -356,10 +300,6 @@ fn row_tracks(lib: &crate::serve::library::Library, album: &str) -> Result<Vec<T
             Ok(Track { id, file: file_name(&rel), path: Path::new(root).join(&rel), place: (folder, rel), title, secs: (ms / 1000) as u32, disc, track })
         })
         .collect()
-}
-
-pub(super) fn file_name(rel: &str) -> String {
-    Path::new(rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.to_string())
 }
 
 /// What a writer writes to: every file of a record, or of its copy at (catalogue folder, folder in it) alone. A track's files
@@ -661,6 +601,7 @@ pub fn off(numbers: &[(Option<u32>, Option<u32>)], gaps: bool) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::renumber_base::medium_of;
 
     #[test]
     fn an_album_that_lost_its_disc_numbers_is_told() {

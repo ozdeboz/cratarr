@@ -6,27 +6,40 @@ pub mod accounts;
 pub use cratarr_gate::serve::api;
 pub use cratarr_gate::serve::art;
 pub mod auth_check;
+pub mod backup_list_write;
+pub mod classical_stamp;
+pub mod classical_works;
 pub use cratarr_gate::serve::copies;
+pub mod device_index_settled;
 pub mod files;
 pub use cratarr_gate::serve::ids;
 pub mod import;
+pub mod import_job;
 pub use cratarr_gate::serve::index_rows;
 pub mod ldap;
 pub use cratarr_gate::serve::library;
 pub mod library_api;
 pub use cratarr_gate::serve::listener;
+pub mod opus_copy_crc;
 pub mod playlists;
+pub mod playlists_row;
 pub use cratarr_gate::serve::proxy;
 pub mod queues;
+pub mod queues_sessions;
 pub use cratarr_gate::serve::rate;
 pub use cratarr_gate::serve::read;
+pub mod requests_kept;
 pub mod review;
 pub mod routes;
+pub mod services;
+#[cfg(test)]
+mod served_tests_api;
 pub mod sessions;
 pub mod signin;
 pub mod users;
 pub use cratarr_gate::serve::view;
 pub use cratarr_gate::serve::who;
+pub mod words_stamp;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -93,7 +106,7 @@ pub struct Serve {
     /// Cratarr source can answer while the app starts (decision 0032).
     catalogue_cell: std::sync::OnceLock<Arc<Catalogue>>,
     /// Imports from media servers into the user data (decision 0030, amended 2026-10-15).
-    pub import: import::Importer,
+    pub import: import_job::Importer,
     rules: RwLock<Rules>,
     /// When the library was last built, epoch seconds (`getIndexes`' `lastModified`).
     built_at: RwLock<i64>,
@@ -107,23 +120,25 @@ pub struct Serve {
     /// One cover resized at a time: a client asks for hundreds at once, and decoding one takes tens of megabytes.
     resizing: tokio::sync::Semaphore,
     /// Cratarr's playlist service, once the app is up (`set_playlists`): the Subsonic playlists are its files.
-    playlists: std::sync::OnceLock<Arc<crate::app::PlaylistService>>,
+    playlists: std::sync::OnceLock<Arc<dyn services::Playlists>>,
     /// Playlists a client emptied, waiting briefly for the call that refills them (`playlists::Held`).
     pub held: playlists::Held,
     /// What the Subsonic apps report playing (`getNowPlaying`).
-    pub now_playing: queues::Sessions,
+    pub now_playing: queues_sessions::Sessions,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
-    incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
+    incoming: std::sync::OnceLock<Arc<dyn services::Incoming>>,
     /// Cratarr's players, once the app is up (`set_play_on`): an account's devices, and what plays for getNowPlaying.
-    play_on: std::sync::OnceLock<Arc<crate::app::PlayOn>>,
+    play_on: std::sync::OnceLock<Arc<dyn services::Players>>,
     /// Each album's cover stamp (0.9.7, `cover_stamps`), as of the last build; read from the library when first asked.
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
     /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
-    device: std::sync::Mutex<crate::app::device_index::Settled>,
+    device: std::sync::Mutex<device_index_settled::Settled>,
     /// Who asked for what, as last read (`app::requests::requesters`, R30).
-    requesters: std::sync::Mutex<crate::app::requests::KeptRequesters>,
+    requesters: std::sync::Mutex<requests_kept::KeptRequesters>,
+    /// What the crates' facts take from the app, once the app is made (`set_facts_from`).
+    facts_from: std::sync::OnceLock<Arc<dyn services::FactsFrom>>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -183,7 +198,7 @@ impl Serve {
             directory: ldap::Directory::open(data_dir)?,
             throttle: Default::default(),
             catalogue_cell: Default::default(),
-            import: import::Importer::default(),
+            import: import_job::Importer::default(),
             rules: RwLock::new(rules),
             built_at: RwLock::new(now()),
             built: tokio::sync::watch::channel(0).0,
@@ -199,6 +214,7 @@ impl Serve {
             covers: tokio::sync::broadcast::channel(16).0,
             device: Default::default(),
             requesters: Default::default(),
+            facts_from: Default::default(),
         }))
     }
 
@@ -284,7 +300,7 @@ impl Serve {
             if !folder.is_dir() || name.starts_with('.') || name == account {
                 continue;
             }
-            others.push(format!("{}/{}", crate::source::cratarr::KIND.id, folder.display()));
+            others.push(format!("{}/{}", crate::source::CRATARR, folder.display()));
         }
         if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &others) {
             tracing::warn!("others' own music not switched off for {account}: {e:#}");
@@ -309,7 +325,7 @@ impl Serve {
     /// The song an id stands for now: one a take retired names the track that took it, and a queue or an app's list can hold
     /// it long after (`Listener::song` plays it). Any other id is as given. Blocking.
     pub fn song_now(&self, id: &str) -> String {
-        let taken = self.catalogue_cell.get().and_then(|c| c.track_of_source(crate::source::cratarr::KIND.id, id));
+        let taken = self.catalogue_cell.get().and_then(|c| c.track_of_source(crate::source::CRATARR, id));
         taken.map_or_else(|| id.to_string(), ids::song)
     }
 
@@ -341,7 +357,7 @@ impl Serve {
     }
 
     /// Track rows with their record's type (GOTO.S1), one read for them all (GOTO.S6). Blocking.
-    pub fn with_types(&self, rows: &mut [crate::app::PlaylistRow]) {
+    pub fn with_types(&self, rows: &mut [playlists_row::PlaylistRow]) {
         let mut ids: Vec<String> = rows.iter().filter_map(|r| r.album_id.clone()).collect();
         ids.sort();
         ids.dedup();
@@ -363,11 +379,11 @@ impl Serve {
         Ok(self.catalogue_cell.get().map(|c| c.artist_of(name)).transpose()?.flatten().map(ids::artist))
     }
 
-    pub fn set_playlists(&self, service: Arc<crate::app::PlaylistService>) {
+    pub fn set_playlists(&self, service: Arc<dyn services::Playlists>) {
         let _ = self.playlists.set(service);
     }
 
-    pub fn playlists(&self) -> Option<&Arc<crate::app::PlaylistService>> {
+    pub fn playlists(&self) -> Option<&Arc<dyn services::Playlists>> {
         self.playlists.get()
     }
 
@@ -385,20 +401,25 @@ impl Serve {
         }
     }
 
-    pub fn set_incoming(&self, service: Arc<crate::app::IncomingService>) {
+    pub fn set_incoming(&self, service: Arc<dyn services::Incoming>) {
         let _ = self.incoming.set(service);
     }
 
-    pub fn incoming(&self) -> Option<&Arc<crate::app::IncomingService>> {
+    pub fn incoming(&self) -> Option<&Arc<dyn services::Incoming>> {
         self.incoming.get()
     }
 
-    pub fn set_play_on(&self, on: Arc<crate::app::PlayOn>) {
+    pub fn set_play_on(&self, on: Arc<dyn services::Players>) {
         let _ = self.play_on.set(on);
     }
 
-    pub fn play_on(&self) -> Option<&Arc<crate::app::PlayOn>> {
+    pub fn play_on(&self) -> Option<&Arc<dyn services::Players>> {
         self.play_on.get()
+    }
+
+    /// What the crates' facts take from the app (`services::FactsFrom`), set as the app is made: until then they have none of it.
+    pub fn set_facts_from(&self, from: Arc<dyn services::FactsFrom>) {
+        let _ = self.facts_from.set(from);
     }
 
     /// Tests elsewhere: the covers' stamps as a build's end leaves them.
@@ -414,12 +435,12 @@ impl Serve {
     }
 
     /// Who asked for what, as last read (`app::requests::requesters`).
-    pub fn requesters_kept(&self) -> std::sync::MutexGuard<'_, crate::app::requests::KeptRequesters> {
+    pub fn requesters_kept(&self) -> std::sync::MutexGuard<'_, requests_kept::KeptRequesters> {
         self.requesters.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// A device's index being made: until this goes, another waits, as two would hold twice what one does. Blocking.
-    pub fn device_turn(&self) -> std::sync::MutexGuard<'_, crate::app::device_index::Settled> {
+    pub fn device_turn(&self) -> std::sync::MutexGuard<'_, device_index_settled::Settled> {
         self.device.lock().unwrap_or_else(|p| p.into_inner())
     }
 
@@ -506,7 +527,7 @@ impl Serve {
         self.built_now(why, whole, folders, change == library::Change::Songs)?;
         // The backup's list of shared copies anew (C41): what a Delete, a move or an emptied trash changed of the copies' originals,
         // the build has read.
-        if let Err(e) = crate::app::backup_list::write_for(self) {
+        if let Err(e) = backup_list_write::write_for(self) {
             tracing::warn!(target: "library", "the backup's list of shared copies was not written: {e:#}");
         }
         Ok(true)
@@ -1022,19 +1043,19 @@ impl view::ServeView for Serve {
         Serve::reread(self, paths)
     }
     fn words_stamp(&self) -> i64 {
-        crate::app::words::stamp(self)
+        words_stamp::stamp(self)
     }
     fn classical_stamp(&self) -> i64 {
-        crate::app::classical::stamp(self)
+        classical_stamp::stamp(self)
     }
     fn add_classical(&self, facts: &mut [crate::crates::Facts]) -> Result<()> {
-        crate::app::classical::add_kind(self, facts)
+        self.facts_from.get().map_or(Ok(()), |f| f.add_classical(self, facts))
     }
     fn add_words(&self, album_of: &std::collections::HashMap<String, String>, facts: &mut [crate::crates::Facts]) -> Result<()> {
-        crate::app::words::build(self, album_of, facts)
+        self.facts_from.get().map_or(Ok(()), |f| f.add_words(self, album_of, facts))
     }
     fn kept_labels(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
-        crate::app::discogs_facts::kept_labels(self)
+        self.facts_from.get().map_or_else(|| Ok(Default::default()), |f| f.kept_labels(self))
     }
 }
 
@@ -1043,15 +1064,20 @@ pub fn form_urlencoded_segment(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The tests' helpers, shared with those moved up out of this file (`served_tests_*`; test-support for the crates above).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::{Serve, ids};
+    use crate::catalogue::{Catalogue, Rules};
     use crate::serve::copies::Kind;
-    use crate::userdata::{Heard, Kind as Item};
-    use std::path::Path;
+    use crate::userdata::Kind as Item;
 
     /// A server on two kept folders with a catalogue of them, for a test named `name`.
-    fn on_two_folders(name: &str) -> ([PathBuf; 2], Arc<Catalogue>, Arc<Serve>) {
+    pub fn on_two_folders(name: &str) -> ([PathBuf; 2], Arc<Catalogue>, Arc<Serve>) {
         let roots = [0, 1].map(|n| std::env::temp_dir().join(format!("cratarr-serve-{name}-{n}-{}", std::process::id())));
         for root in &roots {
             std::fs::remove_dir_all(root).ok();
@@ -1065,7 +1091,7 @@ mod tests {
     }
 
     /// These files, (path, title), of one album, as the catalogue holds them once read and identified.
-    fn add(cat: &Catalogue, root: &Path, folder: i64, files: &[(&str, &str)]) {
+    pub fn add(cat: &Catalogue, root: &Path, folder: i64, files: &[(&str, &str)]) {
         for (rel, _) in files {
             std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
             std::fs::write(root.join(rel), rel).unwrap();
@@ -1079,15 +1105,36 @@ mod tests {
     }
 
     /// A check that finds something new, a second after the last: the walk reads a file's time in whole seconds.
-    fn checked_again(serve: &Serve) {
+    pub fn checked_again(serve: &Serve) {
         std::thread::sleep(Duration::from_millis(1100));
         serve.catalogue().changed_outside_pass();
         serve.refresh().unwrap();
     }
 
-    fn plays_of(serve: &Serve, song: &str) -> u32 {
+    pub fn plays_of(serve: &Serve, song: &str) -> u32 {
         serve.userdata.get("me", Item::Song, &[song.to_string()]).unwrap().get(song).map_or(0, |a| a.play_count)
     }
+
+    /// The record a folder's album is, as the build gave it.
+    pub fn record_in(serve: &Serve, folder: i64, dir: &str) -> i64 {
+        ids::record_number(&serve.library.album_in(folder, dir).unwrap().expect("built")).unwrap()
+    }
+
+    /// A record not had of `add`'s album's names ("Artist", "Album"), as a list keeps it: of `kind`, holding `refs`.
+    pub fn listed(cat: &Catalogue, kind: &str, refs: &[(&str, &str, &str)]) -> i64 {
+        use crate::catalogue::records::{Listing, Ref};
+        let artist = cat.artist_for("Artist").unwrap();
+        let l = Listing { title: "Album".into(), artist: "Artist".into(), kind: Some(kind.into()), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() };
+        cat.keep_listing(Some(artist), &[l], "link").unwrap()[0]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::testing::*;
+    use crate::serve::copies::Kind;
+    use crate::userdata::{Heard, Kind as Item};
 
     /// N1: `identify` hands a new file an id retired before there were records, plays and all, and the take then takes it. The
     /// plays go to the record's track at the same build, and nothing is left to follow.
@@ -1104,7 +1151,7 @@ mod tests {
         cat.walk_all();
         cat.gone_long_ago_for_tests();
         cat.identify().unwrap();
-        assert!(cat.track_of_source(crate::source::cratarr::KIND.id, &song).is_none(), "retired");
+        assert!(cat.track_of_source(crate::source::CRATARR, &song).is_none(), "retired");
 
         serve.refresh().unwrap();
         let track = cat.track_of(0, "A/01 One.flac").unwrap();
@@ -1142,19 +1189,6 @@ mod tests {
         assert_eq!((plays_of(&serve, &is), plays_of(&serve, &was)), (2, 0), "both plays on the one chosen, none left");
         assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
-    /// The record a folder's album is, as the build gave it.
-    fn record_in(serve: &Serve, folder: i64, dir: &str) -> i64 {
-        ids::record_number(&serve.library.album_in(folder, dir).unwrap().expect("built")).unwrap()
-    }
-
-    /// A record not had of `add`'s album's names ("Artist", "Album"), as a list keeps it: of `kind`, holding `refs`.
-    fn listed(cat: &Catalogue, kind: &str, refs: &[(&str, &str, &str)]) -> i64 {
-        use crate::catalogue::records::{Listing, Ref};
-        let artist = cat.artist_for("Artist").unwrap();
-        let l = Listing { title: "Album".into(), artist: "Artist".into(), kind: Some(kind.into()), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() };
-        cat.keep_listing(Some(artist), &[l], "link").unwrap()[0]
     }
 
     /// RF1 (RB5's first scenario): a record's type set by hand is the type it is had by. The owner's untagged eight versions of one
@@ -1217,7 +1251,7 @@ mod tests {
     /// an answer's rows; and the reader works nothing out: its body names none of the three classifiers.
     #[test]
     fn the_library_list_and_its_tracks_say_one_type() {
-        use crate::app::PlaylistRow;
+        use crate::serve::playlists_row::PlaylistRow;
         let (roots, cat, serve) = on_two_folders("goto-types");
         add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
         serve.refresh().unwrap();
@@ -1246,34 +1280,6 @@ mod tests {
         for classifier in ["release_type_of", "type_by_files", "type_by_rule"] {
             assert!(!body.contains(classifier), "GOTO.S4: no second classifier: {classifier}");
         }
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
-    /// Found missing tracks (`app::incomplete`: its whole release eight), the build types it as that release, an album, and the
-    /// catalogue keeps that type: the album's record of its name, MusicBrainz's, is held by it, partly there (three of eight), and off
-    /// the artist's missing list. Never: the album read missing beside its own partial copy once it is found short.
-    #[test]
-    fn a_partial_copy_holds_its_album_record_partly_there() {
-        use crate::app::requests::{Holding, holding_of};
-        let (roots, cat, serve) = on_two_folders("rf1-partly");
-        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two"), ("A/03 Three.flac", "Three")]);
-        serve.refresh().unwrap();
-        let owned = record_in(&serve, 0, "A");
-        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006201")]);
-        let list: Vec<crate::catalogue::identity::RefTrack> =
-            (1..=8).map(|n| crate::catalogue::identity::RefTrack { disc: 1, position: n, title: format!("Track {n}"), length_ms: Some(200_000), recording: None }).collect();
-        cat.set_reference_tracks(album, "musicbrainz", &list).unwrap();
-        cat.set_counting(album, Some("musicbrainz"), false).unwrap();
-        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "three short tracks: a single, until found short");
-        assert_eq!(cat.requested(&[album]).unwrap()[&album].holder, None);
-        serve.userdata.set_album_complete(&ids::record(owned), Some(r#"{"of":8,"has":3,"release":"Album","missing":[]}"#), Some(1), 100).unwrap();
-        serve.refresh().unwrap();
-        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "typed as its whole release");
-        let q = cat.requested(&[album]).unwrap().remove(&album).unwrap();
-        assert_eq!(q.holder, Some(owned), "the album had by its partial copy");
-        assert_eq!(holding_of(&q, |_| crate::settings::LibraryKind::Main), Holding::Partly { has: 3, of: 8 }, "partly there");
-        let artist = cat.artist_for("Artist").unwrap();
-        assert!(cat.missing_of(artist).unwrap().iter().all(|m| m.row.id != album), "off the missing list");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
@@ -1440,43 +1446,6 @@ mod tests {
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
-    /// An old id plays on, in a queue no take reached, and what is heard of it counts on the track that took it.
-    #[test]
-    fn a_play_on_a_taken_id_counts_on_the_track_that_took_it() {
-        let (roots, cat, serve) = on_two_folders("heard-taken");
-        let one = [("A/01 One.flac", "One")];
-        add(&cat, &roots[0], 0, &one);
-        add(&cat, &roots[1], 1, &one);
-        serve.refresh().unwrap();
-        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
-        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
-        assert!(crate::app::listening::heard_blocking(&serve, "me", &old, &Heard::counted(100)).unwrap(), "heard");
-        assert_eq!((plays_of(&serve, &stays), plays_of(&serve, &old)), (1, 0));
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
-    /// An app's saved list can hold an old id too: a heart or a rating left on it sits on an id no list shows, and once followed
-    /// nothing moves it.
-    #[tokio::test]
-    async fn a_heart_and_a_rating_on_a_taken_id_land_on_the_track_that_took_it() {
-        let (roots, cat, serve) = on_two_folders("star-taken");
-        let one = [("A/01 One.flac", "One")];
-        add(&cat, &roots[0], 0, &one);
-        add(&cat, &roots[1], 1, &one);
-        serve.refresh().unwrap();
-        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
-        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
-        serve.users.set("me", "a password").unwrap();
-        let me = serve.users.get("me").unwrap();
-        for (method, query) in [("star", format!("id={old}")), ("setRating", format!("id={old}&rating=4"))] {
-            let said = routes::handle(&serve, &me, method, &routes::Params::parse(Some(&query), &[]), &HeaderMap::new()).await;
-            assert!(said.is_ok(), "{method}");
-        }
-        let a = serve.userdata.get("me", Item::Song, &[stays.clone()]).unwrap().remove(&stays).unwrap_or_default();
-        assert_eq!((a.starred_at.is_some(), a.rating), (true, 4));
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
     /// What names a taken track moves once, whatever stops in between: the mark comes after, and going over it changes nothing.
     #[test]
     fn a_stop_before_the_mark_loses_nothing_and_counts_nothing_twice() {
@@ -1518,24 +1487,6 @@ mod tests {
         assert!(serve.library.roots().contains(&(1, renamed.display().to_string())), "{:?}", serve.library.roots());
         std::fs::remove_dir_all(&roots[0]).ok();
         std::fs::remove_dir_all(&renamed).ok();
-    }
-
-    /// Two records tagged alike, a track more making the second one, are told apart by their ids alone. One's library taken away, a
-    /// persistent id on one song reads as a rebuilt catalogue would, and a play went over to the other record and never came back.
-    #[test]
-    fn what_lies_on_a_track_away_with_its_library_stays_on_it() {
-        let (roots, cat, serve) = on_two_folders("away");
-        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One")]);
-        add(&cat, &roots[1], 1, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
-        checked_again(&serve);
-        let song_in = |folder: i64| ids::song(cat.track_of(folder, "A/01 One.flac").unwrap());
-        let (here, away) = (song_in(0), song_in(1));
-        assert_ne!(here, away, "two records");
-        crate::app::listening::heard_blocking(&serve, "me", &away, &Heard::counted(100)).unwrap();
-        cat.set_folders(vec![roots[0].clone()]).unwrap();
-        checked_again(&serve);
-        assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
     /// Run 12's close (0101 point 6): an account new here has every other account's own music off, however many there are; never

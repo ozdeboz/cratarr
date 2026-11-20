@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use super::file_runs::{self, Proposal, flat};
+use super::base_host::BaseHost;
+use super::file_runs_base::{self, Proposal, flat};
 use super::words::store::{Kind, Source};
 use crate::journal::{FileWrite, RunRecord};
 
@@ -87,7 +88,7 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
 }
 
 /// `proposal`, from these words.
-fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
+pub(super) fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
     let field = field_of(kind);
     let cat = serve.catalogue();
     let roots = cat.folders();
@@ -105,7 +106,7 @@ fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind:
     for row in rows {
         let (album, title, artist, song, folder, rel, track) = row?;
         // A copy with tracks of its own has no `songs` row, and the record's words are its too.
-        let track = track.unwrap_or_else(|| super::renumber::file_name(&rel));
+        let track = track.unwrap_or_else(|| super::renumber_base::file_name(&rel));
         if albums.is_some_and(|a| !a.contains(&album)) {
             continue;
         }
@@ -154,38 +155,44 @@ fn kind_of(plan: &str) -> Result<Kind> {
 }
 
 /// The review sheet: every record whose files differ (only `albums` where given).
-pub async fn plan(plan: &str, albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
+pub async fn plan(plan: &str, albums: Option<Vec<String>>) -> Result<file_runs_base::PlanView> {
     let kind = kind_of(plan)?;
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let p = crate::run::spawn_blocking(move || proposal(&served, kind, albums.as_deref())).await??;
-    Ok(file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
+    Ok(file_runs_base::view(&p.kind, &p.title, &p.records, &p.files, false))
 }
 
 /// The ticked records written (an administrator's apply on the review sheet), each set aside where it is no longer what
 /// the sheet showed (its stamp): a run on the one path.
-pub async fn apply(app: &Arc<super::App>, plan: &str, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
+pub async fn apply<H: BaseHost + ?Sized>(app: &Arc<H>, plan: &str, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs_base::Status> {
+    let p = ticked_proposal(plan, albums, stamps, &|name| app.run_busy(name)).await?;
+    Ok(app.clone().start_run(p))
+}
+
+/// What `apply` runs: the ticked records' proposal, refused while a run of the same writer waits or writes (`busy`).
+async fn ticked_proposal(plan: &str, albums: Vec<String>, stamps: Option<HashMap<String, String>>, busy: &(dyn Fn(&str) -> bool + Sync)) -> Result<Proposal> {
     let kind = kind_of(plan)?;
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
     let name = format!("{PREFIX}{}", kind.name());
-    anyhow::ensure!(!file_runs::busy(&app.journal, &name), "Already writing");
+    anyhow::ensure!(!busy(&name), "Already writing");
     let p = crate::run::spawn_blocking(move || -> Result<Proposal> {
         if !super::words::catalogue::writes(&served, kind.name()) {
             bail!("Writing {}s into the files is switched off", kind.name());
         }
-        Ok(file_runs::ticked(proposal(&served, kind, Some(&albums))?, &albums, stamps.as_ref()))
+        Ok(file_runs_base::ticked(proposal(&served, kind, Some(&albums))?, &albums, stamps.as_ref()))
     })
     .await??;
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Nothing differs");
-    Ok(file_runs::start(app, p))
+    Ok(p)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::app::words::store::Word;
 
-    fn w(word: &str, sources: &[Source]) -> Word {
+    pub(crate) fn w(word: &str, sources: &[Source]) -> Word {
         Word { word: word.into(), sources: sources.to_vec() }
     }
 
@@ -207,24 +214,6 @@ mod tests {
             assert!(proposal(&serve, kind, None).unwrap().files.is_empty(), "no words stored: nothing to write");
         }
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// A word is the record's or its track's: every copy's file gets it, and a copy on tracks of its own the record's.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_word_reaches_every_copy_and_its_undo_takes_it_out() {
-        use super::super::every_copy::{app, tag, two_copies, undone, written};
-        use super::super::words::store::{KindWords, Words};
-        for shared in [true, false] {
-            let (c, app) = (two_copies(&format!("words-{shared}"), shared), app(&format!("words-{shared}")).await);
-            let words = Words { kinds: vec![KindWords { kind: Kind::Mood, hand: false, words: vec![w("Calm", &[Source::Hand])] }], tracks: Vec::new() };
-            let stored = super::super::words::Stored { records: std::collections::HashMap::from([(c.album.clone(), words)]), ..Default::default() };
-            let p = proposal_of(&c.serve, &stored, Kind::Mood, None).unwrap();
-            assert_eq!(p.files.len(), 4, "every file of both copies");
-            let token = written(&app, p).await;
-            assert!(c.files().iter().all(|f| tag(f, "mood") == ["Calm"]));
-            undone(&app, &token).await;
-            assert!(c.files().iter().all(|f| tag(f, "mood").is_empty()));
-        }
     }
 
     #[test]

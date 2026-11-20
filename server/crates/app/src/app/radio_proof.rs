@@ -4,7 +4,7 @@
 //! each run on its own copy of one data folder (it is opened as a server opens it, so never the folder itself):
 //!
 //! `PROOF_DATA=<a copy> PROOF_NOW=<epoch s> PROOF_SEED=<n> PROOF_OUT=<file> <test binary> --ignored --exact
-//! app::radio::proof::answers_of_a_data_folder`, and `PROOF_TRACKS=<n>` for how many tracks seed Radio, spread over the
+//! app::radio_proof::answers_of_a_data_folder`, and `PROOF_TRACKS=<n>` for how many tracks seed Radio, spread over the
 //! library (300 unless said; a test binary is slow on a whole library).
 //!
 //! `now` and the seed come from outside and every case takes a fresh generator, so one change stays one change. No pass
@@ -14,16 +14,18 @@
 //!
 //! `the_same_seed_gives_the_same_answer_end_to_end` is the proof on the fixture library, in the gate.
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use cratarr_rules::index::Marks;
 use cratarr_rules::index::device::Device;
 use cratarr_rules::radio::DEFAULT_COUNT;
 
-use super::*;
+use super::play::Rng;
+use super::radio::*;
 use crate::app::App;
 use crate::catalogue::AudioMuseRow;
 use crate::crates::{self, Condition, Value};
@@ -71,7 +73,7 @@ fn who(served: &Serve, account: &str) -> Who {
     Who { user: account.to_string(), admin: served.users.get(account).is_some_and(|u| u.admin), scope: Scope::Full, home: true }
 }
 
-fn crate_within(id: &str) -> super::super::play::Collection {
+fn crate_within(id: &str) -> super::play::Collection {
     Within::Crate { id: id.to_string(), without: Vec::new() }.collection()
 }
 
@@ -93,7 +95,7 @@ async fn crates_of(app: &Arc<App>, account: &str) -> (Vec<String>, Vec<String>) 
     made.extend(app.playlists.crate_fits().await.unwrap().into_iter().map(|f| f.crate_id));
     made.extend(ids.iter().cloned());
     for id in made {
-        out.push(match super::super::play::own_songs(app, &crate_within(&id), Some(account)).await {
+        out.push(match super::play::own_songs(app, &crate_within(&id), Some(account)).await {
             Ok(tracks) => format!("{account}\tplays\t{id}\t{}", tracks.join(" ")),
             // A crate that cannot be made now is an answer too, and must stay one.
             Err(e) => format!("{account}\tplays\t{id}\tnot made: {e:?}"),
@@ -141,8 +143,8 @@ async fn picks_of(app: &Arc<App>, account: &str, crates: &[String], seed: u64, t
         Ok((req, _, _)) => req.ask,
         Err(e) => return vec![format!("{account}\tradio\trefused: {e:?}")],
     };
-    let plain = with_taste(app, index.clone(), Some(account), false).await.unwrap();
-    let tasted = with_taste(app, index, Some(account), true).await.unwrap();
+    let plain = with_taste(&**app, index.clone(), Some(account), false).await.unwrap();
+    let tasted = with_taste(&**app, index, Some(account), true).await.unwrap();
     let asking = Asking { account, plain: &plain, tasted: &tasted, recent: &recent, asked, seed };
     let mut out = Vec::new();
     let step = (plain.songs.len() / tracks.max(1)).max(1);
@@ -151,7 +153,7 @@ async fn picks_of(app: &Arc<App>, account: &str, crates: &[String], seed: u64, t
         out.extend(asking.lines("-", None, &album, &song.id));
     }
     for id in crates {
-        let Ok(songs) = super::super::play::own_songs(app, &crate_within(id), Some(account)).await else { continue };
+        let Ok(songs) = super::play::own_songs(app, &crate_within(id), Some(account)).await else { continue };
         let places = plain.find(&songs);
         let Some(&first) = places.first() else { continue };
         let track = plain.songs[first].id.clone();
@@ -326,7 +328,7 @@ async fn crates_against(app: &Arc<App>, device: &mut Device, account: &str, now:
     ids.insert(crates::SECOND_CHANCE.to_string());
     let (mut held, mut out) = (0, Vec::new());
     for id in ids {
-        let server = super::super::play::own_songs(app, &crate_within(&id), Some(account)).await.ok();
+        let server = super::play::own_songs(app, &crate_within(&id), Some(account)).await.ok();
         let here = device_crate(device, &id, now);
         held += usize::from(server.as_ref().is_some_and(|tracks| !tracks.is_empty()));
         if server != here {
@@ -367,8 +369,8 @@ async fn list_against(app: &Arc<App>, device: &mut Device, account: &str, now: i
 async fn picks_against(app: &Arc<App>, device: &mut Device, account: &str, seed: u64, now: i64) -> (usize, Vec<String>) {
     let (index, recent) = ready().await.unwrap();
     let asked = as_asked(NextRequest::default()).unwrap().0.ask;
-    let plain = with_taste(app, index.clone(), Some(account), false).await.unwrap();
-    let tasted = with_taste(app, index, Some(account), true).await.unwrap();
+    let plain = with_taste(&**app, index.clone(), Some(account), false).await.unwrap();
+    let tasted = with_taste(&**app, index, Some(account), true).await.unwrap();
     let (mut picked, mut out) = (0, Vec::new());
     let mut against = |inside: Option<(&str, &[usize])>, seed_tracks: &[String], track: &str| {
         for (mode, by) in ASKS {
@@ -400,7 +402,7 @@ async fn picks_against(app: &Arc<App>, device: &mut Device, account: &str, seed:
         against(None, &album, &song.id);
     }
     for (id, _, _) in app.playlists.crate_members(&[]).await.unwrap() {
-        let Ok(songs) = super::super::play::own_songs(app, &crate_within(&id), Some(account)).await else { continue };
+        let Ok(songs) = super::play::own_songs(app, &crate_within(&id), Some(account)).await else { continue };
         let places = plain.find(&songs);
         let Some(&first) = places.first() else { continue };
         let track = plain.songs[first].id.clone();

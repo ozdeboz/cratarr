@@ -25,80 +25,17 @@ use serde::{Deserialize, Serialize};
 use super::ToggleError;
 #[cfg(test)]
 use super::play::Rng;
+use super::playing_host::PlayingHost;
 use super::playon::QueueTrack;
 use crate::similarity::{Signal, Track, Weights, unique};
 
 pub use cratarr_rules::radio::{Ask, Index, MAX_COUNT, Mode, RadioBy, Song, choose};
-
-#[cfg(test)]
-mod proof;
+pub use super::radio_base::{AutoMode, AutoplayMode, Within};
 
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
 pub const LANE_RADIO: &str = "radio";
 /// The lane of Autoplay's tracks: after everything, when the queue runs out.
 pub const LANE_AUTOPLAY: &str = "autoplay";
-
-/// Autoplay's modes; off is its absence (`stop` in commands).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum AutoMode {
-    #[default]
-    Similar,
-    Artist,
-    Era,
-    Random,
-    Taste,
-}
-
-impl AutoMode {
-    /// What Autoplay in this mode asks for.
-    pub fn asks(self) -> Mode {
-        match self {
-            AutoMode::Similar => Mode::Similar,
-            AutoMode::Artist => Mode::Artist,
-            AutoMode::Era => Mode::Era,
-            AutoMode::Random => Mode::Random,
-            AutoMode::Taste => Mode::Taste,
-        }
-    }
-}
-
-/// Autoplay's mode in a command: `stop` switches it off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum AutoplayMode {
-    Stop,
-    Similar,
-    Artist,
-    Era,
-    Random,
-    Taste,
-}
-
-impl AutoplayMode {
-    pub fn on(self) -> Option<AutoMode> {
-        match self {
-            AutoplayMode::Stop => None,
-            AutoplayMode::Similar => Some(AutoMode::Similar),
-            AutoplayMode::Artist => Some(AutoMode::Artist),
-            AutoplayMode::Era => Some(AutoMode::Era),
-            AutoplayMode::Random => Some(AutoMode::Random),
-            AutoplayMode::Taste => Some(AutoMode::Taste),
-        }
-    }
-    pub fn of(mode: Option<AutoMode>) -> Self {
-        match mode {
-            None => AutoplayMode::Stop,
-            Some(AutoMode::Similar) => AutoplayMode::Similar,
-            Some(AutoMode::Artist) => AutoplayMode::Artist,
-            Some(AutoMode::Era) => AutoplayMode::Era,
-            Some(AutoMode::Random) => AutoplayMode::Random,
-            Some(AutoMode::Taste) => AutoplayMode::Taste,
-        }
-    }
-}
 
 /// A radio mode from before the amendment, as Autoplay: (mode, albums, restart).
 pub fn from_old(mode: Option<Mode>) -> (AutoMode, bool, bool) {
@@ -139,36 +76,12 @@ pub struct Autoplay {
     pub within: Option<Within>,
 }
 
-/// What Radio and Autoplay stay inside (decision 0094: the page's collection), as Cratarr's own library has it: a
-/// crate as saved (a genre too, `genre:<name>`), a playlist, a record, an artist, or tracks.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum Within {
-    /// `without`: the libraries switched off, as the crate showed (Home's crates are of every library).
-    Crate {
-        id: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(as = "Option<_>", optional))]
-        without: Vec<String>,
-    },
-    Playlist { id: String },
-    Album { source: String, id: String },
-    /// `id`: theirs (`ar-<n>`, G6) where the page knows it; `without`: the libraries switched off, as the artist showed.
-    Artist {
-        source: String,
-        name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(test, ts(optional))]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(as = "Option<_>", optional))]
-        without: Vec<String>,
-    },
-    Tracks { source: String, ids: Vec<String> },
+/// `Within` as a play names it: here, as `Within` sits in base, below the play it names.
+pub trait AsCollection {
+    fn collection(&self) -> super::play::Collection;
 }
 
-impl Within {
+impl AsCollection for Within {
     /// As a play names it (app::play), to read its tracks as a play does.
     fn collection(&self) -> super::play::Collection {
         use super::play::Collection;
@@ -251,7 +164,7 @@ pub(crate) use crate::serve::index_rows::ALBUM_ARTIST_HEARD;
 
 /// A request as its listener's settings make it: their Similar by, and the libraries they let Radio and Autoplay choose
 /// from (0.9.5: their folders). With the account it is for, and whether Bandcamp joins.
-fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool), ToggleError> {
+pub fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool), ToggleError> {
     if req.ask.similar_by.is_none() {
         req.ask.similar_by = similar_by_of_listener();
     }
@@ -269,11 +182,16 @@ fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool),
 }
 
 /// The next radio tracks for a player (decision 0036).
-pub async fn next(app: &Arc<super::App>, req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
+pub async fn next<H: PlayingHost>(app: &Arc<H>, req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
+    next_with(&**app, req).await
+}
+
+/// `next`, on its host (Play On's Start radio asks it so).
+pub async fn next_with(app: &dyn PlayingHost, req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
     let (index, recent) = ready().await?;
     let (req, account, bandcamp) = as_asked(req)?;
     let within = match &req.within {
-        Some(w) => Some(index.find(&super::play::own_songs(app, &w.collection(), account.as_deref()).await?)),
+        Some(w) => Some(index.find(&super::play::own_songs_with(app, &w.collection(), account.as_deref()).await?)),
         None => None,
     };
     if within.as_ref().is_some_and(Vec::is_empty) {
@@ -393,10 +311,10 @@ async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: V
 
 /// The index with the account's taste on its songs (decision 0094): how each fits it (for Your taste only), and how
 /// like each is to what the account skips (none while its skipped source is off: `PlaylistService::skipped_fits`).
-async fn with_taste(app: &Arc<super::App>, index: Arc<Index>, account: Option<&str>, taste: bool) -> Result<Arc<Index>, ToggleError> {
+pub async fn with_taste(app: &dyn PlayingHost, index: Arc<Index>, account: Option<&str>, taste: bool) -> Result<Arc<Index>, ToggleError> {
     let Some(user) = account else { return Ok(index) };
-    let fits = if taste { app.playlists.taste_fits(user, &[]).await? } else { HashMap::new() };
-    let skipped = app.playlists.skipped_fits(user, &[]).await?;
+    let fits = if taste { app.playlists().taste_fits(user, &[]).await? } else { HashMap::new() };
+    let skipped = app.playlists().skipped_fits(user, &[]).await?;
     if fits.is_empty() && skipped.is_empty() {
         return Ok(index);
     }
@@ -436,7 +354,7 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
         return Ok(c.index.clone());
     }
     // The playlists' songs: every account's playlists' lines through the catalogue (what people put together).
-    let lines = match served.playlists() {
+    let lines = match super::PlaylistService::held_by(served) {
         Some(p) => p.snapshot_all().await.map_err(|e| anyhow::anyhow!("reading the playlists: {e:?}"))?,
         None => Vec::new(),
     };
@@ -714,12 +632,12 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
 
 /// The index with the listener's favourites and exclusions marked, and their recent plays, for a choice made here: the
 /// running request's account's, whose player asks (decision 0051).
-async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
+pub async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
     let index = index(&served, &dir).await?;
     let user = served.current_user();
-    let excluded = match served.playlists() {
+    let excluded = match super::PlaylistService::held_by(&served) {
         Some(p) => p.excluded_songs_of(user.as_deref()).await?,
         None => HashSet::new(),
     };

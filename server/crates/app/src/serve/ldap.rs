@@ -367,7 +367,7 @@ impl Directory {
         self.forget(name);
     }
 
-    async fn remember(&self, name: &str, password: &str, now: i64) {
+    pub async fn remember(&self, name: &str, password: &str, now: i64) {
         let Ok(_one) = self.hashing.acquire().await else { return };
         let password = password.to_string();
         let Ok(Ok(hash)) = crate::run::spawn_blocking(move || hash(&password)).await else { return };
@@ -580,9 +580,27 @@ async fn settings(State(serve): State<Arc<Serve>>) -> Response {
     axum::Json(view(&serve.directory.config())).into_response()
 }
 
+/// The tests' helpers, shared with those moved up out of this file (`served_tests_api`).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
+    use super::Config;
+
+    pub fn config() -> Config {
+        Config {
+            enabled: true,
+            url: "ldap://lldap:3890".into(),
+            base_dn: "ou=people,dc=example,dc=com".into(),
+            bind_dn: "uid=svc,ou=people,dc=example,dc=com".into(),
+            bind_password_file: "/data/ldap-bind".into(),
+            ..Config::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::testing::config;
 
     #[test]
     fn filters_escape_what_rfc_4515_says() {
@@ -620,17 +638,6 @@ mod tests {
         assert_eq!(display_name(&attrs(&[("uid", "elva")])), None);
         assert_eq!(display_name(&HashMap::from([("displayName".to_string(), Vec::new())])), None, "an attribute without a value");
         assert_eq!(wanted("uid"), ["uid", "displayName", "cn"]);
-    }
-
-    fn config() -> Config {
-        Config {
-            enabled: true,
-            url: "ldap://lldap:3890".into(),
-            base_dn: "ou=people,dc=example,dc=com".into(),
-            bind_dn: "uid=svc,ou=people,dc=example,dc=com".into(),
-            bind_password_file: "/data/ldap-bind".into(),
-            ..Config::default()
-        }
     }
 
     #[test]
@@ -671,49 +678,6 @@ mod tests {
         assert!(s.users.check(Some("ann"), None, None, Some("for-apps")).is_ok(), "her apps still sign in with it");
         s.directory.set_config(Config { enabled: false, ..config() }).unwrap();
         assert_eq!(s.sign_in("ann", "for-apps").await.as_deref(), Some("ann"), "no directory: it is all she has");
-    }
-
-    #[tokio::test]
-    async fn a_password_is_asked_again_by_the_name_the_directory_knows_and_holds_for_that_account_alone() {
-        use axum::body::Body;
-        use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
-        use tower::ServiceExt;
-        let d = std::env::temp_dir().join(format!("cratarr-ldap-mapped-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        let pw = d.join("bind");
-        std::fs::write(&pw, "x").unwrap();
-        let s = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
-        s.users.set("me", "pw").unwrap();
-        s.users.from_directory("rob", false, None).unwrap();
-        s.users.set("robin", "own").unwrap();
-        // Nothing listens on port 1, so a sign-in the directory took stands in for it: robin's, who is the account rob.
-        let accounts = BTreeMap::from([("robin".to_string(), "rob".to_string())]);
-        s.directory.set_config(Config { url: "ldap://127.0.0.1:1".into(), bind_password_file: pw.display().to_string(), accounts, ..config() }).unwrap();
-        let now = crate::serve::now();
-        s.directory.remember("robin", "secret", now).await;
-        assert_eq!(s.sign_in("robin", "secret").await.as_deref(), Some("rob"), "the case");
-
-        // Account → App password, signed in as the account, which the directory knows by the other name.
-        let cookie = |user: &str| format!("{}={}", crate::serve::signin::COOKIE, s.sessions.create(user, "d", now).unwrap().0);
-        let rob = cookie("rob");
-        let set = |current: &str| {
-            let body = serde_json::json!({ "current": current, "password": "for-apps" }).to_string();
-            Request::put("/api/me/subsonic-password").header("content-type", "application/json").header("cookie", rob.as_str()).body(Body::from(body)).unwrap()
-        };
-        let routes = crate::serve::routes::router(s.clone()).layer(axum::middleware::from_fn_with_state(s.clone(), crate::serve::access::require));
-        assert_eq!(routes.clone().oneshot(set("wrong")).await.unwrap().status(), StatusCode::FORBIDDEN);
-        assert_eq!(routes.oneshot(set("secret")).await.unwrap().status(), StatusCode::NO_CONTENT);
-        assert!(s.users.check(Some("rob"), None, None, Some("for-apps")).is_ok(), "his apps sign in with it");
-
-        // The account named as the directory's name is another account: what signs in as rob is no password of its own.
-        let robin = {
-            let mut h = HeaderMap::new();
-            h.insert(header::COOKIE, HeaderValue::from_str(&cookie("robin")).unwrap());
-            h
-        };
-        assert_eq!(crate::serve::access::reauthenticate(&s, &robin, "own").await.ok().as_deref(), Some("robin"));
-        assert!(crate::serve::access::reauthenticate(&s, &robin, "secret").await.is_err());
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[tokio::test]

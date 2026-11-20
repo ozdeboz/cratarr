@@ -16,11 +16,13 @@ use cratarr_rules::names::{name_key, natural_keys};
 use crate::serve::listener::Listener;
 use crate::journal::{Change, EventId, Journal, TextChange, fingerprint};
 use crate::playlists::{Edited, PlaylistView, Repair, Repairs, Store};
-use crate::source::{self, PlaylistChange, PlaylistEvent};
+use crate::source::{self, PlaylistChange};
 use crate::sync_state::Kind;
 
 mod ops;
 pub use ops::{OpsAnswer, PlaylistOps};
+#[cfg(test)]
+use super::playlists_base::natural;
 
 /// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
 pub const PLAY_MAX: usize = 100;
@@ -590,12 +592,6 @@ impl CrateOrder {
     }
 }
 
-/// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
-/// aside (`name_key`), each run of digits as its number. Classical's works are ordered by it too (0.12).
-pub(crate) fn natural(a: &str, b: &str) -> std::cmp::Ordering {
-    natural_keys(&name_key(a), &name_key(b))
-}
-
 /// Rows in an order of the page's list (decision 0060), as lib/PlaylistView orders a playlist's: names by `natural`;
 /// numbers with one a row does not have first (last, turned round); plays counting none as 0; equals keeping the
 /// crate's own order (the sort is stable). Its own order turned round is the rows reversed.
@@ -774,65 +770,7 @@ pub struct CrateCounts {
     pub none: Option<usize>,
 }
 
-/// One line of a playlist as its view shows it (decision 0023). `entry` is the line as the `.m3u` has it (library-
-/// relative), `file` its file name; the rest is what the catalogue knows, `None` where it does not.
-#[derive(Debug, Default, Serialize, PartialEq)]
-pub struct PlaylistRow {
-    /// Its record's type, as the Library list serves it (GOTO.S1): a track's Go to names it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub album_secondary: Vec<String>,
-    pub entry: String,
-    /// Its entry id (0.12, decision 0087): what the playlist's operations name it by (`entry` stays the line). Absent
-    /// (a crate's row, or ids not kept): no operations for it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entry_id: Option<String>,
-    pub file: String,
-    /// The server's track id, when the file is matched to one.
-    pub id: Option<String>,
-    pub name: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub duration_secs: Option<f64>,
-    /// The panel's orders (decision 0025's 2026-10-16 amendment): from the file's tags,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album_artist: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub disc: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub track: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub year: Option<i32>,
-    /// its tempo (the BPM tag, else the analysis', decision 0035),
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bpm: Option<u32>,
-    /// the user's plays of the track and when it was last played,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub play_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_played: Option<i64>,
-    /// and when the entry came into the playlist (none for one held before Cratarr kept that; a crate's row: when its
-    /// track came into the library).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub added: Option<i64>,
-    /// Its album's id where it is known: an artist's rows, and a playlist's or a crate's on Cratarr's own source.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album_id: Option<String>,
-    /// How many tracks that album has (the Records view's "3 of 10"), where its id is known on Cratarr's own source.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album_tracks: Option<u32>,
-    /// No such file in the Music folder.
-    pub missing: bool,
-    /// The library holds another recording of its work (0.10, Other versions): an album's rows on Cratarr's own
-    /// library; absent where not, or not said.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_versions: Option<bool>,
-    /// The work it performs, with the work that holds it and its number there (0.12, decision 0086: an album's
-    /// movements under their work's heading): an album's rows on Cratarr's own library, where MusicBrainz says.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub work: Option<super::classical::RowWork>,
-}
+pub use crate::serve::playlists_row::PlaylistRow;
 
 #[derive(Debug, Serialize)]
 pub struct PlayResult {
@@ -959,7 +897,7 @@ mod undo_tests {
         // A Music folder of its own, with the playlist folder 0.15 kept its playlists in (decision 0014).
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let db = served.as_ref().map(|s| s.userdata.clone()).unwrap_or_else(|| Arc::new(crate::userdata::UserData::open(None).unwrap()));
-        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
+        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db, None).await.unwrap();
         let journal = Arc::new(Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
@@ -1123,7 +1061,7 @@ mod undo_tests {
         std::fs::create_dir_all(&d).unwrap();
         let dir = d.to_string_lossy().into_owned();
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
-        let lib = Library::new(Some(dir.clone()), Some(dir), Vec::new(), Default::default(), None, db).await.unwrap();
+        let lib = Library::new(Some(dir.clone()), Some(dir), Vec::new(), Default::default(), None, db, None).await.unwrap();
         let journal = Arc::new(Journal::open(None).unwrap());
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), crate::sync_state::SyncState::open(None).unwrap(), journal.clone()));
         let moved = crate::moved::Moved { ids: [("tr-5".to_string(), "tr-1".to_string())].into(), ..Default::default() };
@@ -3711,18 +3649,6 @@ impl PlaylistService {
         Ok((self.tempo_of(source, ids).await?, undo))
     }
 
-    /// Cratarr's own tracks' tempo halved, doubled or reset as a run on the one path (decision 0092's writers' map,
-    /// 0.14): the tracks' tempos as they will be, and the run (none where nothing changes).
-    pub async fn tempo_run(&self, app: &Arc<super::App>, ids: &[String], how: super::tempo::Adjust) -> Result<(Vec<super::tempo::TrackTempo>, Option<super::file_runs::Status>), ToggleError> {
-        if !crate::serve::access::administering() {
-            return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
-        }
-        let (served, list) = (crate::serve::instance().ok_or_else(|| anyhow::anyhow!("Cratarr's own library is not open"))?, ids.to_vec());
-        let (p, tempos) = crate::run::spawn_blocking(move || super::tempo::proposal(&served, &list, how)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-        let run = (!p.files.is_empty()).then(|| super::file_runs::start(app, p));
-        Ok((tempos, run))
-    }
-
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).
     pub async fn crate_axes(&self, want: Option<&str>, without: &[String]) -> Result<Vec<crates::AxisView>, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
@@ -4502,23 +4428,6 @@ impl PlaylistService {
         for store in self.lib.all_stores() {
             store.refresh_dead().await;
         }
-    }
-}
-
-/// Best effort, in the background: every connected source hears about changed playlist files, each with the file's
-/// path as it sees it.
-pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>) {
-    let Some(music) = lib.music() else { return };
-    for (a, s) in lib.connected() {
-        let events: Vec<PlaylistEvent> = changes
-            .iter()
-            .map(|(name, change)| PlaylistEvent { name: name.clone(), path: a.placement.playlist_path(&music, name), change: *change })
-            .collect();
-        crate::run::spawn(async move {
-            if let Err(e) = s.playlists_changed(events).await {
-                tracing::warn!("source {}: could not pass on playlist changes: {e:#}", a.cfg.id);
-            }
-        });
     }
 }
 

@@ -46,7 +46,7 @@ pub fn range(header: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
 /// get the other file's bytes for the same place.
 fn validator(path: &Path, modified: std::time::SystemTime, len: u64) -> String {
     let time = crate::covers::etag(modified, len);
-    format!("\"{:08x}-{}", crate::opus_copy::crc32(path.to_string_lossy().as_bytes()), &time[1..])
+    format!("\"{:08x}-{}", super::opus_copy_crc::crc32(path.to_string_lossy().as_bytes()), &time[1..])
 }
 
 /// Whether a range may be answered: with `If-Range` only for the file it names. An `If-Range` by date cannot say which

@@ -200,14 +200,7 @@ struct Line {
     duration_secs: Option<f64>,
 }
 
-/// A work as Other versions names it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(export))]
-pub struct WorkRef {
-    pub mbid: String,
-    pub title: String,
-}
+pub use crate::serve::classical_works::{RowWork, WorkRef};
 
 /// Another track of the same work.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -301,23 +294,6 @@ pub struct WorkView {
     pub parent: Option<WorkRef>,
     pub parts: Vec<WorkPart>,
     pub recordings: Vec<WorkRecording>,
-}
-
-/// The work an album's track performs (0.12, decision 0086; an album's rows' `work`): the work that holds it and its
-/// number there, where MusicBrainz says. A classical record's tracks only (0.13: MusicBrainz has works for almost every
-/// song, so a soundtrack listed its songs as works).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(export))]
-pub struct RowWork {
-    pub mbid: String,
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
-    pub parent: Option<WorkRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
-    pub part_number: Option<u32>,
 }
 
 /// A top-level work as search finds it (0.12, decision 0086: works reachable): its MusicBrainz id, title, catalogue
@@ -574,7 +550,7 @@ impl Index {
                 (recordings > 0).then(|| TopWork { mbid: w.clone(), title: title.clone(), catalogue: catalogue_of(title), composers: composers.clone(), recordings, oldest })
             })
             .collect();
-        out.sort_by(|a, b| b.recordings.cmp(&a.recordings).then_with(|| super::playlists::natural(&a.title, &b.title)).then_with(|| a.mbid.cmp(&b.mbid)));
+        out.sort_by(|a, b| b.recordings.cmp(&a.recordings).then_with(|| super::playlists_base::natural(&a.title, &b.title)).then_with(|| a.mbid.cmp(&b.mbid)));
         out
     }
 
@@ -589,7 +565,7 @@ impl Index {
             .iter()
             .min_by(|a, b| {
                 let (ya, yb) = (year(a.0.as_str(), a.1.as_slice()), year(b.0.as_str(), b.1.as_slice()));
-                (ya.is_none(), ya).cmp(&(yb.is_none(), yb)).then_with(|| super::playlists::natural(&name(a.1.as_slice()), &name(b.1.as_slice())))
+                (ya.is_none(), ya).cmp(&(yb.is_none(), yb)).then_with(|| super::playlists_base::natural(&name(a.1.as_slice()), &name(b.1.as_slice())))
             })
             .map(|a| a.0.clone());
         (albums.len(), oldest)
@@ -632,7 +608,7 @@ impl Index {
                 })
             })
             .collect();
-        recordings.sort_by(|a, b| (a.year.is_none(), a.year).cmp(&(b.year.is_none(), b.year)).then_with(|| super::playlists::natural(&a.album, &b.album)));
+        recordings.sort_by(|a, b| (a.year.is_none(), a.year).cmp(&(b.year.is_none(), b.year)).then_with(|| super::playlists_base::natural(&a.album, &b.album)));
         Some(WorkView { title: title.clone(), composers: composers.clone(), parent, parts, recordings })
     }
 
@@ -995,7 +971,7 @@ pub fn build(i: &Inputs) -> Index {
         list.sort_by(|a, b| {
             let n = |w: &String| index.parent.get(w).and_then(|p| p.1);
             let t = |w: &String| index.works.get(w).map_or("", |x| x.0.as_str());
-            (n(a).is_none(), n(a)).cmp(&(n(b).is_none(), n(b))).then_with(|| super::playlists::natural(t(a), t(b))).then_with(|| a.cmp(b))
+            (n(a).is_none(), n(a)).cmp(&(n(b).is_none(), n(b))).then_with(|| super::playlists_base::natural(t(a), t(b))).then_with(|| a.cmp(b))
         });
     }
     index.parts = parts;
@@ -1018,7 +994,7 @@ pub fn build(i: &Inputs) -> Index {
     }
     for list in by_composer.values_mut() {
         let t = |w: &String| index.works.get(w).map_or("", |x| x.0.as_str());
-        list.sort_by(|a, b| recorded.get(b).cmp(&recorded.get(a)).then_with(|| super::playlists::natural(t(a), t(b))).then_with(|| a.cmp(b)));
+        list.sort_by(|a, b| recorded.get(b).cmp(&recorded.get(a)).then_with(|| super::playlists_base::natural(t(a), t(b))).then_with(|| a.cmp(b)));
     }
     index.composer_works = by_composer;
     // Search's works (0.12, decision 0086: works reachable).
@@ -1037,12 +1013,7 @@ struct Kept {
 
 static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
 
-/// What the index is made from, cheaply: the crates' facts read again when it moves (their Type axis has Classical).
-pub fn stamp(serve: &crate::serve::Serve) -> i64 {
-    let marks = serve.userdata.marks_stamp().unwrap_or(0);
-    let facts = serve.userdata.works_stamp().unwrap_or(0);
-    marks.wrapping_mul(1_000_003).wrapping_add(facts)
-}
+pub use crate::serve::classical_stamp::stamp;
 
 /// The index (kept until the library is built again or a mark changes; what the passes find counts within a minute).
 /// Blocking.
