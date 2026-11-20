@@ -329,30 +329,30 @@ mod edit_tests {
 }
 
 pub struct PlaylistService {
-    pub(crate) lib: Arc<Library>,
+    lib: Arc<Library>,
     /// Keeps the user's own server playlists in step (decision 0012).
-    pub(crate) sync: Arc<super::sync::SyncService>,
+    sync: Arc<super::sync::SyncService>,
     /// One's own crates (decision 0024).
-    pub(crate) crate_stores: CrateStores,
+    crate_stores: CrateStores,
     /// Where every change is kept for its undo (decision 0026).
-    pub(crate) journal: Arc<Journal>,
+    journal: Arc<Journal>,
     /// The favourite tracks' lines for the crates (see `favourite_lines`).
     favourites: Arc<FavouritesKept>,
     /// The playlists' table's facts (see `playlist_stats`).
     stats: StatsKept,
     /// Cratarr's own library (decision 0030): its plays, stars and shared playlists, and who asks. `main` hands it; a
     /// test may not.
-    pub(crate) served: Option<Arc<crate::serve::Serve>>,
+    served: Option<Arc<crate::serve::Serve>>,
 }
 
 /// The account the running request is for, whose favourites the crates show.
-pub(crate) fn asking_user(served: Option<&crate::serve::Serve>) -> Option<String> {
+pub fn asking_user(served: Option<&crate::serve::Serve>) -> Option<String> {
     served.and_then(|s| s.current_user())
 }
 
 /// Cratarr's own library's songs by their playlist lines, in every folder in use: Music's and the Incoming ones' (a
 /// crate draws from both; an Incoming song's line climbs out of Music, `Catalogue::line_of`). Blocking.
-pub(crate) fn songs_by_line(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue) -> HashMap<String, crate::serve::library::RelSong> {
+pub fn songs_by_line(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue) -> HashMap<String, crate::serve::library::RelSong> {
     let mut out = HashMap::new();
     for folder in cat.folders().ids() {
         for (rel, song) in serve.library.songs_by_rel(folder).unwrap_or_default() {
@@ -370,11 +370,11 @@ pub(crate) fn songs_by_line(serve: &crate::serve::Serve, cat: &crate::catalogue:
     out
 }
 
-pub(super) use crate::playlists::line_exists;
+pub use crate::playlists::line_exists;
 
 /// The account whose playlists and crates the running request's are (decision 0051): another account's, or `None` for
 /// the first administrator's (theirs are the ones from before accounts), as for Cratarr's own work.
-pub(crate) fn asking_account(served: Option<&crate::serve::Serve>) -> Option<String> {
+pub fn asking_account(served: Option<&crate::serve::Serve>) -> Option<String> {
     let s = served?;
     let me = s.current_user()?;
     (Some(&me) != s.users.owner().as_ref()).then_some(me)
@@ -382,9 +382,9 @@ pub(crate) fn asking_account(served: Option<&crate::serve::Serve>) -> Option<Str
 
 /// Each account's crates (decision 0051: one's own, not shared): the first administrator's in `crates.json` as
 /// before, another's in `users/<account>/crates.json`. One store each, as each keeps its crates in memory.
-pub(crate) struct CrateStores {
+pub struct CrateStores {
     data_dir: Option<String>,
-    pub(crate) first: Arc<crates::CrateStore>,
+    first: Arc<crates::CrateStore>,
     others: std::sync::Mutex<HashMap<String, Arc<crates::CrateStore>>>,
 }
 
@@ -393,7 +393,12 @@ impl CrateStores {
         Self { data_dir: data_dir.map(str::to_string), first: Arc::new(crates::CrateStore::new(data_dir)), others: Default::default() }
     }
 
-    pub(crate) fn of(&self, account: Option<&str>) -> Result<Arc<crates::CrateStore>, ToggleError> {
+    /// The first administrator's store.
+    pub fn first(&self) -> &Arc<crates::CrateStore> {
+        &self.first
+    }
+
+    pub fn of(&self, account: Option<&str>) -> Result<Arc<crates::CrateStore>, ToggleError> {
         let Some(account) = account else { return Ok(self.first.clone()) };
         if !crate::playlists::account_folder_ok(account) {
             return Err(ToggleError::Refused(format!("{account} cannot name a folder for its crates.")));
@@ -405,7 +410,7 @@ impl CrateStores {
 
     /// Every account's store and whose it is (`None`: the first administrator's), one nobody has opened since the start too: its
     /// file is all there is of it, and it must read as the others do once someone does.
-    pub(crate) fn every(&self) -> Vec<(Option<String>, Arc<crates::CrateStore>)> {
+    pub fn every(&self) -> Vec<(Option<String>, Arc<crates::CrateStore>)> {
         let users = self.data_dir.iter().filter_map(|d| std::fs::read_dir(std::path::Path::new(d).join("users")).ok()).flatten().flatten();
         for account in users.filter_map(|u| u.file_name().into_string().ok()) {
             // A folder no account could have: nothing can open it.
@@ -417,7 +422,7 @@ impl CrateStores {
 }
 
 /// The account a playlist owner's name stands for (`None`: the first administrator).
-pub(crate) fn account_of(served: Option<&crate::serve::Serve>, owner: &str) -> Option<String> {
+pub fn account_of(served: Option<&crate::serve::Serve>, owner: &str) -> Option<String> {
     let first = served.and_then(|s| s.users.owner());
     (Some(owner) != first.as_deref()).then(|| owner.to_string())
 }
@@ -585,9 +590,29 @@ impl PlaylistService {
         s
     }
 
-    /// Cratarr's own library, as the services built on this one (Play On, Playing, Insights) read it.
-    pub(crate) fn served(&self) -> Option<Arc<crate::serve::Serve>> {
+    /// Cratarr's own library, as the services built on this one (Play On, Playing, Insights, the crates) read it.
+    pub fn served(&self) -> Option<Arc<crate::serve::Serve>> {
         self.served.clone()
+    }
+
+    /// The servers in use, the folders behind their libraries, the catalogue, as the crates read them.
+    pub fn lib(&self) -> &Arc<Library> {
+        &self.lib
+    }
+
+    /// The playlists' copies on other servers (decision 0012), as the crates' tests read them.
+    pub fn sync(&self) -> &Arc<super::sync::SyncService> {
+        &self.sync
+    }
+
+    /// Each account's crates' stores, as the crates read and write them.
+    pub fn crate_stores(&self) -> &CrateStores {
+        &self.crate_stores
+    }
+
+    /// The journal, as the crates' changes follow a take.
+    pub fn journal(&self) -> &Arc<Journal> {
+        &self.journal
     }
 
     /// The account whose playlists and crates the running request's are (`asking_account`).
@@ -631,7 +656,7 @@ impl PlaylistService {
 
     /// Keep a change in the journal; its undo token (decision 0026). A journal that cannot be written costs only the
     /// undo: the change itself is done.
-    pub(crate) fn keep(&self, change: Change) -> Option<String> {
+    pub fn keep(&self, change: Change) -> Option<String> {
         match self.journal.record_change(super::library::epoch_now(), &change, asking_account(self.served.as_deref()).as_deref()) {
             Ok(id) => Some(format!("c{id}")),
             Err(e) => {
@@ -918,7 +943,7 @@ impl PlaylistService {
     }
 
     /// An account's tracks excluded everywhere changed under it: logged, as a change of its own is.
-    pub(crate) fn excluded_tracks_moved(&self, account: Option<&str>) {
+    pub fn excluded_tracks_moved(&self, account: Option<&str>) {
         let Some(serve) = self.served.as_deref() else { return };
         if let Some(account) = account.map(str::to_string).or_else(|| serve.users.owner())
             && let Err(e) = serve.userdata.excluded_changed(&account, "tracks")
@@ -928,7 +953,7 @@ impl PlaylistService {
     }
 
     /// The asking account's tracks excluded everywhere changed: logged (decision 0087).
-    pub(crate) fn excluded_tracks_changed(&self) {
+    pub fn excluded_tracks_changed(&self) {
         if let Some(serve) = self.served.as_deref()
             && let Some(me) = serve.current_user()
             && let Err(e) = serve.userdata.excluded_changed(&me, "tracks")
@@ -1111,7 +1136,7 @@ impl PlaylistService {
 
     /// Make `entry` a member of the playlist or not (`Some`), or flip it (`None`, older pages). Only a real change
     /// is passed on.
-    pub(super) async fn set_entry(&self, playlist_id: &str, entry: &str, member: Option<bool>) -> Result<(), ToggleError> {
+    pub async fn set_entry(&self, playlist_id: &str, entry: &str, member: Option<bool>) -> Result<(), ToggleError> {
         let (store, name) = self.own(playlist_id)?;
         let changed = match member {
             Some(m) => store.set_member(&name, entry, m).await?,
@@ -1382,7 +1407,7 @@ impl PlaylistService {
     }
 
     /// The server (`want`, else the first connected) and its id.
-    pub(super) fn source_of(&self, want: Option<&str>) -> Result<(String, Arc<dyn source::Source>), ToggleError> {
+    pub fn source_of(&self, want: Option<&str>) -> Result<(String, Arc<dyn source::Source>), ToggleError> {
         let sources = self.lib.connected();
         want.and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
             .or_else(|| sources.first())
@@ -1392,7 +1417,7 @@ impl PlaylistService {
 
     /// Tracks' song ids, by their ids on a server. `going`: on their way into a list, so only what is there. Coming back
     /// out, a song id stands by itself: what was left out or excluded can be put back after its file went.
-    pub(crate) async fn tracks_of(&self, want: Option<&str>, ids: &[String], going: bool) -> Result<HashSet<String>, ToggleError> {
+    pub async fn tracks_of(&self, want: Option<&str>, ids: &[String], going: bool) -> Result<HashSet<String>, ToggleError> {
         if ids.is_empty() {
             return Ok(HashSet::new());
         }
@@ -1407,7 +1432,7 @@ impl PlaylistService {
 
     /// Tracks as rows on a server, in the order given: the lists of what is left out and excluded. A track whose file went
     /// shows what it was and keeps its song id, so it can be put back.
-    pub(crate) async fn track_rows(&self, songs: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
+    pub async fn track_rows(&self, songs: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
         let (cat, ids) = (self.lib.catalogue(), songs.clone());
         let (lines, gone) = crate::run::spawn_blocking(move || {
             let of = |song: &String| crate::serve::playlists::line_of_song(&cat, song);
@@ -1479,7 +1504,7 @@ impl PlaylistService {
     /// (nothing heard yet from this server) waits. One asks at a time: Jellyfin took a minute for 4,786 favourites
     /// (2026-10-14), and asking again while it works makes it slower. A server that does not answer is asked again a
     /// minute later.
-    pub(crate) async fn favourite_lines(&self, sid: &str, source: &Arc<dyn source::Source>) -> Option<HashSet<String>> {
+    pub async fn favourite_lines(&self, sid: &str, source: &Arc<dyn source::Source>) -> Option<HashSet<String>> {
         let f = &self.favourites;
         let kept = match f.kept(sid) {
             Some(k) => {
@@ -1538,7 +1563,7 @@ impl PlaylistService {
     }
 
     /// The asking account's own playlists.
-    pub(crate) fn own_store(&self) -> Result<Arc<Store>, ToggleError> {
+    pub fn own_store(&self) -> Result<Arc<Store>, ToggleError> {
         self.lib.store_for(asking_account(self.served.as_deref()).as_deref())
     }
 

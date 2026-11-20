@@ -1,0 +1,30 @@
+[package]
+name = "cratarr-playlists"
+description = "Cratarr's playlists: the playlist files, edits and repairs, Undo for every change, the crates' stores"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers (`playlists::testing`), for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-records/test-support"]
+
+[dependencies]
+cratarr-records.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+cratarr-records = { workspace = true, features = ["test-support"] }
+# The lower crates' test helpers move time on (`tokio::time::advance`).
+tokio = { workspace = true, features = ["test-util"] }
+# ops.rs's answers are among the page's types the tests write.
+ts-rs.workspace = true

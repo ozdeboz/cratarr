@@ -93,6 +93,7 @@ cratarr-base = { path = "crates/base" }
 cratarr-listening = { path = "crates/listening" }
 cratarr-records = { path = "crates/records" }
 cratarr-requests = { path = "crates/requests" }
+cratarr-playlists = { path = "crates/playlists" }
 cratarr-playing = { path = "crates/playing" }
 cratarr-incoming = { path = "crates/incoming" }
 cratarr-health = { path = "crates/health" }
@@ -120,6 +121,7 @@ cratarr-base = { workspace = true, features = ["test-support"] }
 cratarr-listening = { workspace = true, features = ["test-support"] }
 cratarr-records = { workspace = true, features = ["test-support"] }
 cratarr-requests = { workspace = true, features = ["test-support"] }
+cratarr-playlists = { workspace = true, features = ["test-support"] }
 cratarr-playing = { workspace = true, features = ["test-support"] }
 cratarr-incoming = { workspace = true, features = ["test-support"] }
 cratarr-health = { workspace = true, features = ["test-support"] }
