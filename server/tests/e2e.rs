@@ -6016,3 +6016,252 @@ async fn a_want_of_an_album_whose_copy_went_is_fetched_end_to_end() {
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// Settings' Incoming library `incoming` set to take Soulseek's records (its fetcher `soulseek`), as an administrator sets it.
+fn soulseek_takes_incoming(data: &Path, incoming: &Path) {
+    let p = data.join("settings.json");
+    let mut s: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+    for l in s["sources"][0]["libraries"].as_array_mut().unwrap() {
+        if l["id"].as_str() == Some(&*incoming.to_string_lossy()) {
+            l["fetcher"] = json!("soulseek");
+        }
+    }
+    std::fs::write(&p, serde_json::to_vec_pretty(&s).unwrap()).unwrap();
+}
+
+/// What slskd at one address has seen (`OneAtATime`).
+#[derive(Default)]
+struct Seen {
+    in_flight: u32,
+    /// Each batch taken: its id, its user, how many reads it was given, whether it is done, in order.
+    batches: Vec<(String, String, u32, bool)>,
+    violations: Vec<String>,
+    /// Batches whose download the test let end (`OneAtATime::release`).
+    released: Vec<String>,
+}
+
+const ONE_AT_A_TIME: &str = "Only one concurrent operation is permitted. Wait until the previous operation completes";
+
+/// slskd as it is (SK1.9, SK2.7: the `slskd_watching` of these scenarios, with their switches): it takes one operation at a time,
+/// each answered after `slow`; one that arrives while another is being answered gets 429, "Only one concurrent operation is
+/// permitted", and is a violation (Cratarr caused it); a batch asked of a user whose earlier batch still has a transfer not done is a
+/// violation too. A batch is done at its second read (`holding`: once the test releases it), its file then written into its folder
+/// under `completed`.
+#[derive(Clone)]
+struct OneAtATime {
+    url: String,
+    seen: Arc<std::sync::Mutex<Seen>>,
+}
+
+impl OneAtATime {
+    async fn start(completed: PathBuf, file: PathBuf, holding: bool, slow: u64) -> Self {
+        use axum::extract::Path as Part;
+        use axum::response::IntoResponse;
+        use axum::routing::{delete, get, post};
+        let seen: Arc<std::sync::Mutex<Seen>> = Arc::default();
+        fn busy(seen: &std::sync::Mutex<Seen>, what: String) -> bool {
+            let mut s = seen.lock().unwrap();
+            if s.in_flight > 0 {
+                s.violations.push(format!("an operation while another was answered: {what}"));
+                return true;
+            }
+            s.in_flight += 1;
+            false
+        }
+        let (a, b, c) = (seen.clone(), seen.clone(), seen.clone());
+        let take = move |axum::Json(body): axum::Json<Value>| {
+            let seen = a.clone();
+            async move {
+                let (user, batch) = (body["username"].as_str().unwrap_or_default().to_string(), body["id"].as_str().unwrap_or_default().to_string());
+                if busy(&seen, format!("a batch of {user}")) {
+                    return (axum::http::StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response();
+                }
+                tokio::time::sleep(Duration::from_millis(slow)).await;
+                let mut s = seen.lock().unwrap();
+                s.in_flight -= 1;
+                if s.batches.iter().any(|(_, u, _, done)| *u == user && !done) {
+                    s.violations.push(format!("a batch asked of {user} while their earlier one still has a transfer not done"));
+                }
+                s.batches.push((batch.clone(), user, 0, false));
+                axum::Json(json!({ "batch": { "id": batch, "transfers": [] }, "failures": [] })).into_response()
+            }
+        };
+        let read = move |Part(id): Part<String>| {
+            let (seen, completed, file) = (b.clone(), completed.clone(), file.clone());
+            async move {
+                let mut s = seen.lock().unwrap();
+                let released = s.released.contains(&id);
+                let Some(at) = s.batches.iter().position(|x| x.0 == id) else { return axum::http::StatusCode::NOT_FOUND.into_response() };
+                let x = &mut s.batches[at];
+                x.2 += 1;
+                if !x.3 && x.2 >= 2 && (!holding || released) {
+                    x.3 = true;
+                    let dir = completed.join("cratarr").join(&id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::copy(&file, dir.join(file.file_name().unwrap())).unwrap();
+                }
+                let (state, percent) = if x.3 { ("Completed, Succeeded", 100.0) } else { ("InProgress", 30.0) };
+                axum::Json(json!({ "id": id, "transfers": [{ "id": format!("{id}-0"), "filename": "x", "state": state, "percentComplete": percent }] })).into_response()
+            }
+        };
+        let dropped = move |Part((_user, _id)): Part<(String, String)>| {
+            let seen = c.clone();
+            async move {
+                if busy(&seen, "a transfer dropped".into()) {
+                    return (axum::http::StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response();
+                }
+                tokio::time::sleep(Duration::from_millis(slow)).await;
+                seen.lock().unwrap().in_flight -= 1;
+                axum::http::StatusCode::NO_CONTENT.into_response()
+            }
+        };
+        let app = axum::Router::new()
+            .route("/api/v0/transfers/downloads/batches", post(take))
+            .route("/api/v0/transfers/downloads/batches/{id}", get(read))
+            .route("/api/v0/transfers/downloads/{user}/{id}", delete(dropped))
+            .route("/api/v0/application", get(|| async { axum::Json(json!({ "server": { "isLoggedIn": true } })) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Self { url, seen }
+    }
+
+    /// The batches taken, in order: (batch, user, done).
+    fn batches(&self) -> Vec<(String, String, bool)> {
+        self.seen.lock().unwrap().batches.iter().map(|(b, u, _, d)| (b.clone(), u.clone(), *d)).collect()
+    }
+
+    fn violations(&self) -> Vec<String> {
+        self.seen.lock().unwrap().violations.clone()
+    }
+
+    /// `user`'s batch still going ends at its next read.
+    fn release(&self, user: &str) -> String {
+        let mut s = self.seen.lock().unwrap();
+        let batch = s.batches.iter().find(|(_, u, _, done)| u == user && !done).map(|x| x.0.clone()).unwrap_or_else(|| panic!("no batch of {user} going"));
+        s.released.push(batch.clone());
+        batch
+    }
+}
+
+/// A Want of root's for each of Tape Club's `albums`, on a running server (the Givens' approved requests: the coordinator's fix):
+/// each request with its record, not had.
+async fn tape_club_wants(s: &Server, albums: &[String]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for album in albums {
+        out.push(s.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": album })).await["request"].clone());
+    }
+    out
+}
+
+/// Soulseek's list as the next start reads it: each request's record approved, picked for one folder of its user's (one file,
+/// `name`), judged by a list without recordings (Discogs' shape), so AcoustID is not asked.
+fn approved_items(data: &Path, requests: &[Value], users: &[String], name: &str) {
+    let items: Vec<Value> = requests
+        .iter()
+        .zip(users)
+        .enumerate()
+        .map(|(n, (r, user))| {
+            let folder = json!({ "user": user, "dir": "d", "format": "flac", "lossless": true, "free_slot": true, "queue": 0, "speed": 1, "extra": 0, "files": [{ "filename": format!("d\\{name}"), "size": 1 }] });
+            json!({ "id": format!("ss-{}", n + 1), "record": { "record": r["record"], "artist": "Tape Club", "album": r["album"], "request": r["id"] }, "state": "approved",
+                    "tracks": [{ "disc": 1, "position": 1, "title": "Slack Water" }], "folders": [folder], "chosen": 0 })
+        })
+        .collect();
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": items.len(), "items": items })).unwrap()).unwrap();
+}
+
+/// The e2e layout with Incoming taking Soulseek's records, slskd `OneAtATime` (`holding`, `slow`), root an administrator, Tape
+/// Club's `albums` wanted by root, the server stopped, and Soulseek's list holding them approved for `users`' folders: the server's
+/// data folder, Incoming's folder and the fake.
+async fn soulseek_upstream(root: &Path, albums: &[String], users: &[String], holding: bool, slow: u64) -> (PathBuf, PathBuf, OneAtATime) {
+    let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let incoming = library.join("incoming");
+    settings(&data, &[(&library.join("music"), "main"), (&incoming, "incoming")], &library.join("own"));
+    soulseek_takes_incoming(&data, &incoming);
+    let file = library.join("music/Glass Harbour/Tide Tables (2012)/01 Slack Water.flac");
+    let slskd = OneAtATime::start(completed.clone(), file.clone(), holding, slow).await;
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": slskd.url, "key": "k", "folder": completed, "enabled": true })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "root", "password": "root pw", "admin": true })).await;
+    s.act_as("root", "root pw").await;
+    let requests = tape_club_wants(&s, albums).await;
+    s.stop();
+    approved_items(&data, &requests, users, &file.file_name().unwrap().to_string_lossy());
+    (data, incoming, slskd)
+}
+
+/// SK1.9: on the real worker, picked records download at once (never two of one user at once) and are checked one at a time,
+/// each placed in Incoming in the order its download ended.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn picked_records_download_at_once_and_are_checked_one_at_a_time_end_to_end() {
+    let root = temp("sk19");
+    let albums: Vec<String> = ["Nowhere Fast", "Lost Tapes", "Late Shift", "Night Bus"].map(String::from).to_vec();
+    let users: Vec<String> = ["peer-a", "peer-a", "peer-b", "peer-c"].map(String::from).to_vec();
+    let (data, incoming, slskd) = soulseek_upstream(&root, &albums, &users, true, 0).await;
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    let state = |id: &'static str| {
+        let s = &s;
+        async move { s.get("/api/soulseek").await["items"].as_array().into_iter().flatten().find(|i| i["id"] == id).map(|i| i["state"].as_str().unwrap_or_default().to_string()) }
+    };
+    s.until("three downloads at once", Duration::from_secs(60), || async { slskd.batches().len() == 3 }).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let taken: Vec<String> = slskd.batches().into_iter().map(|b| b.1).collect();
+    assert_eq!(taken, ["peer-a", "peer-b", "peer-c"], "three POSTs before any release, peer-a's second waiting");
+    // Released in another order than the list's: each placed in the order its download ended.
+    let mut placed: Vec<&str> = Vec::new();
+    for (user, id) in [("peer-c", "ss-4"), ("peer-b", "ss-3"), ("peer-a", "ss-1"), ("peer-a", "ss-2")] {
+        if id == "ss-2" {
+            s.until("peer-a's second once its first ended", Duration::from_secs(60), || async { slskd.batches().len() == 4 }).await;
+        }
+        slskd.release(user);
+        s.until("its record placed", Duration::from_secs(90), || async { state(id).await.as_deref() == Some("placed") }).await;
+        for other in ["ss-1", "ss-2", "ss-3", "ss-4"] {
+            if other != id && !placed.contains(&other) {
+                assert_ne!(state(other).await.as_deref(), Some("placed"), "{other} placed before its download ended");
+            }
+        }
+        placed.push(id);
+    }
+    for album in &albums {
+        assert!(incoming.join("Tape Club").join(album).join("01 Slack Water.flac").exists(), "{album} in Incoming");
+    }
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// SK2.7: production's 20 approved records (17 peers, three of them twice) against a slskd that takes one operation at a time:
+/// all taken, the three second ones each after their peer's first ended, every one placed, and no `why` ever saying 429.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn twenty_picked_records_meet_no_429_end_to_end() {
+    let root = temp("sk27");
+    let albums: Vec<String> = (1..=20).map(|n| format!("Record {n:02}")).collect();
+    let mut users: Vec<String> = (1..=17).map(|n| format!("peer-{n:02}")).collect();
+    users.extend(["peer-01", "peer-03", "peer-05"].map(String::from));
+    let (data, _incoming, slskd) = soulseek_upstream(&root, &albums, &users, false, 300).await;
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    let mut whys: Vec<String> = Vec::new();
+    let started = Instant::now();
+    loop {
+        let items = s.get("/api/soulseek").await["items"].as_array().cloned().unwrap_or_default();
+        whys.extend(items.iter().filter_map(|i| i["why"].as_str().map(str::to_string)));
+        if items.len() == 20 && items.iter().all(|i| i["state"] == "placed") {
+            assert!(items.iter().all(|i| i["failed"] == json!([])), "nobody blamed");
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(300), "every item placed: {items:?}");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(!whys.iter().any(|w| w.contains("429") || w.contains("Too Many Requests")), "{whys:?}");
+    assert_eq!(slskd.batches().len(), 20, "20 batches taken, none twice");
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
