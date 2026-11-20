@@ -270,7 +270,7 @@ mod tests {
         assert_ne!(of_ten(&halves, "alice"), Holding::Had, "never Had from two halves");
     }
 
-    /// HD4 (I05).
+    /// HD4 (I05). A guard: green today through `records_held`'s `in_view` (app/requests.rs:1938), which the one rule keeps.
     #[test]
     fn the_holding_is_the_viewers() {
         let only_b = [own(OWN_B, "bob", 10)];
@@ -285,7 +285,7 @@ mod tests {
         }
     }
 
-    /// HD5 (OQ-DC1-1 (a), as today: the owner's rules, 2026-11-19).
+    /// HD5 (OQ-DC1-1 (a), as today: the owner's rules, 2026-11-19). A guard: `records_held` turns Done into Elsewhere today.
     #[test]
     fn a_kept_copy_elsewhere_comes_before_an_arrival() {
         let copies = [incoming(IN, 10), own(OWN_B, "bob", 10)];
@@ -326,7 +326,9 @@ mod tests {
         assert_eq!(holding(&[gone(MORE, T), main_copy(MUSIC, 10)], Some(10), "alice", &On::without(&[MUSIC])), Holding::NotHad);
     }
 
-    /// HD11 (kind 6). Rules 1-3 of the request machine read `house_has`, never "for anyone" (DC2 wires them).
+    /// HD11 (kind 6). Rules 1-3 of the request machine read `house_has`, never "for anyone" (DC2 wires them). Red first on
+    /// the waiting upload (today's had rule takes it for the house); the pins `only_arrived_music_counts` (room.rs) and
+    /// `two_copies_never_cover_each_other` (backup_list.rs) stay as they are, in their crates.
     #[test]
     fn the_house_has_it_by_its_own_rule() {
         let only_b = [own(OWN_B, "bob", 10)];
