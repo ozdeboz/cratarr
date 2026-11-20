@@ -3419,6 +3419,10 @@ mod tests {
             placing: None,
             placed_at: 0,
             place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
         };
         kept(|k| k.items.push(i));
     }
@@ -5381,10 +5385,10 @@ mod tests {
     /// watched items' states then.
     type Call = (String, String, bool, Vec<(String, State)>);
 
-    /// The gate, heard (SCENARIOS-SK17, "Shapes and fakes"): each call recorded; two at once a violation; `block` stops each call
+    /// The gate, heard in its turn (SCENARIOS-SK17, "Shapes and fakes", for SK1.3 and SK1.6; SK5's `Heard` judges sounds): each call recorded; two at once a violation; `block` stops each call
     /// until `let_all_go`.
     #[derive(Clone)]
-    struct Heard {
+    struct HeardInTurn {
         calls: Arc<Mutex<Vec<Call>>>,
         at_once: Arc<std::sync::atomic::AtomicUsize>,
         violations: Arc<Mutex<Vec<String>>>,
@@ -5393,7 +5397,7 @@ mod tests {
         watch: Arc<Mutex<Vec<String>>>,
     }
 
-    impl Heard {
+    impl HeardInTurn {
         fn new() -> Self {
             Self {
                 calls: Arc::default(),
@@ -5577,7 +5581,7 @@ mod tests {
         follow_round(&ours, &client, &d).await;
         let ended = |id: &str| item(id).unwrap().ended_at;
         assert!(ended(ids[1]) > 0 && ended(ids[1]) < ended(ids[0]) && ended(ids[0]) <= ended(ids[2]), "when each ended is kept");
-        let gate = Heard::new().watching(&ids);
+        let gate = HeardInTurn::new().watching(&ids);
         let g = gate.gate();
         let checking = check_until_idle(&ours, &client, &d, &places, &g);
         let meanwhile = async {
@@ -5738,7 +5742,7 @@ mod tests {
         picked(&id("q1"), &[&format!("peer-{tag}-q1")]);
         with_item(&id("q1"), |i| (i.record.request, i.record.record) = (301, 9_301));
         slskd.then_busy(3);
-        let gate = Heard::new().block();
+        let gate = HeardInTurn::new().block();
         let g = gate.gate();
         let q1 = id("q1");
         let only_q1 = |i: &Item| i.id == q1;
