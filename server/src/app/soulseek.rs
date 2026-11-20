@@ -1703,12 +1703,15 @@ pub(crate) struct Look {
     pub on: bool,
     /// Requests Lidarr goes first for, and till when (the 6 November order, `first_search`): no automatic pick before (G6).
     pub not_before: HashMap<i64, i64>,
+    /// Whether the server was read whole for this look (its requests, the had rule, the floor, the rooms): Cratarr's own picks
+    /// fail closed without it (the review of part 3, H2).
+    pub read: bool,
 }
 
 impl Look {
     /// The disks as they are, nothing held by the floor (as a test of today's fetcher read them).
     pub(crate) fn of_disks() -> Self {
-        Self { now: now(), short: false, users: Default::default(), library: library().ok(), free: Arc::new(crate::folders::free), full: Default::default(), had: Default::default(), open: None, on: true, not_before: Default::default() }
+        Self { now: now(), short: false, users: Default::default(), library: library().ok(), free: Arc::new(crate::folders::free), full: Default::default(), had: Default::default(), open: None, on: true, not_before: Default::default(), read: false }
     }
 
     /// The look of the server now: its disks, the floor as `room` reads it, each item's asker and whether they are over their room,
@@ -1733,6 +1736,7 @@ impl Look {
             if let Some((approved, of)) = held {
                 look.open = Some(approved.iter().map(|r| r.id).collect());
                 look.had = of.iter().flatten().filter(|o| o.had()).map(|o| o.record).collect();
+                look.read = true;
             }
             let mut accounts: Vec<String> = askers.values().cloned().collect();
             accounts.sort();
@@ -1752,7 +1756,7 @@ impl Look {
 impl Look {
     /// Room on every disk, the floor far below, nothing held: the tests' stand-in.
     pub(crate) fn roomy() -> Self {
-        Self { now: now(), short: false, users: Default::default(), library: None, free: Arc::new(|_| Some(u64::MAX / 4)), full: Default::default(), had: Default::default(), open: None, on: true, not_before: Default::default() }
+        Self { now: now(), short: false, users: Default::default(), library: None, free: Arc::new(|_| Some(u64::MAX / 4)), full: Default::default(), had: Default::default(), open: None, on: true, not_before: Default::default(), read: true }
     }
     /// Every disk `bytes` free.
     pub(crate) fn free_bytes(mut self, bytes: u64) -> Self {
@@ -1782,6 +1786,11 @@ impl Look {
     /// Soulseek switched off.
     pub(crate) fn off(mut self) -> Self {
         self.on = false;
+        self
+    }
+    /// A look that could not read the server.
+    pub(crate) fn unread(mut self) -> Self {
+        self.read = false;
         self
     }
     /// Lidarr first for `request` till `until`.
@@ -1862,6 +1871,10 @@ fn next_start(k: &mut Kept, within: Within, folder: &Path, look: &Look, tried: &
         let kept_id = i.batch.is_some();
         // An automatic pick not yet sent is held at its start as at its pick (G9): below the floor anyone's, over its asker's room.
         if i.auto && !kept_id {
+            // A look that could not read the server starts no pick of Cratarr's (H2): it waits for one that could.
+            if !look.read {
+                continue;
+            }
             let wait = if look.short {
                 Some(super::requests::WAITS_FOR_SPACE)
             } else if look.full.contains(&i.record.request) {
@@ -1931,7 +1944,8 @@ fn certain(i: &Item, now: i64) -> Option<usize> {
 /// tickable. Soulseek switched off, nothing. The ids picked.
 fn pick_certain(k: &mut Kept, within: Within, look: &Look) -> Vec<String> {
     let mut picked = Vec::new();
-    if !look.on {
+    // Fail closed (the review of part 3, H2): a look that could not read the server picks nothing by itself.
+    if !look.on || !look.read {
         return picked;
     }
     for i in k.items.iter_mut().filter(|i| within(i) && i.state == State::Found && i.record.record != 0) {
@@ -6442,6 +6456,27 @@ mod tests {
         let mut k = Kept::default();
         k.items.push(Item { state: State::Found, found_at: now(), ..it });
         assert!(pick_certain(&mut k, &|_: &Item| true, &Look::roomy()).is_empty());
+    }
+
+    /// The review of part 3, H2: a look that could not read the server (its requests, the had rule, the floor) picks nothing by itself,
+    /// and starts no pick of Cratarr's not yet sent: its own picks fail closed. A person's tick still goes.
+    #[tokio::test]
+    async fn a_look_that_could_not_read_the_server_picks_nothing() {
+        let d = data_folder("h2");
+        let slskd = Scripted::new().hold_all(5.0);
+        let client = slskd.client();
+        let t = now();
+        found("ss-h2-a", &[("peer-a", true)], t, 5101);
+        found("ss-h2-b", &[("peer-b", true)], t, 5102);
+        tick("ss-h2-b", 0);
+        found("ss-h2-c", &[("peer-c", true)], t, 5103);
+        with_item("ss-h2-c", |i| (i.state, i.chosen, i.auto) = (State::Approved, Some(0), true));
+        start_downloads(&ours("ss-h2-"), &client, &d, &Look::roomy().unread()).await;
+        assert_eq!(item("ss-h2-a").unwrap().state, State::Found, "no automatic pick");
+        assert_eq!(item("ss-h2-c").unwrap().state, State::Approved, "Cratarr's pick not sent");
+        assert_eq!(slskd.post_users(), ["peer-b"], "the tick goes");
+        assert!(!Look::of_disks().read, "a look of the disks alone has read nothing of the server");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// SK1.8 (kind 4): two picks of one user at the same moment, root's tick of ss-2 and Cratarr's pick of ss-1, start one download:
