@@ -15,6 +15,8 @@ export const reach = $state({
   kept: false,
   /** The device says it has no network at all: the browser's word, or the app's (lib/away's `network`). */
   noNetwork: false,
+  /** The app says it is on mobile data with Sync's Mobile data set to None (CU12, CU13): reads come from the device. */
+  mobileOff: false,
 });
 
 /** A status with no words from Cratarr in it that means it was not reached, rather than that it refused. */
@@ -69,9 +71,11 @@ export function unreached() {
 /** Called each time the device says it has a network again. */
 export const whenNetwork = new Set<() => void>();
 
-/** The device's own word on its network: with none, out of reach at once. */
-export function networkSaid(online: boolean) {
+/** The device's own word on its network: with none, out of reach at once. `mobileOff`: the app's, on mobile data with Mobile data
+ *  set to None (CU13), where it says so (a browser's word leaves it): what reads depend on is told, as they move to the device. */
+export function networkSaid(online: boolean, mobileOff?: boolean) {
   reach.noNetwork = !online;
+  if (mobileOff !== undefined) reach.mobileOff = mobileOff;
   if (!online) return unreached();
   for (const f of whenNetwork) f();
 }
