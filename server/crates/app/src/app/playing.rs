@@ -694,7 +694,7 @@ impl PlayingService {
         let mut heard = e.heard();
         // Heard while its player followed another listener (the owner, 2026-10-30): history, not taste.
         heard.followed = e.player.as_deref().is_some_and(|p| super::PlayOn::instance().is_some_and(|on| on.was_following(p, heard.at)));
-        crate::serve::queues::record(&s, &user, &song, &heard).await.map_err(|f| ToggleError::CannotPlay(format!("{f:#}")))?;
+        super::queues_listening::record(&s, &user, &song, &heard).await.map_err(|f| ToggleError::CannotPlay(format!("{f:#}")))?;
         if e.counts.unwrap_or(true) {
             *self.info.lock().unwrap_or_else(|p| p.into_inner()) = None;
         }

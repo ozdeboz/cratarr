@@ -80,6 +80,7 @@ pub mod discogs_facts;
 pub mod resume;
 pub mod lastfm;
 pub mod listening;
+pub mod queues_listening;
 pub mod scrobble;
 pub mod tasks;
 pub mod listenbrainz;

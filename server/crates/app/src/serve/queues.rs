@@ -126,10 +126,7 @@ pub async fn count_play(serve: &Arc<Serve>, user: &str, song: &str, at: i64) -> 
     Ok(record(serve, user, song, &crate::userdata::Heard::counted(at)).await?)
 }
 
-/// A song heard (decision 0064): through the one way in for listening (decision 0068).
-pub async fn record(serve: &Arc<Serve>, user: &str, song: &str, heard: &crate::userdata::Heard) -> anyhow::Result<()> {
-    crate::app::listening::heard(serve, user, song, heard).await.map(|_| ())
-}
+pub use crate::app::queues_listening::record;
 
 /// One of Cratarr's players as an app may see it.
 struct Player {
