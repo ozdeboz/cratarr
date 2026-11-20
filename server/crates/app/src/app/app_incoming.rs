@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
+use anyhow::Result;
+
 use super::App;
-use super::incoming_host::IncomingHost;
+use super::incoming_host::{Asked, IncomingHost};
 
 impl IncomingHost for App {
     fn library(&self) -> &Arc<super::library::Library> {
@@ -20,5 +22,9 @@ impl IncomingHost for App {
 
     fn served(&self) -> &Option<Arc<crate::serve::Serve>> {
         &self.served
+    }
+
+    fn add_fetched(self: Arc<Self>, fetch: String) -> Asked<'static, Result<super::file_runs::Status>> {
+        Box::pin(async move { super::track_fetch::add(&self, &fetch).await })
     }
 }

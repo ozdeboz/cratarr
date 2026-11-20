@@ -1,8 +1,16 @@
 //! What incoming's functions read of the app (App's wiring, the app split's phase 1): the services they use, as the app
-//! holds them. The app implements it (`app_incoming`); a function takes `app: &Arc<H>` with `H: IncomingHost`, so its
-//! callers pass the app as before, and incoming never names `App`.
+//! holds them, and what they ask of a function that still takes the app (a fetched track's add, the requests'). The app
+//! implements it (`app_incoming`); a function takes `app: &Arc<H>` with `H: IncomingHost`, so its callers pass the app as
+//! before, and incoming never names `App`.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+
+use anyhow::Result;
+
+/// A future a host hands back, as incoming awaits it (inside the HTTP handlers and the workers: `Send`).
+pub type Asked<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub trait IncomingHost: Send + Sync + 'static {
     /// The servers in use, the folders behind their libraries, the catalogue (`App::library`).
@@ -13,4 +21,6 @@ pub trait IncomingHost: Send + Sync + 'static {
     fn journal(&self) -> &Arc<crate::journal::Journal>;
     /// Cratarr's own library, when open (`App::served`).
     fn served(&self) -> &Option<Arc<crate::serve::Serve>>;
+    /// A passed fetch added to its album, a run on the one path (`track_fetch::add`).
+    fn add_fetched(self: Arc<Self>, fetch: String) -> Asked<'static, Result<super::file_runs::Status>>;
 }

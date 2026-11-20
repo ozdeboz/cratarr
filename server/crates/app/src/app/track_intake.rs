@@ -17,6 +17,7 @@ use std::time::Duration;
 use anyhow::Result;
 use serde::Serialize;
 
+use super::incoming_host::IncomingHost;
 use super::track_fetch::{Fetching, Searching};
 use crate::slskd::Candidate;
 
@@ -170,8 +171,13 @@ fn next_of(items: &[Item], now: i64) -> Option<Next> {
 }
 
 /// A track searched now, whatever its wait.
-pub fn search_now(app: &std::sync::Arc<super::App>, id: &str) -> View {
-    let _ = APP.set(app.clone());
+pub fn search_now<H: IncomingHost>(app: &std::sync::Arc<H>, id: &str) -> View {
+    search_now_on(app.clone(), id)
+}
+
+/// `search_now`, on its host.
+fn search_now_on(app: std::sync::Arc<dyn IncomingHost>, id: &str) -> View {
+    let _ = APP.set(app);
     with_item(id, |i| {
         if matches!(i.state, State::None | State::Failed | State::Refused) {
             (i.state, i.due, i.why) = (State::Queued, 0, None);
@@ -214,8 +220,13 @@ fn on_no_verdict(i: &mut Item, why: String) {
 }
 
 /// The albums' missing tracks (those of their release no file holds) queued, each once; the queue as it is now.
-pub async fn add_albums(app: &std::sync::Arc<super::App>, albums: &[String]) -> Result<View> {
-    let _ = APP.set(app.clone());
+pub async fn add_albums<H: IncomingHost>(app: &std::sync::Arc<H>, albums: &[String]) -> Result<View> {
+    add_albums_on(app.clone(), albums).await
+}
+
+/// `add_albums`, on its host.
+async fn add_albums_on(app: std::sync::Arc<dyn IncomingHost>, albums: &[String]) -> Result<View> {
+    let _ = APP.set(app);
     let own = crate::source::cratarr::KIND.id;
     for album in albums {
         let release = super::track_fetch::release(album).await?;
@@ -253,8 +264,13 @@ pub async fn add_albums(app: &std::sync::Arc<super::App>, albums: &[String]) -> 
 }
 
 /// These found items approved (with the candidate given, else the one preselected); the queue as it is now.
-pub fn approve(app: &std::sync::Arc<super::App>, picked: &[(String, Option<usize>)]) -> View {
-    let _ = APP.set(app.clone());
+pub fn approve<H: IncomingHost>(app: &std::sync::Arc<H>, picked: &[(String, Option<usize>)]) -> View {
+    approve_on(app.clone(), picked)
+}
+
+/// `approve`, on its host.
+fn approve_on(app: std::sync::Arc<dyn IncomingHost>, picked: &[(String, Option<usize>)]) -> View {
+    let _ = APP.set(app);
     queue(|q| {
         for (id, candidate) in picked {
             if let Some(i) = q.items.iter_mut().find(|i| i.id == *id && i.state == State::Found) {
@@ -286,7 +302,7 @@ pub fn clear_finished() {
 }
 
 /// The app its adds are runs of (Changes to files), as the routes that start the worker give it.
-static APP: std::sync::OnceLock<std::sync::Arc<super::App>> = std::sync::OnceLock::new();
+static APP: std::sync::OnceLock<std::sync::Arc<dyn IncomingHost>> = std::sync::OnceLock::new();
 
 /// The worker started, unless it runs.
 fn run() {
@@ -401,7 +417,7 @@ async fn fetch(id: &str) {
         });
     }
     match done {
-        Some(v) if v.state == Fetching::Passed => match async { super::track_fetch::add(APP.get().ok_or_else(|| anyhow::anyhow!("Cratarr is starting"))?, &fid).await }.await {
+        Some(v) if v.state == Fetching::Passed => match async { APP.get().cloned().ok_or_else(|| anyhow::anyhow!("Cratarr is starting"))?.add_fetched(fid.clone()).await }.await {
             Ok(run) => with_item(id, |i| (i.state, i.undo, i.fetch) = (State::Added, run.undo, None)),
             Err(e) => with_item(id, |i| (i.state, i.why) = (State::Refused, Some(format!("{e:#}")))),
         },
