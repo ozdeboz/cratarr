@@ -22,7 +22,8 @@
   import SettingsPanel from './lib/SettingsPanel.svelte';
   import HealthPanel from './lib/HealthPanel.svelte';
   import { health, problems } from './lib/healthReport.svelte';
-  import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
+  import { partsShown, SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
+  import { settingsBasic, settingsListed } from './lib/settings/basic.svelte';
   import { appInfo, askDownloads, downloads, inApp } from './lib/app.svelte';
   import { keyboard } from './lib/keyboard.svelte';
   import './lib/described.svelte';
@@ -423,9 +424,10 @@
   // `page` follows, and opening one then would write it into the next page's address.
   $effect(() => {
     if (!settingsSplit || settingsShown || openedHere() || !me.known || fromHash() !== 'settings') return;
-    const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone));
+    const parts = partsShown(me.admin, inApp, installed, settingsBasic());
     const part = parts.find((x) => x.id === prefs.settingsPart) ?? parts[0];
-    if (part) untrack(() => viewInPlace(SETTINGS_VIEW + part.id));
+    // Opened as the list's own (lib/settings/basic): narrowed by Basic as one tapped there.
+    if (part) untrack(() => ((settingsListed.part = part.id), viewInPlace(SETTINGS_VIEW + part.id)));
   });
   $effect(() => {
     if (settingsShown) prefs.settingsPart = settingsShown;

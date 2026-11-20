@@ -15,7 +15,7 @@
   import MoreInfo from '../MoreInfo.svelte';
   import SwitchTrack from '../SwitchTrack.svelte';
   import { matchesSearch } from '../pageView.svelte';
-  import { inGroupHit, settingsNarrowed } from './narrow';
+  import { basicLeaves, inGroupHit, settingsNarrowed } from './narrow';
 
   let {
     name,
@@ -78,7 +78,9 @@
     while (walk.nextNode()) parts.push(walk.currentNode.textContent ?? '');
     return parts.join(' ');
   }
-  const left = $derived(narrowed() && !groupHas() && !matchesSearch(name, shown(el)));
+  // Left out in Basic too (CU23, lib/settings/tiers): a row of a part narrowed to its Basic rows that is not one of them.
+  const basicOut = basicLeaves();
+  const left = $derived(basicOut(name) || (narrowed() && !groupHas() && !matchesSearch(name, shown(el))));
 </script>
 
 {#snippet body()}
