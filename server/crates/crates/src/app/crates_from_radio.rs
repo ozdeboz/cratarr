@@ -31,13 +31,13 @@ pub fn more_music_of(user: &str) -> (Option<Vec<String>>, bool) {
     }
 }
 
-pub(super) fn more_music_in(settings: &serde_json::Value) -> (Option<Vec<String>>, bool) {
+pub fn more_music_in(settings: &serde_json::Value) -> (Option<Vec<String>>, bool) {
     let m = &settings["more_music"];
     (m["libraries"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()), m["bandcamp"].as_bool().unwrap_or(false))
 }
 
 /// "Similar by" as an account's settings hold it; none set, or none known: none.
-pub(super) fn similar_by_in(settings: &serde_json::Value) -> Option<Vec<Signal>> {
+pub fn similar_by_in(settings: &serde_json::Value) -> Option<Vec<Signal>> {
     let names = settings.get("similar_by")?.as_array()?.clone();
     Some(names.into_iter().filter_map(|n| serde_json::from_value(n).ok()).collect()).filter(|v: &Vec<Signal>| !v.is_empty())
 }
@@ -45,7 +45,7 @@ pub(super) fn similar_by_in(settings: &serde_json::Value) -> Option<Vec<Signal>>
 /// Played within this long: left out while there is enough else (the owner, 2026-10-16).
 const RECENT: Duration = Duration::from_secs(7 * 24 * 3600);
 
-pub(super) fn read_only(file: &Path) -> Result<Connection> {
+pub fn read_only(file: &Path) -> Result<Connection> {
     let conn = crate::db::open_read_only(file)?;
     conn.busy_timeout(Duration::from_secs(10))?;
     Ok(conn)
@@ -53,7 +53,7 @@ pub(super) fn read_only(file: &Path) -> Result<Connection> {
 
 /// Songs played within seven days as one's own, with when (epoch seconds): what was heard while following another
 /// is not kept from the radio (the owner, 2026-10-30).
-pub(super) fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
+pub fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
     let conn = read_only(userdata)?;
     let since = super::moment::now_secs() - RECENT.as_secs() as i64;
     let mut st = conn.prepare("SELECT item, own_date FROM annotation WHERE user = ?1 AND kind = 'song' AND own_date >= ?2")?;

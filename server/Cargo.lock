@@ -541,6 +541,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratarr-crates"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "cratarr-playlists",
+ "cratarr-rules",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cratarr-gate"
 version = "0.17.0"
 dependencies = [
@@ -630,7 +644,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
- "cratarr-playlists",
+ "cratarr-crates",
  "cratarr-rules",
  "flacenc",
  "flate2",
@@ -767,6 +781,7 @@ dependencies = [
  "cratarr-base",
  "cratarr-clients",
  "cratarr-core",
+ "cratarr-crates",
  "cratarr-gate",
  "cratarr-health",
  "cratarr-incoming",
