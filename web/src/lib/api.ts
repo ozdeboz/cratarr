@@ -1479,6 +1479,9 @@ export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${e
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
 /** About Cratarr: its version, since when it runs, its licence (SPDX) and where its source is. */
 export const getAbout = () => quietly<{ version: string; started: number; licence?: string; source?: string }>('/api/about');
+/** What's New (UC02, UC03): what this account has not seen, newest first (lib/whatsNewRule); marked seen up to a version. */
+export const getWhatsNew = () => quietly<import('./whatsNewRule').WhatsNew>('/api/whats-new');
+export const whatsNewSeen = (version: string) => post<unknown>('/api/whats-new/seen', { version });
 /** Cratarr restarted (0.9.6; its administrators'): it answers, then stops as `docker stop` stops it, and Docker's
  *  restart policy starts it again. */
 export const restartServer = () => post<{ restarting: boolean }>('/api/server/restart', {});

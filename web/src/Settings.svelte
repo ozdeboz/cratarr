@@ -32,6 +32,7 @@
   import { glass } from './lib/glass.svelte';
   import { settingsBasic, settingsListed, toggleAdvanced } from './lib/settings/basic.svelte';
   import { about } from './lib/AboutSheet.svelte';
+  import { loadWhatsNew, whatsNewShows } from './lib/whatsNew.svelte';
   import { loadSettingsWords, settingsMatches, settingsWords } from './lib/settingsSearch.svelte';
   import { words as searchWords } from './lib/search';
 
@@ -191,7 +192,9 @@
   }
 
   // The pill's own button: About.
-  usePageAction(() => ({ icon: 'info', label: 'About', run: () => (about.open = true) }));
+  usePageAction(() => ({ icon: 'info', label: 'About', run: () => (about.open = true), dot: whatsNewShows() }));
+  // What's New not seen (UC03): its dot on the info pill, read as Settings shows.
+  void loadWhatsNew();
   // Basic or Advanced (CU22, Q6): on a phone, where the list and a part are apart, the list's pill has the switch too, lit while
   // on Advanced; on a roomy window the part beside it has the one (lib/SettingsPanel).
   usePageMode(() => (glass.one ? { icon: 'advanced', label: 'Advanced', on: !settingsBasic(), toggle: toggleAdvanced } : null));
