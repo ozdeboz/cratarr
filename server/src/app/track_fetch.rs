@@ -601,6 +601,7 @@ pub fn track_for(disc: u32, position: u32, title: &str, artist: &str, length_ms:
 /// background reading is paused (Y7): the file is not judged (`NotAsked`), and its record holds at its check. And what its sound
 /// was heard to have refuses it only when it is a fault (SK5, the owner 2026-11-19: `refused_for_soulseek`): clipping, clicks and a
 /// pop at the very end are notes, which its arrival's card in Incoming shows.
+#[cfg(test)]
 pub async fn gate_track(file: &Path, track: &ReleaseTrack) -> Result<f32> {
     gate_track_with(file, track, |print| unless_paused(looked_up, print)).await
 }
@@ -623,6 +624,7 @@ pub(super) async fn gate_track_and_notes(file: &Path, track: &ReleaseTrack) -> R
 }
 
 /// [`gate_track`], asking `lookup` what AcoustID knows of the file (the tests' stands in).
+#[cfg(test)]
 async fn gate_track_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
     F: FnOnce(crate::acoustid::Print) -> Fut,

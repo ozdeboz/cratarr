@@ -54,6 +54,9 @@ export function againIn(due: number, now: number): string | null {
 /** Held on its way: slskd or AcoustID could not be asked, and it is tried again at `due` (the server's `hold`). */
 const held = (i: SoulseekItem, now: number) => !!i.why && i.due > now && (i.state === 'approved' || i.state === 'fetching' || i.state === 'checking');
 
+/** What a user's picked record held by the disk floor says (the server's `SHORT_OF_SPACE`). */
+const SHORT_OF_SPACE = 'The server is short of space';
+
 /** The words a found record waiting for its asker's room or for space keeps (the Want's own, `requests::WAITS_FOR_*`). */
 const WAITS = ['Waits for room', 'Waits for space'];
 
@@ -78,6 +81,8 @@ export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000), i
       case 'found':
         return [best ? folderLine(best) : 'Found', i.why && WAITS.includes(i.why) ? i.why : null];
       case 'approved': {
+        // Held by the disk floor (AL03.2): its own words, as its request reads them (`word_in`), never its user's other record.
+        if (i.why === SHORT_OF_SPACE) return [i.why];
         const user = waitingFor(i, items);
         return [user ? `Waiting for ${user}'s other record` : 'To be fetched'];
       }

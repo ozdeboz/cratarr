@@ -85,3 +85,10 @@ test('a found record waiting for room or space says so; one picked by Cratarr re
   assert.equal(itemLine(picked, 0, [picked, other]), "Glass Harbour · 2012 · Waiting for peer-a's other record");
   assert.equal(itemLine(item('4', 'fetching', { record: glass, folders: [f], chosen: 0, percent: 42, auto: true })), 'Glass Harbour · 2012 · Fetching · 42%');
 });
+
+test("a picked record held by the floor says so, never its user's other record (as its request reads it)", () => {
+  const f = { user: 'peer-a', dir: 'Music\peer-a\Tide Tables', format: 'flac', lossless: true, free_slot: true, queue: 0, speed: 1_500_000, extra: 0 };
+  const held = item('5', 'approved', { folders: [f], chosen: 0, why: 'The server is short of space', due: 0 });
+  const other = item('6', 'fetching', { folders: [f], chosen: 0, percent: 10 });
+  assert.equal(itemLine(held, 1_000, [held, other]), 'M. Rivers · 1998 · The server is short of space');
+});

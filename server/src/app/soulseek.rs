@@ -825,6 +825,7 @@ pub fn search_now(app: &Arc<super::App>, id: &str) -> View {
 fn search_again(i: &mut Item) {
     if matches!(i.state, State::Waiting | State::Found | State::Stuck) {
         (i.state, i.due, i.why, i.chosen) = (State::Waiting, 0, None, None);
+        i.notes.clear();
         i.tracks.clear();
         i.untimed.clear();
         i.folders.clear();
@@ -2014,6 +2015,8 @@ fn next_start(k: &mut Kept, within: Within, folder: &Path, look: &Look, tried: &
             continue;
         }
         i.batch = Some(crate::slskd::new_batch());
+        // A new folder's download: none of an earlier one's notes (the review's L7).
+        i.notes.clear();
         return Some(Start { id: i.id.clone(), fresh: true, held: None });
     }
     None
@@ -6771,6 +6774,24 @@ mod tests {
         let words = words_in(&[waits, picked], &[(3101, None), (3102, None)]);
         assert_eq!(words.get(&3101), Some(&Word::Waiting { why: Some("Waits for room".into()) }));
         assert!(matches!(words.get(&3102), Some(Word::Fetching { .. })), "{words:?}");
+    }
+
+    /// The review's L7: an item's notes are its last checked folder's: a new batch, or a search again, leaves none of an earlier
+    /// folder's.
+    #[tokio::test]
+    async fn notes_go_when_a_new_batch_starts_or_the_record_is_searched_again() {
+        let d = data_folder("l7");
+        let slskd = Scripted::new().hold_all(5.0);
+        let earlier = || [("02 Neap.flac".to_string(), "Clipped at 0:01".to_string())].into_iter().collect::<BTreeMap<_, _>>();
+        picked("ss-l7-a", &["peer-a"]);
+        with_item("ss-l7-a", |i| i.notes = earlier());
+        start_downloads(&ours("ss-l7-a"), &slskd.client(), &d, &Look::roomy()).await;
+        assert!(item("ss-l7-a").unwrap().notes.is_empty(), "a new batch: none of the earlier folder's notes");
+        found("ss-l7-b", &[("peer-b", true)], now(), 5201);
+        with_item("ss-l7-b", |i| i.notes = earlier());
+        with_item("ss-l7-b", search_again);
+        assert!(item("ss-l7-b").unwrap().notes.is_empty(), "searched again: none either");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// SK1.8 (kind 4): two picks of one user at the same moment, root's tick of ss-2 and Cratarr's pick of ss-1, start one download:
