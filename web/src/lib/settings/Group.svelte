@@ -6,7 +6,7 @@
   import type { Snippet } from 'svelte';
   import MoreInfo from '../MoreInfo.svelte';
   import { matchesSearch } from '../pageView.svelte';
-  import { groupHit, settingsNarrowed } from './narrow';
+  import { basicGroups, groupHit, settingsNarrowed } from './narrow';
 
   let {
     title = null,
@@ -24,9 +24,11 @@
   const narrowed = settingsNarrowed();
   const hit = $derived(!!title && matchesSearch(title));
   groupHit(() => hit);
+  // Basic (CU23): a group whose title is Advanced goes whole; one with rows, none of them left, goes too.
+  const basic = basicGroups();
 </script>
 
-<div class="group" class:narrowed={narrowed()} class:hit role="group" aria-label={title ?? undefined}>
+<div class="group" class:narrowed={narrowed()} class:hit class:basic={basic.on()} class:out={basic.out(title)} role="group" aria-label={title ?? undefined}>
   {#if title || tail}
     <h3>
       {#if title}<span>{title}</span>{/if}{#if title && more}<MoreInfo label={title} text={more} />{/if}
@@ -68,6 +70,11 @@
   }
 
   .group.narrowed:not(.hit):not(:has(:global(.item:not(.left)))) {
+    display: none;
+  }
+
+  .group.out,
+  .group.basic:has(:global(.item)):not(:has(:global(.item:not(.left)))) {
     display: none;
   }
 </style>

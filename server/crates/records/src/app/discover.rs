@@ -4122,7 +4122,7 @@ mod by_name_tests {
     #[tokio::test]
     async fn an_artist_page_by_a_name_none_has_makes_them_by_the_source_that_knows_them() {
         static ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let _state = crate::app::switches::TEST_STATE.write().await;
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let mb: Arc<dyn ArtistList> = Arc::new(Finder(
             "musicbrainz",

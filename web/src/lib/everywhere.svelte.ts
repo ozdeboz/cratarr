@@ -13,7 +13,9 @@ import { problems } from './healthReport.svelte';
 import { REQUESTS_LISTS } from './requests.svelte';
 import { matchedOn, matches, provide, type SearchResult } from './search';
 import { loadSettingsWords, settingsMatches } from './settingsSearch.svelte';
-import { SECTIONS } from './settingsSections.svelte';
+import { partsShown } from './settingsSections.svelte';
+import { settingsBasic } from './settings/basic.svelte';
+import { installed } from './offline.svelte';
 
 /** A page as the app lists it: its name and its address. */
 export type PageLink = { label: string; href: string };
@@ -34,8 +36,9 @@ export function provideEverywhere(pages: () => PageLink[]) {
     label: 'Settings',
     find: (query) => {
       void loadSettingsWords();
-      return SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone)).flatMap((x) => {
-        const f = settingsMatches(x.id, x.title, query);
+      const basic = settingsBasic();
+      return partsShown(me.admin, inApp, installed, basic).flatMap((x) => {
+        const f = settingsMatches(x.id, x.title, query, basic);
         if (!f.title && !f.rows.length) return [];
         return [
           {

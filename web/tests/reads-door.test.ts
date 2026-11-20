@@ -42,6 +42,7 @@ const ALLOWED: Record<string, [number, string]> = {
   'lib/DownloadsPanel.svelte': [2, 'Retry offered, and its word'],
   'lib/MenuSheet.svelte': [2, 'which of a menu\'s entries are offered'],
   'lib/MenuTable.svelte': [2, 'which of a menu\'s entries are offered, and the word for the rest'],
+  'lib/PairAllowSheet.svelte': [1, 'Allow offered: none out of reach, and the line every page says then (QR07.6)'],
   'lib/PlaylistView.svelte': [4, 'which edits can wait in the outbox'],
   'lib/RequestsPanel.svelte': [1, "one's room line: none out of reach, where the last copy may say less than is used by now (AL04.5)"],
   'lib/away.svelte.ts': [1, 'what plays goes by the first failed request, as a hold does: the marks go by the door'],

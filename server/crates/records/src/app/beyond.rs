@@ -891,7 +891,7 @@ mod tests {
         const FIRST: &str = "00000000-0000-4000-8000-000000000594";
         const SECOND: &str = "00000000-0000-4000-8000-000000000595";
         const UNSURE: &str = "00000000-0000-4000-8000-000000000596";
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let grouches = serde_json::json!({ "artists": [found(FIRST, "Grouch", 100), found(SECOND, "Grouch", 100)] });
         let lanterns = serde_json::json!({ "artists": [found(UNSURE, "Paper Lantern", 80)] });
@@ -929,7 +929,7 @@ mod tests {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
         const RAPPER: &str = "00000000-0000-4000-8000-000000000601";
         const BAND: &str = "00000000-0000-4000-8000-000000000602";
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let (fake, asked) = fake_musicbrainz(vec![("Grouch", 200, serde_json::json!({ "artists": [found(BAND, "Grouch", 100), found(RAPPER, "Grouch", 98)] }))]).await;
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
@@ -961,7 +961,7 @@ mod tests {
         const BAND: &str = "00000000-0000-4000-8000-000000000604";
         const AIR: &str = "00000000-0000-4000-8000-000000000605";
         const ZERO: &str = "00000000-0000-4000-8000-000000000606";
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let (fake, asked) = fake_musicbrainz(vec![
             ("Grouch", 200, serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100), found(BAND, "The Grouch Band", 90)] })),
@@ -994,7 +994,7 @@ mod tests {
     async fn musicbrainz_away_at_open_is_never_sure() {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
         const RAPPER: &str = "00000000-0000-4000-8000-000000000607";
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let now = crate::app::moment::now_secs();
         keep_listed(&[person(RAPPER, "Grouch")], now);
@@ -1047,7 +1047,7 @@ mod tests {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
         use std::sync::atomic::{AtomicUsize, Ordering};
         const RAPPER: &str = "00000000-0000-4000-8000-000000000611";
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let asked = Arc::new(AtomicUsize::new(0));
         let counted = asked.clone();
@@ -1091,7 +1091,7 @@ mod tests {
         const TWO: &str = "00000000-0000-4000-8000-000000000614";
         const OTHER: &str = "00000000-0000-4000-8000-000000000615";
         const TAKEN: &str = "00000000-0000-4000-8000-000000000616";
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let sure = |id: &str, name: &str| serde_json::json!({ "artists": [found(id, name, 100)] });
         let (fake, asked) =

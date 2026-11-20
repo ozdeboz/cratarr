@@ -5,7 +5,7 @@
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
   import { installed } from './lib/offline.svelte';
-  import { panelBeside } from './lib/glass.svelte';
+  import { glass, panelBeside } from './lib/glass.svelte';
   import { library } from './lib/albums.svelte';
   import { serverConnection } from './lib/connection.svelte';
   import { switchable } from './lib/deviceMusic.svelte';
@@ -27,9 +27,11 @@
   import { kept } from './lib/kept.svelte';
   import { crates, loadCrates } from './lib/crates.svelte';
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
-  import { keptFor, partsFor, SETTINGS_GROUPS, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
-  import { pageView, searchNone, usePageAction } from './lib/pageView.svelte';
+  import { keptFor, partsShown, SETTINGS_GROUPS, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
+  import { pageView, searchNone, usePageAction, usePageMode } from './lib/pageView.svelte';
+  import { settingsBasic, settingsListed, toggleAdvanced } from './lib/settings/basic.svelte';
   import { about } from './lib/AboutSheet.svelte';
+  import { loadWhatsNew, whatsNewShows } from './lib/whatsNew.svelte';
   import { loadSettingsWords, settingsMatches, settingsWords } from './lib/settingsSearch.svelte';
   import { words as searchWords } from './lib/search';
 
@@ -189,7 +191,12 @@
   }
 
   // The pill's own button: About.
-  usePageAction(() => ({ icon: 'info', label: 'About', run: () => (about.open = true) }));
+  usePageAction(() => ({ icon: 'info', label: 'About', run: () => (about.open = true), dot: whatsNewShows() }));
+  // What's New not seen (UC03): its dot on the info pill, read as Settings shows.
+  void loadWhatsNew();
+  // Basic or Advanced (CU22, Q6): on a phone, where the list and a part are apart, the list's pill has the switch too, lit while
+  // on Advanced; on a roomy window the part beside it has the one (lib/SettingsPanel).
+  usePageMode(() => (glass.one ? { icon: 'advanced', label: 'Advanced', on: !settingsBasic(), toggle: toggleAdvanced } : null));
 
   // The pill's search (lib/settingsSearch): the parts that hold what is searched, each saying where in its line.
   // As every search reads (lib/search, decision 0072).
@@ -197,9 +204,9 @@
   $effect(() => {
     if (words.length) void loadSettingsWords();
   });
-  const found = (id: SettingsSection, title: string) => (words.length ? settingsMatches(id, title, words) : null);
-  // Sync in the installed page too (0.9.8: its own downloads, lib/offline).
-  const allowed = $derived(partsFor(me.admin, inApp, installed));
+  const found = (id: SettingsSection, title: string) => (words.length ? settingsMatches(id, title, words, settingsBasic()) : null);
+  // Sync in the installed page too (0.9.8: its own downloads, lib/offline); in Basic the parts with a Basic row (CU23).
+  const allowed = $derived(partsShown(me.admin, inApp, installed, settingsBasic()));
   const shown = $derived(
     words.length
       ? allowed.filter((x) => {
@@ -233,7 +240,7 @@
             {@const open = panelBeside() && settingsOf(panel.viewed) === c.id}
             {@const f = found(c.id, c.title)}
             {@const l = f?.rows.length ? f.rows.slice(0, 4).join(' · ') : line(c.id)}
-            <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>
+            <button class="row" class:open aria-pressed={open} onclick={() => ((settingsListed.part = c.id), viewPlaylist(SETTINGS + c.id))}>
               <Icon name={c.icon} size={24} />
               <span class="text">
                 <span class="name">{c.id === 'device' ? deviceName() : c.title}</span>

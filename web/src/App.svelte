@@ -22,8 +22,10 @@
   import SettingsPanel from './lib/SettingsPanel.svelte';
   import HealthPanel from './lib/HealthPanel.svelte';
   import { health, problems } from './lib/healthReport.svelte';
-  import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
-  import { appInfo, askDownloads, downloads, inApp } from './lib/app.svelte';
+  import { partsShown, SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
+  import { settingsBasic, settingsListed } from './lib/settings/basic.svelte';
+  import { appInfo, askDownloads, downloads, inApp, onApp, toApp } from './lib/app.svelte';
+  import { backDoes, overThePage } from './lib/deviceBack';
   import { keyboard } from './lib/keyboard.svelte';
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
@@ -38,6 +40,11 @@
   import { visuals } from './lib/visuals/shown.svelte';
   import Crates from './Crates.svelte';
   import AboutSheet, { about } from './lib/AboutSheet.svelte';
+  import WhatsNewSheet from './lib/WhatsNewSheet.svelte';
+  import PairAllowSheet from './lib/PairAllowSheet.svelte';
+  import { allowCodeIn } from './lib/pairing';
+  import { pairs } from './lib/pairs.svelte';
+  import { whatsNew } from './lib/whatsNew.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
   import { listening, resumeGroup } from './lib/groupListen.svelte';
@@ -60,7 +67,7 @@
   import { art } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
-  import { reducedMotion, SHEET_OUT } from './lib/motion';
+  import { DECELERATE_CSS, reducedMotion, SHEET_OUT } from './lib/motion';
   import { glass, panelBeside } from './lib/glass.svelte';
   import { reveal, subjectIn } from './lib/reveal';
   import GlobalResults from './lib/GlobalResults.svelte';
@@ -84,8 +91,9 @@
   import { tick, untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
   import { longpress } from './lib/longpress';
-  import { followAddress, setBeside } from './lib/panel.svelte';
-  import { placeBack } from './lib/placeBack';
+  import { followAddress, panelMoved, setBeside } from './lib/panel.svelte';
+  import { PANEL_MS, panelMs, panelSlide, SLIDE_IN } from './lib/panelMotion';
+  import { placeBack, type Restore } from './lib/placeBack';
   import RadioSheet from './lib/RadioSheet.svelte';
   import ReviewSheet from './lib/ReviewSheet.svelte';
   import { radioSheet } from './lib/radioAsk.svelte';
@@ -97,7 +105,8 @@
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
-  import { getStatus, type Status } from './lib/api';
+  import { getStatus, tookTooLong, type Status } from './lib/api';
+  import { pollEvery } from './lib/pollEvery';
   import { prefs } from './lib/prefs.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { loadMe, me } from './lib/me.svelte';
@@ -269,9 +278,9 @@
   $effect(() => {
     panel.split = split;
   });
-  // Beside the page, the panel's history is its own: the device's and the browser's Back are the page's (the owner,
-  // 2026-11-02); full screen, Back steps back through the panel (lib/panel).
-  $effect(() => setBeside(split || sidePanel()));
+  // Back steps back through the panel, closes it, then moves the page, beside the page as over it (lib/panel; BACK, the owner
+  // 2026-11-20); a split page's own part is the page's.
+  $effect(() => setBeside(split || sidePanel(), split));
   // Over the page unless the player is beside it: a split page (Settings, Health, Insights) has the panel, not the
   // player, so with the player not wanted beside, the mini-player's tap opens it over the page there too (the owner,
   // 2026-10-24: in Settings › Display it would not open).
@@ -321,6 +330,38 @@
   const overlayDrawn = $derived(overlay || held.overlay);
   /** Coming in by a hand-over: no entrance (it covers what it takes over from at once). */
   const handingNow = $derived(handing(held));
+  // The panel's own motion (BACK, lib/panelMotion): in from its right edge as it opens, out to it as Back or its ✕ closes it;
+  // nothing for a page gone to or a hand-over. How long, read as each motion starts.
+  const panelMsNow = (how: 'open' | 'close') => panelMs(panelMoved(), how, Date.now(), reducedMotion() || handingNow);
+  /** The tablet's panel coming: back in the page's grid, if it was lifted out going, and in from its right edge. */
+  function asideIn(node: HTMLElement, p: { duration: number }) {
+    Object.assign(node.style, { position: '', right: '', width: '', zIndex: '' });
+    return panelSlide(node, p);
+  }
+  /** The tablet's panel going: lifted out of the page's grid at once (the page widens at once), out over it to its right edge. */
+  function asideOut(node: HTMLElement, p: { duration: number }) {
+    if (p.duration) Object.assign(node.style, { position: 'fixed', right: '0', width: `${sideWidth}px`, zIndex: '20' });
+    return panelSlide(node, p);
+  }
+  // The phone's layer coming: Hold keeps it hidden until what it holds is ready (a fade from its start ran unseen, and it popped
+  // in), so it waits out of sight at its right edge (`arriving`) and slides in once Hold has shown it, or at Hold's own limit.
+  let layerEl: HTMLElement | null = null;
+  function arriving(el: HTMLElement) {
+    layerEl = el;
+    if (!untrack(() => panelMsNow('open'))) return;
+    el.classList.add('arriving');
+    const late = setTimeout(layerComes, 3000);
+    return () => {
+      clearTimeout(late);
+      if (layerEl === el) layerEl = null;
+    };
+  }
+  function layerComes() {
+    const el = layerEl;
+    if (!el?.classList.contains('arriving')) return;
+    el.classList.remove('arriving');
+    el.animate(SLIDE_IN, { duration: PANEL_MS, easing: DECELERATE_CSS });
+  }
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && besideDrawn);
   // The mini-player stands in for the player wherever the panel does not show it (decision 0023); with nothing to play
@@ -422,9 +463,10 @@
   // `page` follows, and opening one then would write it into the next page's address.
   $effect(() => {
     if (!settingsSplit || settingsShown || openedHere() || !me.known || fromHash() !== 'settings') return;
-    const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone));
+    const parts = partsShown(me.admin, inApp, installed, settingsBasic());
     const part = parts.find((x) => x.id === prefs.settingsPart) ?? parts[0];
-    if (part) untrack(() => viewInPlace(SETTINGS_VIEW + part.id));
+    // Opened as the list's own (lib/settings/basic): narrowed by Basic as one tapped there.
+    if (part) untrack(() => ((settingsListed.part = part.id), viewInPlace(SETTINGS_VIEW + part.id)));
   });
   $effect(() => {
     if (settingsShown) prefs.settingsPart = settingsShown;
@@ -500,10 +542,13 @@
   // Where a page was scrolled to, kept with its step of the history: back there brings it back; any other way there
   // (its link, Home's button) starts at its top (the owner, 2026-10-25).
   let popped = false;
+  /** A place coming back: while it runs its tries' scrolls are not the page's place (the review of 1.2, low 13). */
+  let restoring: Restore | null = null;
   $effect(() => {
     let t = 0;
     const keep = () => {
       clearTimeout(t);
+      if (restoring?.running()) return;
       t = window.setTimeout(() => history.replaceState({ ...(history.state ?? {}), scroll: Math.round(scrollY) }, ''), 150);
     };
     const pop = () => (popped = true);
@@ -523,11 +568,10 @@
     if (!y) return void window.scrollTo(0, 0);
     // Its content comes in a moment: tried again until it is long enough (four seconds at most: Home's sections load), by the
     // one function every panel's place uses too (lib/placeBack, F25.4); the hand stops it.
-    let cancel = () => {};
     const f = requestAnimationFrame(
-      () => (cancel = placeBack({ scrollTo: (to) => window.scrollTo(0, to), at: () => scrollY, long: () => document.documentElement.scrollHeight, target: window }, y)),
+      () => (restoring = placeBack({ scrollTo: (to) => window.scrollTo(0, to), at: () => scrollY, long: () => document.documentElement.scrollHeight, target: window }, y)),
     );
-    return () => (cancelAnimationFrame(f), cancel());
+    return () => (cancelAnimationFrame(f), restoring?.(), (restoring = null));
   });
   // What the panel opened beside the page, by a link or from a list of the page's own, is brought into sight in the
   // page's list, which marks it (lib/reveal; the owner, 2026-10-30); in sight already, nothing moves.
@@ -541,9 +585,14 @@
   // the one the app opened with.
   let navAt = $state(0);
   let lastNav = -1;
+  /** Home has just taken the visit's first step's place (`backToHome`): it is the first step, with no Back of its own. */
+  let homeInPlace = false;
   function stamp() {
     const st = history.state ?? {};
-    if (typeof st.nav !== 'number') history.replaceState({ ...st, nav: lastNav + 1 }, '');
+    if (homeInPlace) {
+      homeInPlace = false;
+      history.replaceState({ ...st, nav: 0 }, '');
+    } else if (typeof st.nav !== 'number') history.replaceState({ ...st, nav: lastNav + 1 }, '');
     navAt = history.state.nav;
     lastNav = navAt;
   }
@@ -559,6 +608,32 @@
   // Back is always there (the owner, 2026-10-23): a step back in this visit, else Home; only Home itself, opened first,
   // has none. On a phone the row always shows.
   const backHome = $derived(navAt === 0 && page !== 'home');
+  /** Back from the visit's first step, not Home: Home in that step's place (BACK), so Home is then the first step itself, with no
+   *  Back, and the device's Back leaves the app from there, as nothing more is behind it. Before, Home was a step on, its Back went
+   *  to the page left, and a cold start on a shortcut's page never ended. */
+  function backToHome() {
+    homeInPlace = true;
+    location.replace(keepViewed(HOME.id));
+  }
+  /** The page's Back as it shows (NavigationControls), or none. */
+  const pageBack = $derived(navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : backToHome()) : null);
+  // The device's Back (the app asks; BACK's second part, lib/deviceBack): exactly the page's own, a sheet first (as Esc closes it,
+  // lib/MenuSheet), then what is a step over the page and the page's history, then Home; told back whether there was one, so the
+  // app goes to the background only where the page shows no Back.
+  function deviceBack(): boolean {
+    const does = backDoes({
+      sheet: !!document.querySelector('.sheet[aria-modal="true"]'),
+      over: overThePage(history.state),
+      navAt,
+      searchAll: !!globalSearch.all,
+      page,
+    });
+    if (does === 'sheet') document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    else if (does === 'history') history.back();
+    else if (does === 'home') backToHome();
+    return does !== 'none';
+  }
+  if (inApp) onApp('back', (m) => toApp({ type: 'back', id: m.id, done: deviceBack() }));
   /** The page has the row (its room at its top kept for it). */
   const pageHasRow = $derived(
     phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover',
@@ -825,6 +900,15 @@
   // Autoplay's) for this page's player while nothing plays (in the app, the app's player keeps its own).
   loadMe();
   loadMine().then((c) => c && !inApp && startWith(c));
+  // A browser's QR, opened (QR07.1; QR06.9: the server sends the page here, signed in first): its Allow sheet, the address made
+  // the page's own again so a reload asks nothing.
+  {
+    const asking = allowCodeIn(location.pathname, location.search);
+    if (asking) {
+      pairs.allow = asking;
+      history.replaceState(history.state, '', `/${location.hash}`);
+    }
+  }
 
   // The conversion queue, followed on every page: its count on the Incoming tab, a toast when an album is done (an
   // administrator's of every one; a user's of their own, W13).
@@ -836,28 +920,23 @@
   let status = $state<Status | null>(null);
   let statusFailed = $state(false);
   let toldProblem: string | null = null;
+  // Every 30 s on a timer, never a chain that awaits its answer (RC01, lib/pollEvery): one request that never ends can't stop it.
   $effect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        status = await getStatus();
-        if (!known.list.length) remember(status.sources);
-        statusFailed = false;
-        // A server problem is said once, in a toast, when it first shows (the sidebar keeps showing it).
-        const problem = status.problems[0] ?? null;
-        if (problem && problem !== toldProblem) toast.show({ text: problem, tone: 'error' });
-        toldProblem = problem;
-      } catch {
-        statusFailed = true;
+    return pollEvery(30_000, getStatus, (r) => {
+      // Let go at its hard limit while Cratarr answered its health (lib/api's `watch`): busy, not away, so the line stays as it was.
+      if (!r.ok) {
+        if (!tookTooLong(r.error)) statusFailed = true;
+        return;
       }
-      if (!stopped) timer = setTimeout(poll, 30_000);
-    }
-    poll();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
+      const now = r.value;
+      status = now;
+      if (!known.list.length) remember(now.sources);
+      statusFailed = false;
+      // A server problem is said once, in a toast, when it first shows (the sidebar keeps showing it).
+      const problem = now.problems[0] ?? null;
+      if (problem && problem !== toldProblem) toast.show({ text: problem, tone: 'error' });
+      toldProblem = problem;
+    });
   });
 
   const connection = $derived(
@@ -1177,7 +1256,7 @@
     {/if}
     {#if besideDrawn}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniTop ? 0 : miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniTop ? 0 : miniSpace}px`} bind:this={sideEl} in:asideIn={{ duration: panelMsNow('open') }} out:asideOut={{ duration: panelMsNow('close') }}>
         <SheetArea area={() => sideEl}>
           <!-- One commit (lib/Hold): what the panel showed stays until the item opened is ready. -->
           <Hold key={panel.viewed} bind:shown={panel.shown} onshown={() => sidebar && letGoHeld()}>
@@ -1189,8 +1268,8 @@
   </div>
 
   {#if layerDrawn}
-    <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} transition:fade={{ duration: reducedMotion() || handingNow ? 0 : 200 }}>
-      <Hold key={panel.viewed} bind:shown={panel.shown} seeThrough onshown={() => playlistLayer && letGoHeld()}>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
+    <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} {@attach arriving} out:panelSlide={{ duration: panelMsNow('close') }}>
+      <Hold key={panel.viewed} bind:shown={panel.shown} seeThrough onshown={() => (layerComes(), playlistLayer && letGoHeld())}>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
     </div>
   {:else if navPlace.layerHeld && !besideDrawn}
     <!-- A panel closed for another page (a breadcrumb's): its layer, empty, over the page until the page gone to shows
@@ -1236,7 +1315,7 @@
          Library's and Discover's picker; or the panel's left part where it handed its glass. -->
     <NavigationControls
       left={handed?.left ?? null}
-      back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.id))) : null}
+      back={pageBack}
       name={panelPage && phone ? panelPage.label : null}
       picker={page === 'library' ? 'library' : page === 'discover' ? 'discover' : null}
       bind:el={leadEl}
@@ -1276,6 +1355,8 @@
   {/if}
 
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
+  {#if whatsNew.open}<WhatsNewSheet onclose={() => (whatsNew.open = false)} />{/if}
+  {#if pairs.allow}{#key pairs.allow}<PairAllowSheet code={pairs.allow} onclose={() => (pairs.allow = null)} />{/key}{/if}
 
   {#if moreOpen}
     <!-- The page under the bar grown with the other pages dims; a tap there closes it. -->
@@ -1400,6 +1481,12 @@
 
   /* A panel of Requests, Downloads, Insights, Health or Settings on a phone: under the top bar, not over it (the owner,
      2026-10-25); a playlist's, an album's or an artist's still covers it all. */
+  /* Out of sight at its right edge, faded, until Hold shows what it holds (BACK): then it slides in (App's `layerComes`). */
+  .playlist-layer:global(.arriving) {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
   .playlist-layer.under-bar {
     /* The page's colour, as beside the page (.player-side); a playlist's layer keeps the cards' (the owner, 2026-10-25). */
     background: var(--bg);

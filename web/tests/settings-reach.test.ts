@@ -25,14 +25,14 @@ test('Devices shows them their own devices: what is the server\'s stays the admi
   assert.ok(page.includes('const own = $derived(playOn.players.filter((p) => p.mine !== false));'), 'the list is their own');
 });
 
-test('every place that says who sees a part lets a part for everyone through', () => {
-  for (const [file, rule] of [
-    ['App.svelte', '(!x.admin || me.admin || x.everyone)'],
-    ['lib/SettingsPanel.svelte', '(!x.admin || me.admin || x.everyone)'],
-    ['lib/everywhere.svelte.ts', '(!x.admin || me.admin || x.everyone)'],
-  ] as const) {
-    assert.ok(source(file).includes(rule), file);
+test('every place that says who sees a part lets a part for everyone through: one rule, read by each (CU23)', () => {
+  assert.ok(source('lib/settingsSections.svelte.ts').includes('(!x.admin || admin || x.everyone)'));
+  for (const file of ['App.svelte', 'Settings.svelte', 'lib/SettingsPanel.svelte', 'lib/everywhere.svelte.ts']) {
+    assert.ok(source(file).includes('partsShown(me.admin, inApp, installed, '), file);
+    assert.ok(!source(file).includes('(!x.admin || me.admin || x.everyone)'), `${file}: no rule of its own`);
   }
+  // Opened by its address a part is not narrowed: whether it may show at all stays the permission alone.
+  assert.ok(source('lib/SettingsPanel.svelte').includes('return !x?.admin || me.admin || !!x.everyone;'));
 });
 
 test('Discover sends one to Tracking, where the listening services are', () => {

@@ -835,7 +835,7 @@ mod tests {
     /// hold is Discogs' turn's, on tokio's clock.)
     #[test]
     fn every_discogs_429_holds_everyone() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let _one = crate::app::switches::TEST_STATE.blocking_write();
         let turn = Turn::new(super::super::turn::DISCOGS);
         let (busy, none) = (reqwest::StatusCode::TOO_MANY_REQUESTS, reqwest::header::HeaderMap::new());
         let mut again = true;
@@ -856,7 +856,7 @@ mod tests {
     /// is not asked of the Cover Art Archive again while that is kept. (TN-a2: the hold is Discogs' turn's, on tokio's clock.)
     #[test]
     fn a_discogs_429_holds_everyone_and_a_kept_none_asks_nothing() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let _one = crate::app::switches::TEST_STATE.blocking_write();
         let turn = Turn::new(super::super::turn::DISCOGS);
         let _ = again_after(&turn, reqwest::StatusCode::TOO_MANY_REQUESTS, &reqwest::header::HeaderMap::new(), &mut true);
         let held = turn.held_at();
@@ -929,7 +929,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn discogs_follows_its_limit_headers() {
         use super::super::turn::{Failure, Pinned, class};
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let t0 = Pinned::now();
         let t0 = t0.0;
         let per_minute_was = PER_MINUTE.swap(0, Ordering::Relaxed);
@@ -1502,7 +1502,7 @@ mod facts_tests {
     #[test]
     fn a_discogs_pass_stops_at_its_next_album_when_paused() {
         use super::super::switches::{BACKGROUND, TEST_STATE, set_for_tests};
-        let _one = TEST_STATE.blocking_lock();
+        let _one = TEST_STATE.blocking_write();
         let was = set_for_tests(BACKGROUND, true);
         let mut asked = Vec::new();
         for n in until_paused(vec![1, 2, 3], "test") {

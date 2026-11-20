@@ -253,7 +253,7 @@ mod tests {
     #[tokio::test]
     async fn acoustid_over_its_limit_is_a_pause() {
         use crate::app::turn::{Failure, Pinned, class, fakes};
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let pinned = Pinned::now();
         let t0 = pinned.0;
         let limit = r#"{"status":"error","error":{"code":14,"message":"rate limit exceeded"}}"#;

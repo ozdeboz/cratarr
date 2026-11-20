@@ -3215,7 +3215,7 @@ pub mod tests {
 
     #[test]
     fn a_failed_user_hands_the_record_to_its_next_folder_or_back_to_the_search() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let f = |user: &str| Folder { user: user.into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: Vec::new(), unchecked: None };
         let mut i = Item {
             id: "ss-1".into(),
@@ -3327,7 +3327,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn a_check_acoustid_cannot_answer_holds_the_record_and_holds_it_against_nobody() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-held", "b-held");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("held", batch);
@@ -3384,7 +3384,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn slskd_gone_leaves_an_approved_record_as_it_is_and_blames_no_user() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-away";
         listed(id, State::Approved, None);
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-away-{}", std::process::id()));
@@ -3400,7 +3400,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn a_user_who_refuses_still_hands_the_record_to_the_next_folder() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-refused";
         listed(id, State::Approved, None);
         let refused = axum::Router::new().route("/api/v0/transfers/downloads/batches", axum::routing::post(|| std::future::ready(axum::http::StatusCode::NOT_FOUND)));
@@ -3412,7 +3412,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn a_fetch_slskd_stops_answering_keeps_its_batch_and_is_followed_again() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-reads", "b-reads");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("reads", batch);
@@ -3431,7 +3431,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn a_batch_slskd_answers_it_does_not_know_is_a_fetch_gone_and_held_for_nothing() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-gone", "b-gone");
         listed(id, State::Fetching, Some(batch));
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-gone-{}", std::process::id()));
@@ -3451,7 +3451,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn a_search_slskd_could_not_make_is_no_miss() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-search";
         listed(id, State::Searching, None);
         with_item(id, |i| i.misses = 3);
@@ -3468,7 +3468,7 @@ pub mod tests {
     /// what came of them removed. Nobody blamed; the record stays off the list.
     #[tokio::test]
     async fn a_record_at_work_can_leave_the_list_and_its_transfers_stop() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         listed("ss-work", State::Checking, Some("b-work"));
         with_item("ss-work", |i| hold(i, "AcoustID is not set up".into(), CHECK_AGAIN));
         assert_eq!(dropped("ss-work").and_then(|i| i.batch).as_deref(), Some("b-work"), "its batch, for its folder to go");
@@ -3504,7 +3504,7 @@ pub mod tests {
 
     #[test]
     fn the_library_is_the_incoming_one_whose_fetcher_is_soulseek() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use crate::settings::{Libraries, LibraryKind, LibrarySetting, Saved, SourceConfig};
         let libraries = Libraries(vec![
             LibrarySetting::new("/music", LibraryKind::Main),
@@ -3553,7 +3553,7 @@ pub mod tests {
 
     #[test]
     fn only_approved_requests_are_wanted_and_one_taken_off_stays_off() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, Some("rg1")), asked(2, None), asked(3, Some("rg3")), asked(4, None), asked(5, None)], &[of(101), of(102), of(103), None, of(101)], &[]);
         // Every record, with a release group or none (C51b); one with no record yet waits for one; one record taken once.
@@ -3637,7 +3637,7 @@ pub mod tests {
     /// are judged by the list without them, by titles and count: a folder is found, and no search more is made for it.
     #[tokio::test]
     async fn a_list_without_lengths_is_used_only_when_lists_with_lengths_find_nothing() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let r = waiting_with("ss-r33-only", vec![track(1, "One", 100), track(2, "Two", 200)], vec![no_length(1, "One"), no_length(2, "Two")]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
         search_with("ss-r33-only", answering(vec![vec![titled_folder("near")]], &asked)).await;
@@ -3649,7 +3649,7 @@ pub mod tests {
     /// R33: a folder found by titles alone says so beside its tick, and its files are gated by the list it was found by.
     #[tokio::test]
     async fn a_fallback_folder_says_it_has_no_lengths_to_check() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         waiting_with("ss-r33-says", Vec::new(), vec![no_length(1, "One"), no_length(2, "Two")]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
         search_with("ss-r33-says", answering(vec![vec![titled_folder("near")]], &asked)).await;
@@ -3663,7 +3663,7 @@ pub mod tests {
     /// is not.
     #[tokio::test]
     async fn with_lists_with_lengths_finding_a_folder_no_fallback_is_offered() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         waiting_with("ss-r33-strict", vec![track(1, "One", 100), track(2, "Two", 200)], vec![no_length(1, "One"), no_length(2, "Two")]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
         search_with("ss-r33-strict", answering(vec![vec![titled_folder("near")], vec![exact_folder("exact"), titled_folder("near")]], &asked)).await;
@@ -3676,7 +3676,7 @@ pub mod tests {
     /// again later, as a miss by the list with lengths is: nothing found is no dead end.
     #[tokio::test]
     async fn with_no_list_matching_even_by_titles_the_item_says_so() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         for (id, list) in [("ss-r33-none", vec![no_length(1, "One"), no_length(2, "Two"), no_length(3, "Three")]), ("ss-r33-count", vec![no_length(1, "One")])] {
             waiting_with(id, Vec::new(), list);
             let asked = std::sync::atomic::AtomicUsize::new(0);
@@ -3849,7 +3849,7 @@ pub mod tests {
     /// X4: a folder set aside is kept 14 days, then deleted and taken off its item.
     #[test]
     fn a_set_aside_is_kept_fourteen_days_then_deleted() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("aside");
         let (old, new) = (d.join(SET_ASIDE).join("ss-aside a"), d.join(SET_ASIDE).join("ss-aside b"));
         for p in [&old, &new] {
@@ -4004,7 +4004,7 @@ pub mod tests {
     /// end-to-end SK6.3 places it.
     #[tokio::test]
     async fn clipping_a_pop_and_clicks_are_notes_not_refusals() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-n1", "b-n1");
         tide_tables(id, State::Fetching, Some(batch), &["peer-a", "peer-b"]);
         let d = tide_tables_fetched("n1", batch);
@@ -4037,7 +4037,7 @@ pub mod tests {
     /// longer than the recording, 2 frames that would not decode, no decode at all, not in slskd's folder.
     #[tokio::test]
     async fn real_faults_still_set_a_folder_aside() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use crate::analysis::flaws::Sold;
         let neap = "02 Neap.flac";
         let walled = |sold: Sold| move |s: &mut Sound| (s.flaws.sold, s.flaws.cutoff_hz) = (sold, Some(16_000.0));
@@ -4107,7 +4107,7 @@ pub mod tests {
     /// once built, and its placing needs a library a unit test has none of, so it stops at its placing, its files kept.
     #[tokio::test]
     async fn a_clipping_master_is_placed_from_its_first_certain_folder() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-m";
         // The review of part 5, H1: three exact folders with free slots, fresh; Cratarr picks the first itself (Part 3).
         tide_tables(id, State::Found, None, &["peer-a", "peer-b", "peer-c"]);
@@ -4147,7 +4147,7 @@ pub mod tests {
     /// X4 (D17): a request whose record was retired follows the record its placed album joined or made; one on a live record stays.
     #[test]
     fn a_request_on_a_retired_record_follows_its_placed_album() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let cat = crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/incoming")]).unwrap();
         let folder = cat.folders().iter().next().map(|(id, _)| id).unwrap();
         let gone = cat.record_for_tests("Two Rooms", 2);
@@ -4196,7 +4196,7 @@ pub mod tests {
     /// before the rename.
     #[tokio::test]
     async fn a_placing_cut_after_its_rename_is_taken_as_placed() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y10-cut", "b-y10-cut");
         listed(id, State::Checking, Some(batch));
         let d = fetched_to("y10-cut", batch);
@@ -4238,7 +4238,7 @@ pub mod tests {
     /// fetch handed back to be cancelled.
     #[test]
     fn an_item_taken_off_after_its_placing_is_noted_is_judged_once_placed() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None)], &[of(101), of(102)], &[]);
         for (i, batch) in k.items.iter_mut().zip(["b-v4-1", "b-v4-2"]) {
@@ -4314,7 +4314,7 @@ pub mod tests {
     /// says Soulseek can't place albums, with why.
     #[tokio::test]
     async fn three_failed_placings_hold_the_record_a_day() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y12-unplaced", "b-y12-unplaced");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("y12-unplaced", batch);
@@ -4346,7 +4346,7 @@ pub mod tests {
     /// Y12: a placing that comes through ends a row of failed ones (here one a stop cut after its rename, taken as placed).
     #[tokio::test]
     async fn a_placing_that_comes_through_ends_the_row_of_failed_placings() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y12-reset", "b-y12-reset");
         listed(id, State::Checking, Some(batch));
         let d = fetched_to("y12-reset", batch);
@@ -4363,7 +4363,7 @@ pub mod tests {
     /// X4: too little free space for a folder's files holds the record before anything is fetched, and blames no user.
     #[tokio::test]
     async fn too_little_free_space_holds_the_record_and_blames_no_user() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let id = "ss-room";
         listed(id, State::Approved, None);
         with_item(id, |i| i.folders.iter_mut().flat_map(|f| f.files.iter_mut()).for_each(|o| o.size = i64::MAX / 4));
@@ -4380,7 +4380,7 @@ pub mod tests {
     /// removed, and the same folder fetched again later.
     #[tokio::test]
     async fn slskd_unable_to_store_a_file_blames_no_user() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-full", "b-full");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("full", batch);
@@ -4412,7 +4412,7 @@ pub mod tests {
     /// carries (the uploader's own disk's), and the next folder is tried.
     #[tokio::test]
     async fn a_remote_refusal_with_disk_words_fails_the_user() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         assert!(local_failure(&ended("Completed, Errored", "System.IO.IOException: No space left on device")));
         assert!(local_failure(&ended("Completed, Errored", "Access to the path '/downloads/cratarr/b1/01 One.flac' is denied.")));
         assert!(local_failure(&ended("Completed, Errored", "System.UnauthorizedAccessException: Access to the path '/downloads/cratarr' is denied.")));
@@ -4436,7 +4436,7 @@ pub mod tests {
     /// disk read-only, access denied, and slskd's own folder gone (U1).
     #[tokio::test]
     async fn a_name_too_long_fails_the_user_not_the_disk() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let too_long = "System.IO.PathTooLongException: The path '/downloads/cratarr/b1/01 One.flac' is too long, or a component of the specified path is too long.";
         assert!(!local_failure(&ended("Completed, Errored", too_long)));
         assert!(!local_failure(&ended("Completed, Errored", "The path '/downloads/cratarr/b1/01 One.flac' is too long, or a component of the specified path is too long.")));
@@ -4459,7 +4459,7 @@ pub mod tests {
     /// the record a day with Health's line. A peer's names cannot make part of slskd's own path missing.
     #[tokio::test]
     async fn a_missing_slskd_folder_blames_no_user() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let gone = "System.IO.DirectoryNotFoundException: Could not find a part of the path '/downloads/cratarr/b1'.";
         assert!(local_failure(&ended("Completed, Errored", gone)));
         assert!(local_failure(&ended("Completed, Errored", "Could not find a part of the path '/downloads/cratarr/b1'.")));
@@ -4496,7 +4496,7 @@ pub mod tests {
     /// store files, with why; no user is failed.
     #[tokio::test]
     async fn three_local_failures_hold_the_record_a_day() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y9-full", "b-y9-full");
         listed(id, State::Fetching, Some(batch));
         let d = data_folder("y9-full");
@@ -4525,7 +4525,7 @@ pub mod tests {
     /// Y9: a fetch that comes through ends a row of failures on Cratarr's side: the next one counts from one, and holds a while only.
     #[tokio::test]
     async fn a_fetch_that_comes_through_ends_the_row_of_local_failures() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y9-reset", "b-y9-reset");
         listed(id, State::Fetching, Some(batch));
         with_item(id, |i| i.local_failures = 2);
@@ -4543,7 +4543,7 @@ pub mod tests {
     /// X4: a user who fails partway leaves nothing behind in slskd's folder.
     #[tokio::test]
     async fn a_failed_user_leaves_no_batch_folder_behind() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-partway", "b-partway");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("partway", batch);
@@ -4571,7 +4571,7 @@ pub mod tests {
     /// again); the record is placed again from them later.
     #[tokio::test]
     async fn a_failed_placing_keeps_its_checked_files_and_lets_its_batch_go() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-unplaced", "b-unplaced");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("unplaced", batch);
@@ -4593,7 +4593,7 @@ pub mod tests {
     /// its queue 0.17's, copies nothing over that copy.
     #[test]
     fn the_016_queue_is_kept_aside_once() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("keep-016");
         let p = d.join("soulseek.json");
         let old = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
@@ -4609,7 +4609,7 @@ pub mod tests {
     /// R24 (N4): a queue that cannot be read is set aside whole and a new one begun, never emptied in its place.
     #[test]
     fn an_unreadable_queue_is_set_aside_not_emptied() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("unreadable");
         let p = d.join("soulseek.json");
         std::fs::write(&p, b"{\"next\": 3, \"items\": [ not json").unwrap();
@@ -4625,7 +4625,7 @@ pub mod tests {
     /// placed for its record as the list holds it once the fetch is done.
     #[test]
     fn an_old_item_fetched_first_at_start_is_placed_for_its_record() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"fetching","batch":"b-1"}]}"#;
         let mut k: Kept = serde_json::from_str(raw).unwrap();
         let at_start = k.items[0].record.clone();
@@ -4703,7 +4703,7 @@ pub mod tests {
     /// X3: a folder holding more files than the list is a fallback after folders of the list's own count, saying what it takes.
     #[tokio::test]
     async fn a_fuller_folder_is_a_fallback_after_exact_ones() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         waiting_with("ss-x3-fuller", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
         let fuller = answer("big", true, vec![file(r"z\01 One.flac", 100), file(r"z\02 Two.flac", 200), file(r"z\03 Three.flac", 300)]);
         let asked = std::sync::atomic::AtomicUsize::new(0);
@@ -4720,7 +4720,7 @@ pub mod tests {
     /// none, it goes with it, one being fetched too, handed back to be cancelled (Y2).
     #[test]
     fn a_ticked_item_goes_with_its_request_or_to_the_other() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(101), of(103)], &[]);
         assert_eq!(k.items.len(), 2, "one item a record");
@@ -4738,7 +4738,7 @@ pub mod tests {
     /// X2: a record taken off the list stays off, whichever request of it there is.
     #[test]
     fn out_of_the_list_is_kept_by_record() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
         let i = k.items.remove(0);
@@ -4752,7 +4752,7 @@ pub mod tests {
     /// X1: Soulseek's first search is five minutes after the request was handed to Lidarr, which goes first.
     #[test]
     fn soulseek_waits_five_minutes_for_lidarr() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let r = crate::userdata::Request { decided_at: Some(1_000), fetched: Some("Lidarr added it and is looking for it".into()), ..asked(1, None) };
         assert_eq!(first_search(&r, None, true), 1_000 + LIDARR_FIRST);
         let mut k = Kept::default();
@@ -4773,7 +4773,7 @@ pub mod tests {
     /// does one whose release is to come.
     #[test]
     fn a_failed_grab_hands_over_to_soulseek() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(102), of(103)], &[5_000, 5_000, 90_000]);
         let groups: HashMap<i64, String> = [(1, "g1".to_string()), (2, "g2".to_string()), (3, "g3".to_string())].into();
@@ -4786,7 +4786,7 @@ pub mod tests {
     /// (handed back to be cancelled in slskd); one placed is that arrival, and stays (Y2).
     #[test]
     fn the_first_arrival_cancels_soulseeks_fetch() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None)], &[of(101), of(102)], &[]);
         (k.items[0].state, k.items[0].batch) = (State::Fetching, Some("b1".into()));
@@ -4800,7 +4800,7 @@ pub mod tests {
     /// is placed (that arrival itself, Y2); one being fetched or checked goes too, its fetch cancelled (X1).
     #[test]
     fn soulseek_takes_no_record_already_had() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         let both = [asked(1, None), asked(2, None)];
         take_requests(&mut k, &both, &[had(101), of(102)], &[]);
@@ -4817,7 +4817,7 @@ pub mod tests {
     /// the placed ones.
     #[test]
     fn clearing_placed_does_not_search_them_again() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
         k.items[0].state = State::Placed;
@@ -4846,7 +4846,7 @@ pub mod tests {
     /// in slskd and its batch folder removed. Only a placed one is that arrival: nothing is seen before its placing (X4).
     #[tokio::test]
     async fn a_checked_item_goes_when_the_other_fetchers_copy_arrives() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let batch = "b-y2-held";
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
@@ -4877,7 +4877,7 @@ pub mod tests {
     /// nothing, and its files go with it.
     #[tokio::test]
     async fn an_item_whose_placing_failed_is_never_placed_once_its_record_arrived() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-y2-unplaced", "b-y2-unplaced");
         listed(id, State::Fetching, Some(batch));
         let d = fetched_to("y2-unplaced", batch);
@@ -4906,7 +4906,7 @@ pub mod tests {
     /// is never placed for nobody.
     #[test]
     fn a_held_item_of_a_cancelled_request_is_not_placed() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(102), of(103)], &[]);
         (k.items[0].state, k.items[0].batch) = (State::Checking, Some("b-y2-left".into()));
@@ -4923,7 +4923,7 @@ pub mod tests {
     /// another copy alone: no pass has read it yet, and once one has, its record is had.
     #[test]
     fn a_placed_copy_partly_there_lets_soulseek_look_again() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RecordOf};
         let partly = |n: i64, has: u32, list: u32| Some(RecordOf { holder: Some(n), holding: Holding::Partly { has, of: list }, ..of(n).unwrap() });
         let placed = |k: &mut Kept| {
@@ -4950,7 +4950,7 @@ pub mod tests {
     /// way: it goes, and the record's next request is searched again, reading Soulseek's search, never "fetching 100%".
     #[test]
     fn a_deleted_soulseek_copy_lets_the_next_request_be_searched() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RecordOf, RequestState, request_state};
         let arrived = Some(RecordOf { holder: Some(101), holding: Holding::Arrived, ..of(101).unwrap() });
         let mut k = Kept::default();
@@ -4973,7 +4973,7 @@ pub mod tests {
     /// copy, its last one deleted from Incoming (U7), never does, and that request is searched for.
     #[test]
     fn a_placed_item_is_never_handed_to_a_request_whose_record_it_no_longer_holds() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let placed = |read: bool| {
             let mut k = Kept::default();
             take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
@@ -4993,7 +4993,7 @@ pub mod tests {
     /// that went to an Incoming library's trash lets it.
     #[test]
     fn a_kept_album_deleted_from_music_is_not_searched_again() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
         (k.items[0].state, k.items[0].folders, k.items[0].chosen) = (State::Placed, vec![two_tracks("a")], Some(0));
@@ -5035,7 +5035,7 @@ pub mod tests {
     /// file went before its other file was kept into Music and deleted there, in Music's trash still.
     #[test]
     fn a_placed_copy_removed_from_incoming_by_hand_is_looked_for_again() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RequestState, request_state};
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
         let records: Vec<i64> = ["By Hand", "Kept Then Trashed", "Kept Then Removed", "Kept After", "Fetched Again"].iter().map(|n| cat.record_for_tests(n, 2)).collect();
@@ -5105,7 +5105,7 @@ pub mod tests {
     /// shape stays: its own files gone, and new rows on the other record's tracks in the folder, once the catalogue retires them.
     #[test]
     fn a_placed_copy_read_as_another_record_frees_its_item() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{Holding, RequestState, request_state};
         use crate::catalogue::{AlbumCopy, identity};
         for (case, kept) in [("retagged in Incoming", false), ("kept into Music, retagged there", true)] {
@@ -5209,7 +5209,7 @@ pub mod tests {
     /// state, batch, folder, tick and names kept, no second item made for it, and written back with its record.
     #[test]
     fn an_old_item_in_flight_keeps_its_record() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let raw = r#"{"next":3,"dropped":[],"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg-moon","release":"rel-moon","request":7},
             "state":"fetching","tracks":[{"disc":1,"position":1,"title":"La Femme d'argent","length_ms":431000,"recording":"rec-1"}],
             "folders":[{"user":"whole","dir":"Music\\Air\\Moon Safari","format":"flac","lossless":true,"free_slot":true,"queue":0,"speed":100,"extra":0,"files":[]}],
@@ -5241,7 +5241,7 @@ pub mod tests {
     /// request reads now, one item still.
     #[test]
     fn a_merged_records_soulseek_item_names_the_record_it_went_into() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
         let (older, newer) = (cat.record_for_tests("Stone Sky", 0), cat.record_for_tests("Stone Sky", 0));
         let asked = crate::userdata::Request {
@@ -5280,7 +5280,7 @@ pub mod tests {
     /// alice's is taken off, her request waiting on his: never two searching, never one under way taken off.
     #[test]
     fn a_merge_by_a_master_leaves_one_item_searching() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         for (case, bobs_fetching) in [("none ticked", false), ("bob's fetching", true)] {
             let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
             let (older, newer) = (cat.record_for_tests("Two Rooms", 0), cat.record_for_tests("Two Rooms", 0));
@@ -5418,7 +5418,7 @@ pub mod tests {
     /// its share, nothing taken off. The same for "Kite LP": an album joins, an EP does not.
     #[test]
     fn the_fold_joins_a_wants_record_to_a_had_one_only_where_the_type_agrees() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         for (case, title, tracks, typed, joins) in [
             ("EP, a had EP", "Kite EP", 4, None, true),
             ("EP, a had album set to EP by hand", "Kite EP", 10, Some("ep"), true),
@@ -5496,7 +5496,7 @@ pub mod tests {
     #[tokio::test]
     async fn soulseek_reads_no_list_while_background_reading_is_paused() {
         use super::super::switches::{BACKGROUND, PAUSED, TEST_STATE, set_for_tests};
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
         let record = cat.record_for_tests("Two Rooms", 2);
         waiting_with("ss-y7-paused", Vec::new(), Vec::new());
@@ -5542,7 +5542,7 @@ pub mod tests {
     /// flight keeps what it has.
     #[test]
     fn search_now_reads_the_counting_list_again() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let item = |state: State| Item {
             id: "ss-1".into(),
             record: record("Air", "Moon Safari", Some(1998)),
@@ -5584,6 +5584,8 @@ pub mod tests {
     /// lengths is a candidate.
     #[tokio::test]
     async fn a_labels_bandcamp_only_request_is_searched_by_its_list() {
+        // Its list is read in the background, whose switch other tests here move (TS01 item 9: they raced).
+        let _one = crate::app::switches::TEST_STATE.read().await;
         let (cat, items, d) = fx01("bandcamp-list");
         let it = of_request(&items, 11);
         assert_eq!((it.record.artist.as_str(), it.record.album.as_str(), it.state), ("Tape Club", "After Hours", State::Waiting), "taken, though it has no release group");
@@ -5615,7 +5617,7 @@ pub mod tests {
 
     #[test]
     fn a_kept_item_reads_back_and_a_time_that_cannot_be_read_counts_as_due() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
         let k: Kept = serde_json::from_str(raw).unwrap();
         assert_eq!((k.items[0].due, k.items[0].misses, k.items[0].record.request), (0, 0, 7), "no time kept: due");
@@ -5627,7 +5629,7 @@ pub mod tests {
     /// searched again, and never reads wanted.
     #[tokio::test]
     async fn a_delivered_album_deleted_from_a_kept_library_is_not_searched_again() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use crate::app::requests::tests::{Copies, Strict, with_accounts};
         use crate::app::requests::{DELIVERED, Hands, RequestState, round_with};
         use crate::app::room::tests::{MUSIC, Roomy, room_shape};
@@ -5762,7 +5764,7 @@ pub mod tests {
     /// taken off the list), its reads beside them, and the six downloads' transfers run together once started.
     #[tokio::test]
     async fn slskds_operations_go_one_at_a_time_whoever_asks() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let slskd = Scripted::new().slow(200).hold_all(20.0);
         let client = slskd.client();
         let d = data_folder("sk21");
@@ -5811,7 +5813,7 @@ pub mod tests {
     /// so once a minute.
     #[tokio::test]
     async fn a_busy_slskd_is_asked_again_shortly_and_blames_no_one() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk22");
         let seen: Arc<Mutex<Vec<Item>>> = Arc::default();
         let kept_seen = seen.clone();
@@ -5883,7 +5885,7 @@ pub mod tests {
     /// batches of one item, never a hold, nobody failed.
     #[tokio::test]
     async fn a_lost_answer_is_read_back_by_its_batch_and_never_fetched_twice() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk23");
         let noted: Arc<Mutex<Vec<(String, Option<String>)>>> = Arc::default();
         let kept_noted = noted.clone();
@@ -6074,7 +6076,7 @@ pub mod tests {
     /// ends; each item downloading its own batch, its percent its own batch's alone.
     #[tokio::test]
     async fn picked_records_download_at_once() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let slskd = Scripted::new().slow(50).hold_all(10.0);
         let d = data_folder("sk11");
         let ids: Vec<String> = (1..=25).map(|n| format!("ss-sk11-{n:02}")).collect();
@@ -6103,7 +6105,7 @@ pub mod tests {
     /// done downloading (gone to its check). Variants: ss-1's failure, or its request leaving, lets ss-2 go at once.
     #[tokio::test]
     async fn no_two_records_from_one_user_at_once() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk12");
         let slskd = Scripted::new().hold_all(5.0).offline("peer-c").writes_to(&d, None);
         picked("ss-sk12-1", &["peer-a"]);
@@ -6177,7 +6179,7 @@ pub mod tests {
     /// go on meanwhile.
     #[tokio::test]
     async fn checks_go_one_at_a_time_while_downloads_run() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk13");
         let places = places_in(&d);
         let slskd = Scripted::new().hold_all(20.0).writes_to(&d, None);
@@ -6226,7 +6228,7 @@ pub mod tests {
     /// starts at the next look.
     #[tokio::test]
     async fn downloads_under_way_count_against_the_free_space() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         const GB: u64 = 1 << 30;
         let d = data_folder("sk14");
         let slskd = Scripted::new().hold_all(1.0).writes_to(&d, None);
@@ -6266,7 +6268,7 @@ pub mod tests {
     /// administrator's tick goes; space again, all of them go at once, no cap.
     #[tokio::test]
     async fn below_the_floor_no_users_download_starts() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk14f");
         let slskd = Scripted::new().hold_all(1.0);
         let alices = ["ss-sk14f-a1", "ss-sk14f-a2", "ss-sk14f-a3"];
@@ -6292,7 +6294,7 @@ pub mod tests {
     /// record to its next folder at once; the user's turn free, so their other record goes by its own try; another download untouched.
     #[tokio::test]
     async fn a_user_gone_offline_fails_that_record_alone() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk15");
         let slskd = Scripted::new().hold_all(5.0).writes_to(&d, None);
         picked("ss-sk15-1", &["peer-a", "peer-b"]);
@@ -6421,7 +6423,7 @@ pub mod tests {
     /// peer-a. (d) Forgotten a second time in a row: peer-a failed for ss-1 as ever, its next folder fetched.
     #[tokio::test]
     async fn a_slskd_restart_blames_no_user_and_fetches_each_again_once() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk17");
         let slskd = Scripted::new().hold_all(30.0);
         picked("ss-sk17-1", &["peer-a", "peer-d"]);
@@ -6469,7 +6471,7 @@ pub mod tests {
     /// new one would be: below the floor a user's waits (AL03.2), short of room it holds (X4); one slskd has is followed as ever.
     #[tokio::test]
     async fn a_kept_batch_sent_again_waits_below_the_floor_and_for_room() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("m1");
         let slskd = Scripted::new().hold_all(5.0);
         let client = slskd.client();
@@ -6499,7 +6501,7 @@ pub mod tests {
     /// back yet): its batch is let go once slskd answers, never left running unfollowed.
     #[tokio::test]
     async fn a_batch_in_flight_when_its_item_leaves_is_let_go() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk16-flight");
         let arrived = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let seen = arrived.clone();
@@ -6526,7 +6528,7 @@ pub mod tests {
     /// read again, never a miss, never "429" in a why.
     #[tokio::test]
     async fn a_busy_read_of_a_search_is_no_miss() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let found = serde_json::json!([{ "username": "peer-s", "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100, "files": [
             { "filename": r"x\Air\Moon Safari\01 One.flac", "size": 1000, "length": 100 }, { "filename": r"x\Air\Moon Safari\02 Two.flac", "size": 1000, "length": 200 } ] }]);
         // Every rung of the ladder meets them (three rungs here).
@@ -6556,7 +6558,7 @@ pub mod tests {
     /// files; the item fetching from folder 0, marked Cratarr's pick, no tick asked for; then checked and placed in Incoming.
     #[tokio::test]
     async fn a_certain_record_starts_by_itself() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk31");
         let slskd = Scripted::new().hold_all(5.0).writes_to(&d, None);
         found("ss-sk31", &[("peer-a", true), ("peer-b", true)], now(), 3101);
@@ -6582,7 +6584,7 @@ pub mod tests {
     /// tickable; root's tick of (a) is fetched as today, not Cratarr's pick.
     #[tokio::test]
     async fn uncertain_records_wait_for_a_pick() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk32");
         let slskd = Scripted::new().hold_all(5.0);
         let t = now();
@@ -6614,7 +6616,7 @@ pub mod tests {
     /// 181 s, and two such files: each paired once.
     #[test]
     fn certain_is_todays_judging() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let t0 = 1_800_000_000;
         let judged = |tracks: Vec<Track>, folders: Vec<Folder>| Item { tracks, folders, found_at: t0, state: State::Found, ..found_twice("ss-sk33") };
         // (d)
@@ -6656,7 +6658,7 @@ pub mod tests {
     /// one with no free slot waits for its pick, not searched again by this rule.
     #[tokio::test]
     async fn a_stale_free_slot_is_looked_at_again_before_a_start() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk34");
         let slskd = Scripted::new().hold_all(5.0);
         let t0 = now();
@@ -6680,7 +6682,7 @@ pub mod tests {
     /// each saying "Waits for space"; root's ticks meanwhile go as today; space again, every one waiting starts.
     #[tokio::test]
     async fn room_and_the_floor_hold_automatic_starts() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{WAITS_FOR_ROOM, WAITS_FOR_SPACE};
         let d = data_folder("sk35");
         let slskd = Scripted::new().hold_all(5.0);
@@ -6725,7 +6727,7 @@ pub mod tests {
     /// a record had or a request no longer open, read at the start itself; once neither, it starts.
     #[tokio::test]
     async fn automatic_starts_keep_lidarrs_five_minutes() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let t0 = 1_800_000_000;
         let want = crate::userdata::Request { decided_at: Some(t0), fetched: Some("Lidarr added it and is looking for it".into()), ..asked(1, None) };
         assert_eq!([first_search(&want, None, true), first_search(&want, Some(t0 + 7 * 86_400), true)], [t0 + 300, t0 + 7 * 86_400]);
@@ -6756,7 +6758,7 @@ pub mod tests {
     /// for a pick, no longer Cratarr's. An administrator's tick goes to its next folder as today.
     #[test]
     fn after_a_failure_cratarrs_pick_goes_on_only_where_certain() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let t = now();
         let picked_as = |id: &str, users: &[(&str, bool)], auto: bool| {
             found(id, users, t, 3700);
@@ -6779,7 +6781,7 @@ pub mod tests {
     /// nothing goes anywhere but the Incoming library given.
     #[tokio::test]
     async fn automatic_starts_keep_march_2026s_lesson() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk38");
         let slskd = Scripted::new().hold_all(5.0).writes_to(&d, None);
         found("ss-sk38", &[("peer-a", true)], now(), 3801);
@@ -6805,7 +6807,7 @@ pub mod tests {
     /// POST. (d) is `two_ticks_at_once_the_first_wins_and_a_gone_source_is_refused`.
     #[tokio::test]
     async fn cratarrs_pick_meets_a_persons_once() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk39");
         let slskd = Scripted::new().hold_all(5.0);
         let (client, look, t) = (slskd.client(), Look::roomy(), now());
@@ -6851,7 +6853,7 @@ pub mod tests {
     /// floor (anyone's) and its asker's room: back to found, saying why, no longer Cratarr's pick.
     #[tokio::test]
     async fn an_automatic_pick_not_yet_sent_waits_for_the_floor_and_room() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         use super::super::requests::{WAITS_FOR_ROOM, WAITS_FOR_SPACE};
         let d = data_folder("g9");
         let slskd = Scripted::new().hold_all(5.0);
@@ -6877,7 +6879,7 @@ pub mod tests {
     /// for it a while, never Stuck a day for want of it; nor is it picked by Cratarr.
     #[tokio::test]
     async fn an_item_with_no_record_yet_is_neither_stuck_by_a_search_nor_picked() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let it = Item { state: State::Waiting, due: 0, record: Record { record: 0, ..found_twice("ss-r0").record }, ..found_twice("ss-r0") };
         let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
         kept(|k| k.items.push(it.clone()));
@@ -6893,7 +6895,7 @@ pub mod tests {
     /// and starts no pick of Cratarr's not yet sent: its own picks fail closed. A person's tick still goes.
     #[tokio::test]
     async fn a_look_that_could_not_read_the_server_picks_nothing() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("h2");
         let slskd = Scripted::new().hold_all(5.0);
         let client = slskd.client();
@@ -6957,7 +6959,7 @@ pub mod tests {
     /// kept, as only the library a unit test has not set up stops it); nobody failed, nothing set aside, no notes.
     #[tokio::test]
     async fn a_certain_folders_files_pass_every_check_and_acoustid_is_asked_of_each() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-g1", "b-g1");
         case_item(id, batch, &["peer-a"]);
         let d = fetched_from(crate::fixtures::gate::CLEAN, batch);
@@ -6973,7 +6975,7 @@ pub mod tests {
     /// the workers its user is failed and the item goes back to its search.
     #[tokio::test]
     async fn a_transcode_is_refused_before_acoustid_is_asked() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-g2", "b-g2");
         case_item(id, batch, &["peer-a"]);
         let d = fetched_from(crate::fixtures::gate::WALLED, batch);
@@ -6993,7 +6995,7 @@ pub mod tests {
     /// passed, nobody failed, nothing set aside; the item keeps its notes, by file.
     #[tokio::test]
     async fn notes_pass_every_check_and_acoustid_is_still_asked() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let (id, batch) = ("ss-g3", "b-g3");
         case_item(id, batch, &["peer-a"]);
         let d = fetched_from(crate::fixtures::gate::NOTES, batch);
@@ -7025,7 +7027,7 @@ pub mod tests {
     /// folder's.
     #[tokio::test]
     async fn notes_go_when_a_new_batch_starts_or_the_record_is_searched_again() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("l7");
         let slskd = Scripted::new().hold_all(5.0);
         let earlier = || [("02 Neap.flac".to_string(), "Clipped at 0:01".to_string())].into_iter().collect::<BTreeMap<_, _>>();
@@ -7045,7 +7047,7 @@ pub mod tests {
     /// picks it: picked once, one batch.
     #[tokio::test]
     async fn two_picks_of_one_user_at_once_start_one_download() {
-        let _one = crate::app::switches::TEST_STATE.lock().await; // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.read().await; // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let d = data_folder("sk18");
         let slskd = Scripted::new().hold_all(5.0);
         let (client, look, t) = (slskd.client(), Look::roomy(), now());
@@ -7080,7 +7082,7 @@ pub mod tests {
     /// fetch keeps its batch and its tick. Never a fetch from another peer than the one ticked.
     #[test]
     fn two_ticks_at_once_the_first_wins_and_a_gone_source_is_refused() {
-        let _one = crate::app::switches::TEST_STATE.blocking_lock(); // now() is the turns' clock (`moment::PINNED`), which TN's tests move
+        let _one = crate::app::switches::TEST_STATE.blocking_read(); // reads now(), the turns' clock (`moment::PINNED`), which TN's tests move
         let pick = |id: &str, folder: usize, named: Option<(&str, &str)>| Pick { id: id.into(), folder: Some(folder), user: named.map(|n| n.0.to_string()), folder_name: named.map(|n| n.1.to_string()) };
         // (a)
         for named in [false, true] {
@@ -7283,7 +7285,7 @@ pub mod tests {
     /// a DELETE sent or b6's folder removed while slskd is away or AcoustID paused.
     #[tokio::test(start_paused = true)]
     async fn a_rate_limit_uses_no_attempt_and_fails_nothing() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let (_pinned, clock) = Clock::at_t0();
         let d = own_list("rate-limit", soulseek_store());
         let slskd_dir = d.join("slskd");
@@ -7361,7 +7363,7 @@ pub mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_switches_are_not_pauses() {
         use crate::app::switches::{BACKGROUND, MUSICBRAINZ as MUSICBRAINZ_ON, PAUSED, SLSKD as SLSKD_ON, TEST_STATE, set_for_tests};
-        let _one = TEST_STATE.lock().await;
+        let _one = TEST_STATE.write().await;
         let (_pinned, clock) = Clock::at_t0();
         let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
         let (both, alone) = (cat.record_for_tests("Harbour Lights", 0), cat.record_for_tests("Neap Season", 0));
@@ -7473,7 +7475,7 @@ pub mod tests {
     /// record searched.
     #[tokio::test(start_paused = true)]
     async fn a_paused_musicbrainz_counts_no_try_against_a_list() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         let (_pinned, clock) = Clock::at_t0();
         let musicbrainz = Turn::new(crate::app::turn::MUSICBRAINZ);
         assert_eq!(musicbrainz.heard(true, Some(Duration::from_secs(60))), Some(Duration::from_secs(60)), "MusicBrainz's 503, Retry-After 60");
@@ -7642,7 +7644,7 @@ pub mod tests {
     /// user failed. Never a question asked early, a held item failed by the restart, or a kept deadline lengthened.
     #[tokio::test(start_paused = true)]
     async fn a_restart_mid_pause_asks_nothing_early() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         restart_mid_pause("restart-kept", "http://192.168.1.20:5056", false).await;
         restart_mid_pause("restart-emptied", "http://192.168.1.20:5057", true).await;
     }
@@ -7697,7 +7699,7 @@ pub mod tests {
     #[tokio::test(start_paused = true)]
     async fn two_accounts_items_wait_on_one_pause() {
         use super::super::requests::{APPROVED, CANCELLED};
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         for (cancels, url) in [(false, "http://192.168.1.20:5058"), (true, "http://192.168.1.20:5059")] {
             let (_pinned, clock) = Clock::at_t0();
             let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
@@ -7840,7 +7842,7 @@ pub mod tests {
     /// a file refused.
     #[tokio::test]
     async fn the_queues_read_back_unchanged_after_the_turns() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let _one = crate::app::switches::TEST_STATE.write().await;
         // Before the 0.16 waiting item's time: a round as one could find it.
         let at = 1_794_000_000;
         let _pinned = crate::app::turn::Pinned(at);

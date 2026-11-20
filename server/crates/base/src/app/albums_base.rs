@@ -57,6 +57,12 @@ pub fn may_add(a: &Active, admin: bool, viewer: Option<&str>, requester: Option<
     admin || viewer.is_some_and(|v| requester == Some(v) && a.cfg.own_music_on(v))
 }
 
+/// Whether the viewer may delete an Incoming album (0101 point 2, R32): an administrator any; a user their own request's, one that
+/// came after they asked (`requester_of`). Cratarr must be able to write in its folder too (the Incoming view's `deletable`). Pure.
+pub fn may_delete_waiting(admin: bool, viewer: Option<&str>, requester: Option<&str>) -> bool {
+    admin || viewer.is_some_and(|v| requester == Some(v))
+}
+
 /// Where an Incoming album goes by default (0101 point 2), the page's and Home Assistant's promote's alike (X5): its requester's own
 /// music, else its library's setting, else the first main library. `requester`: the first to ask for it before this copy came
 /// (`requests::requesters`), an account still on. Pure.

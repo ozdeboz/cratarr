@@ -48,7 +48,7 @@ async fn an_artists_bandcamp_list_joins_the_records_of_its_names() {
     use crate::app::switches::{BANDCAMP, DISCOGS, MUSICBRAINZ, TEST_STATE};
     use crate::catalogue::identity::RefTrack;
     use crate::serve::ids;
-    let _one = TEST_STATE.lock().await;
+    let _one = TEST_STATE.write().await;
     let d = std::env::temp_dir().join(format!("cratarr-f2-joined-{}", std::process::id()));
     std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
     let lib = crate::app::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap()), None).await.unwrap();

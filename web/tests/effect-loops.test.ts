@@ -11,7 +11,6 @@ const SRC = new URL('../src/', import.meta.url);
 const SETTLES: Record<string, [number, string]> = {
   'App.svelte|moreOpen': [1, 'written in the keydown handler only'],
   'App.svelte|page': [1, 'the plain openedAway is set before the write: once'],
-  'App.svelte|status': [1, 'written after an await; the 30 s poll is untracked'],
   'Discover.svelte|seenEnd': [1, 'guarded by t.id !== seenEnd'],
   'Home.svelte|skyIn': [1, 'returns when true; only ever set true'],
   'Library.svelte|switching': [1, 'set false only while true'],

@@ -179,8 +179,14 @@ impl Drop for Ends {
         if let Some(all) = looking().as_mut() {
             all.remove(&self.0);
         }
+        #[cfg(any(test, feature = "test-support"))]
+        LOOK_ENDED.notify_waiters();
     }
 }
+
+/// Tests: told as each look ends, for a test to wait on rather than on a count of short sleeps (TS01).
+#[cfg(any(test, feature = "test-support"))]
+static LOOK_ENDED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// What the last look of an artist here could not hear (F8), by MusicBrainz id: when, and each source's outcome (F1's: switched off,
 /// didn't answer), in the order the look asked them; none where it heard every source.
@@ -632,16 +638,20 @@ mod tests {
         Arc::new(Fake { asked: Default::default(), similar })
     }
 
-    /// The recommendations asked at `now` once no look runs (a test fails rather than waits for good).
+    /// The recommendations asked at `now` once no look runs: each look's end waited for (`LOOK_ENDED`), not a count of short
+    /// sleeps that a busy machine outlasts (TS01, `app::related`'s timing); a test fails rather than waits for good.
     async fn ended(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str, now: i64, lists: &Arc<Fake>) -> Answer {
-        for _ in 0..500 {
+        loop {
+            // Listening before asking, so a look that ends meanwhile is heard.
+            let ending = super::LOOK_ENDED.notified();
+            tokio::pin!(ending);
+            ending.as_mut().enable();
             let a = answer(serve, name, mbid, now, lists.clone()).await.unwrap();
             if !a.looking {
                 return a;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::timeout(std::time::Duration::from_secs(30), ending).await.expect("still looking");
         }
-        panic!("still looking")
     }
 
     /// F8.1 (c), as corrected (the recommendations read ListenBrainz and MusicBrainz, never Last.fm): while a look runs

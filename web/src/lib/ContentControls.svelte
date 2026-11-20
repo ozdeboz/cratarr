@@ -390,7 +390,7 @@
     {#if (page || action) && pageAction && !searching}
       {@const a = pageAction}
       <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)}
-        ><Icon name={a.icon} size={22} />{#if a.progress != null}<ProgressRing progress={a.progress} size={38} />{/if}</button
+        ><Icon name={a.icon} size={22} />{#if a.progress != null}<ProgressRing progress={a.progress} size={38} />{/if}{#if a.dot}<span class="badge dot" aria-hidden="true"></span>{/if}</button
       >
     {/if}
   </div>
@@ -507,6 +507,16 @@
     font-weight: 700;
     line-height: 16px;
     text-align: center;
+  }
+
+  /* Something new behind a page's own button (UC03): the badge as a dot, no count. */
+  .badge.dot {
+    top: 6px;
+    right: 6px;
+    min-width: 0;
+    width: 10px;
+    height: 10px;
+    padding: 0;
   }
 
   /* The search open: its field and ✕ inside the pill, right of the magnifier, as wide as a phone's row allows. */

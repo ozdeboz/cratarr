@@ -56,6 +56,8 @@
     // Lucide's sliders-horizontal: a page's View (its order, layout and size), the visuals' settings.
     sliders:
       '<path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/>',
+    // Settings' Basic or Advanced (Lucide's settings-2), lit while on Advanced (CU22, Q6).
+    advanced: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
     listAdd: '<path d="M16 5H3"/><path d="M11 12H3"/><path d="M16 19H3"/><path d="M18 9v6"/><path d="M21 12h-6"/>',
     /** Out of a playlist: listAdd's minus. */
     listRemove: '<path d="M16 5H3"/><path d="M11 12H3"/><path d="M16 19H3"/><path d="M21 12h-6"/>',

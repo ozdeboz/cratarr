@@ -67,3 +67,16 @@ test('settled, a late look does not undo it', () => {
   const settled = lookedAgain(notReached(answered, 1000), false);
   assert.deepEqual(lookedAgain(settled, true), settled);
 });
+
+// CU13 (red first: readsFrom took no Mobile data): the app on mobile data with Sync's Mobile data set to None reads the device, and
+// says why; a browser never says so.
+test('Mobile data set to None while on it: reads come from the device, nothing to settle, and it says why', () => {
+  assert.deepEqual(readsFrom({ unreachable: false, noNetwork: false, mobileOff: true }), { from: 'device', why: 'mobile' });
+  assert.deepEqual(readsFrom({ unreachable: true, noNetwork: false, mobileOff: true }), { from: 'device', why: 'mobile' });
+});
+
+test('no network says so first; with Mobile data not off, as before', () => {
+  assert.deepEqual(readsFrom({ unreachable: false, noNetwork: true, mobileOff: true }), { from: 'device', why: 'no-network' });
+  assert.deepEqual(readsFrom({ unreachable: false, noNetwork: false, mobileOff: false }), { from: 'server', why: 'answers' });
+  assert.deepEqual(readsFrom({ unreachable: false, noNetwork: false }), { from: 'server', why: 'answers' });
+});
