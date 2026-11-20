@@ -80,6 +80,8 @@ pub mod discogs_facts;
 pub mod resume;
 pub mod lastfm;
 pub mod listening;
+#[cfg(test)]
+mod served_tests_listening;
 pub mod queues_listening;
 pub mod scrobble;
 pub mod tasks;
@@ -91,6 +93,8 @@ pub mod search;
 pub mod features_host;
 mod app_features;
 pub mod requests;
+#[cfg(test)]
+mod served_tests_requests;
 // What counts against each user's room (AL01).
 pub mod room;
 // Records not had that nobody sees, forgotten (RT01).

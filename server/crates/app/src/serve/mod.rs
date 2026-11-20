@@ -32,6 +32,8 @@ pub mod requests_kept;
 pub mod review;
 pub mod routes;
 pub mod services;
+#[cfg(test)]
+mod served_tests_api;
 pub mod sessions;
 pub mod signin;
 pub mod users;
@@ -1062,15 +1064,20 @@ pub fn form_urlencoded_segment(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The tests' helpers, shared with those moved up out of this file (`served_tests_*`; test-support for the crates above).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::{Serve, ids};
+    use crate::catalogue::{Catalogue, Rules};
     use crate::serve::copies::Kind;
-    use crate::userdata::{Heard, Kind as Item};
-    use std::path::Path;
+    use crate::userdata::Kind as Item;
 
     /// A server on two kept folders with a catalogue of them, for a test named `name`.
-    fn on_two_folders(name: &str) -> ([PathBuf; 2], Arc<Catalogue>, Arc<Serve>) {
+    pub fn on_two_folders(name: &str) -> ([PathBuf; 2], Arc<Catalogue>, Arc<Serve>) {
         let roots = [0, 1].map(|n| std::env::temp_dir().join(format!("cratarr-serve-{name}-{n}-{}", std::process::id())));
         for root in &roots {
             std::fs::remove_dir_all(root).ok();
@@ -1084,7 +1091,7 @@ mod tests {
     }
 
     /// These files, (path, title), of one album, as the catalogue holds them once read and identified.
-    fn add(cat: &Catalogue, root: &Path, folder: i64, files: &[(&str, &str)]) {
+    pub fn add(cat: &Catalogue, root: &Path, folder: i64, files: &[(&str, &str)]) {
         for (rel, _) in files {
             std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
             std::fs::write(root.join(rel), rel).unwrap();
@@ -1098,15 +1105,36 @@ mod tests {
     }
 
     /// A check that finds something new, a second after the last: the walk reads a file's time in whole seconds.
-    fn checked_again(serve: &Serve) {
+    pub fn checked_again(serve: &Serve) {
         std::thread::sleep(Duration::from_millis(1100));
         serve.catalogue().changed_outside_pass();
         serve.refresh().unwrap();
     }
 
-    fn plays_of(serve: &Serve, song: &str) -> u32 {
+    pub fn plays_of(serve: &Serve, song: &str) -> u32 {
         serve.userdata.get("me", Item::Song, &[song.to_string()]).unwrap().get(song).map_or(0, |a| a.play_count)
     }
+
+    /// The record a folder's album is, as the build gave it.
+    pub fn record_in(serve: &Serve, folder: i64, dir: &str) -> i64 {
+        ids::record_number(&serve.library.album_in(folder, dir).unwrap().expect("built")).unwrap()
+    }
+
+    /// A record not had of `add`'s album's names ("Artist", "Album"), as a list keeps it: of `kind`, holding `refs`.
+    pub fn listed(cat: &Catalogue, kind: &str, refs: &[(&str, &str, &str)]) -> i64 {
+        use crate::catalogue::records::{Listing, Ref};
+        let artist = cat.artist_for("Artist").unwrap();
+        let l = Listing { title: "Album".into(), artist: "Artist".into(), kind: Some(kind.into()), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() };
+        cat.keep_listing(Some(artist), &[l], "link").unwrap()[0]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::testing::*;
+    use crate::serve::copies::Kind;
+    use crate::userdata::{Heard, Kind as Item};
 
     /// N1: `identify` hands a new file an id retired before there were records, plays and all, and the take then takes it. The
     /// plays go to the record's track at the same build, and nothing is left to follow.
@@ -1123,7 +1151,7 @@ mod tests {
         cat.walk_all();
         cat.gone_long_ago_for_tests();
         cat.identify().unwrap();
-        assert!(cat.track_of_source(crate::source::cratarr::KIND.id, &song).is_none(), "retired");
+        assert!(cat.track_of_source(crate::source::CRATARR, &song).is_none(), "retired");
 
         serve.refresh().unwrap();
         let track = cat.track_of(0, "A/01 One.flac").unwrap();
@@ -1161,19 +1189,6 @@ mod tests {
         assert_eq!((plays_of(&serve, &is), plays_of(&serve, &was)), (2, 0), "both plays on the one chosen, none left");
         assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
-    /// The record a folder's album is, as the build gave it.
-    fn record_in(serve: &Serve, folder: i64, dir: &str) -> i64 {
-        ids::record_number(&serve.library.album_in(folder, dir).unwrap().expect("built")).unwrap()
-    }
-
-    /// A record not had of `add`'s album's names ("Artist", "Album"), as a list keeps it: of `kind`, holding `refs`.
-    fn listed(cat: &Catalogue, kind: &str, refs: &[(&str, &str, &str)]) -> i64 {
-        use crate::catalogue::records::{Listing, Ref};
-        let artist = cat.artist_for("Artist").unwrap();
-        let l = Listing { title: "Album".into(), artist: "Artist".into(), kind: Some(kind.into()), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() };
-        cat.keep_listing(Some(artist), &[l], "link").unwrap()[0]
     }
 
     /// RF1 (RB5's first scenario): a record's type set by hand is the type it is had by. The owner's untagged eight versions of one
@@ -1236,7 +1251,7 @@ mod tests {
     /// an answer's rows; and the reader works nothing out: its body names none of the three classifiers.
     #[test]
     fn the_library_list_and_its_tracks_say_one_type() {
-        use crate::app::PlaylistRow;
+        use crate::serve::playlists_row::PlaylistRow;
         let (roots, cat, serve) = on_two_folders("goto-types");
         add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
         serve.refresh().unwrap();
@@ -1265,34 +1280,6 @@ mod tests {
         for classifier in ["release_type_of", "type_by_files", "type_by_rule"] {
             assert!(!body.contains(classifier), "GOTO.S4: no second classifier: {classifier}");
         }
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
-    /// Found missing tracks (`app::incomplete`: its whole release eight), the build types it as that release, an album, and the
-    /// catalogue keeps that type: the album's record of its name, MusicBrainz's, is held by it, partly there (three of eight), and off
-    /// the artist's missing list. Never: the album read missing beside its own partial copy once it is found short.
-    #[test]
-    fn a_partial_copy_holds_its_album_record_partly_there() {
-        use crate::app::requests::{Holding, holding_of};
-        let (roots, cat, serve) = on_two_folders("rf1-partly");
-        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two"), ("A/03 Three.flac", "Three")]);
-        serve.refresh().unwrap();
-        let owned = record_in(&serve, 0, "A");
-        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006201")]);
-        let list: Vec<crate::catalogue::identity::RefTrack> =
-            (1..=8).map(|n| crate::catalogue::identity::RefTrack { disc: 1, position: n, title: format!("Track {n}"), length_ms: Some(200_000), recording: None }).collect();
-        cat.set_reference_tracks(album, "musicbrainz", &list).unwrap();
-        cat.set_counting(album, Some("musicbrainz"), false).unwrap();
-        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "three short tracks: a single, until found short");
-        assert_eq!(cat.requested(&[album]).unwrap()[&album].holder, None);
-        serve.userdata.set_album_complete(&ids::record(owned), Some(r#"{"of":8,"has":3,"release":"Album","missing":[]}"#), Some(1), 100).unwrap();
-        serve.refresh().unwrap();
-        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "typed as its whole release");
-        let q = cat.requested(&[album]).unwrap().remove(&album).unwrap();
-        assert_eq!(q.holder, Some(owned), "the album had by its partial copy");
-        assert_eq!(holding_of(&q, |_| crate::settings::LibraryKind::Main), Holding::Partly { has: 3, of: 8 }, "partly there");
-        let artist = cat.artist_for("Artist").unwrap();
-        assert!(cat.missing_of(artist).unwrap().iter().all(|m| m.row.id != album), "off the missing list");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
@@ -1459,43 +1446,6 @@ mod tests {
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
-    /// An old id plays on, in a queue no take reached, and what is heard of it counts on the track that took it.
-    #[test]
-    fn a_play_on_a_taken_id_counts_on_the_track_that_took_it() {
-        let (roots, cat, serve) = on_two_folders("heard-taken");
-        let one = [("A/01 One.flac", "One")];
-        add(&cat, &roots[0], 0, &one);
-        add(&cat, &roots[1], 1, &one);
-        serve.refresh().unwrap();
-        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
-        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
-        assert!(crate::app::listening::heard_blocking(&serve, "me", &old, &Heard::counted(100)).unwrap(), "heard");
-        assert_eq!((plays_of(&serve, &stays), plays_of(&serve, &old)), (1, 0));
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
-    /// An app's saved list can hold an old id too: a heart or a rating left on it sits on an id no list shows, and once followed
-    /// nothing moves it.
-    #[tokio::test]
-    async fn a_heart_and_a_rating_on_a_taken_id_land_on_the_track_that_took_it() {
-        let (roots, cat, serve) = on_two_folders("star-taken");
-        let one = [("A/01 One.flac", "One")];
-        add(&cat, &roots[0], 0, &one);
-        add(&cat, &roots[1], 1, &one);
-        serve.refresh().unwrap();
-        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
-        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
-        serve.users.set("me", "a password").unwrap();
-        let me = serve.users.get("me").unwrap();
-        for (method, query) in [("star", format!("id={old}")), ("setRating", format!("id={old}&rating=4"))] {
-            let said = routes::handle(&serve, &me, method, &routes::Params::parse(Some(&query), &[]), &HeaderMap::new()).await;
-            assert!(said.is_ok(), "{method}");
-        }
-        let a = serve.userdata.get("me", Item::Song, &[stays.clone()]).unwrap().remove(&stays).unwrap_or_default();
-        assert_eq!((a.starred_at.is_some(), a.rating), (true, 4));
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
-    }
-
     /// What names a taken track moves once, whatever stops in between: the mark comes after, and going over it changes nothing.
     #[test]
     fn a_stop_before_the_mark_loses_nothing_and_counts_nothing_twice() {
@@ -1537,24 +1487,6 @@ mod tests {
         assert!(serve.library.roots().contains(&(1, renamed.display().to_string())), "{:?}", serve.library.roots());
         std::fs::remove_dir_all(&roots[0]).ok();
         std::fs::remove_dir_all(&renamed).ok();
-    }
-
-    /// Two records tagged alike, a track more making the second one, are told apart by their ids alone. One's library taken away, a
-    /// persistent id on one song reads as a rebuilt catalogue would, and a play went over to the other record and never came back.
-    #[test]
-    fn what_lies_on_a_track_away_with_its_library_stays_on_it() {
-        let (roots, cat, serve) = on_two_folders("away");
-        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One")]);
-        add(&cat, &roots[1], 1, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
-        checked_again(&serve);
-        let song_in = |folder: i64| ids::song(cat.track_of(folder, "A/01 One.flac").unwrap());
-        let (here, away) = (song_in(0), song_in(1));
-        assert_ne!(here, away, "two records");
-        crate::app::listening::heard_blocking(&serve, "me", &away, &Heard::counted(100)).unwrap();
-        cat.set_folders(vec![roots[0].clone()]).unwrap();
-        checked_again(&serve);
-        assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
-        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
     /// Run 12's close (0101 point 6): an account new here has every other account's own music off, however many there are; never
