@@ -1,8 +1,9 @@
 <script lang="ts">
   // Libraries: each server library (Cratarr's own: each folder, decision 0044) a row with its use and where it is;
-  // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its quality limit
-  // and dot (decision 0034); Music's names, how long deleted records are kept, the disk floor (AL03), the catalogue and tag
-  // splitting (its own page, `tags`). Saved as they change (the owner, 2026-11-02: no Unsaved changes bar).
+  // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its quality limit, its
+  // tag splitting (OQ-GEN-22: its own, a page of its own, `tags:<server>:<library>`) and dot (decision 0034); Music's names,
+  // how long deleted records are kept, the disk floor (AL03), the catalogue and the tag splitting new libraries and own
+  // music start from (its own page, `tags`). Saved as they change (the owner, 2026-11-02: no Unsaved changes bar).
   import ChoiceRow from './ChoiceRow.svelte';
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { KIND_NAMES, readWords, words } from '../words.svelte';
@@ -22,6 +23,7 @@
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
   import WordsPart from './WordsPart.svelte';
+  import { encodingOf, genreSeparatorsRefused, splittingLine, textOf, type SplitText } from './tagRules';
   import WrittenSheet from './WrittenSheet.svelte';
 
   let { thing = null }: { thing?: string | null } = $props();
@@ -149,18 +151,26 @@
   }
 
   const libThing = (l: Lib) => `lib:${l.d.id}:${l.id}`;
-  const open = $derived.by(() => {
-    if (!thing?.startsWith('lib:')) return null;
-    const rest = thing.slice(4);
+  const libTagsThing = (l: Lib) => `tags:${l.d.id}:${l.id}`;
+  /** The library `<server>:<library>` names, while it is there. */
+  function libNamed(rest: string): Lib | null {
     const at = rest.indexOf(':');
     const d = ed.drafts.find((x) => x.id === rest.slice(0, at));
     return d ? (libsOf(d).find((l) => l.id === rest.slice(at + 1)) ?? null) : null;
-  });
+  }
+  const open = $derived(thing?.startsWith('lib:') ? libNamed(thing.slice(4)) : null);
+  // A library's own tag splitting (OQ-GEN-22): its own page, a step below the library's.
+  const tagsOf = $derived(thing?.startsWith('tags:') ? libNamed(thing.slice(5)) : null);
+  /** A library's tag splitting as its editors show it: its own, else (not saved yet) the default it will start from. */
+  const libText = (l: Lib): SplitText => textOf(ed.policyOf(l.d, l.id).tag_rules ?? ed.rules);
+  const setLibText = (l: Lib, key: keyof SplitText, v: string) => ed.setPolicy(l.d, l.id, { tag_rules: encodingOf({ ...libText(l), [key]: v }) });
   const wordsThing = $derived(thing === 'words' || !!thing?.startsWith('words:'));
   nameThing(() =>
     thing === 'tags'
-      ? 'Tag splitting'
-      : thing === 'words'
+      ? 'For new libraries and own music'
+      : tagsOf
+        ? 'Tag splitting'
+        : thing === 'words'
         ? 'Sources and spellings'
         : thing?.startsWith('words:')
           ? (KIND_NAMES[thing.slice(6) as CatalogueKind] ?? null)
@@ -170,7 +180,7 @@
   );
   // A library gone (removed, or its server's): back to the list.
   $effect(() => {
-    if (thing && thing !== 'tags' && !wordsThing && !open) backFromThing('libraries');
+    if (thing && thing !== 'tags' && !wordsThing && !open && !tagsOf) backFromThing('libraries');
   });
 
   // The catalogue's progress, while this part shows.
@@ -192,9 +202,21 @@
     };
   });
 
-  // A value typed in its sheet: Names (measured as it is typed, put back on Cancel), the days, the tag rules.
-  type Typing = { title: string; value: string; type?: 'text' | 'number'; help?: string; placeholder?: string; lines?: boolean; suffix?: string; save: (v: string) => void };
+  // A value typed in its sheet: Names (measured as it is typed, put back on Cancel), the days, the tag rules. `refuse`: why
+  // what is typed can't be taken (genre separators holding "&", OQ-GEN-21), said under the field; Done keeps the sheet then.
+  type Typing = {
+    title: string;
+    value: string;
+    type?: 'text' | 'number';
+    help?: string;
+    placeholder?: string;
+    lines?: boolean;
+    suffix?: string;
+    refuse?: (v: string) => string | null;
+    save: (v: string) => void;
+  };
   let typing = $state<Typing | null>(null);
+  let refused = $state<string | null>(null);
   let naming = $state<string | null>(null);
   let namingTaken = false;
   let colouring = $state<Lib | null>(null);
@@ -248,6 +270,8 @@
         value={qualityLabel(pol.quality)}
         onclick={() => (choosingQuality = l)}
       />
+      <!-- How its files write several artists or genres in one tag (OQ-GEN-22: the library's own). -->
+      <Item name="Tag splitting" line={splittingLine(libText(l))} onclick={() => openThing('libraries', libTagsThing(l))} />
     {/if}
     {#if u === 'incoming'}
       <Item
@@ -279,31 +303,12 @@
   {/if}
 {:else if wordsThing && thing}
   <WordsPart {thing} />
+{:else if tagsOf}
+  {@const l = tagsOf}
+  {@render splitting(libText(l), (key, v) => setLibText(l, key, v))}
 {:else if thing === 'tags'}
-  <Group title="Separators" more={TAGS_MORE}>
-    <Item
-      name="Artist separators"
-      line={ed.ruleText.artistSeps || 'None'}
-      onclick={() => (typing = { title: 'Artist separators', value: ed.ruleText.artistSeps, help: 'Separated by spaces', save: (v) => (ed.ruleText.artistSeps = v) })}
-    />
-    <Item
-      name="Genre separators"
-      line={ed.ruleText.genreSeps || 'None'}
-      onclick={() => (typing = { title: 'Genre separators', value: ed.ruleText.genreSeps, help: 'Separated by spaces', save: (v) => (ed.ruleText.genreSeps = v) })}
-    />
-  </Group>
-  <Group title="Never split">
-    <Item
-      name="Artists"
-      line={lines(ed.ruleText.artistKeep).join(' · ') || 'None'}
-      onclick={() => (typing = { title: 'Artists never split', value: ed.ruleText.artistKeep, help: 'One per line', placeholder: 'AC/DC', lines: true, save: (v) => (ed.ruleText.artistKeep = v) })}
-    />
-    <Item
-      name="Genres"
-      line={lines(ed.ruleText.genreKeep).join(' · ') || 'None'}
-      onclick={() => (typing = { title: 'Genres never split', value: ed.ruleText.genreKeep, help: 'One per line', placeholder: 'Funk / Soul', lines: true, save: (v) => (ed.ruleText.genreKeep = v) })}
-    />
-  </Group>
+  <!-- What new libraries and own music start from (OQ-GEN-22): each library has its own, on its page. -->
+  {@render splitting(ed.ruleText, (key, v) => (ed.ruleText[key] = v))}
   <!-- Names given otherwise (0.9.7; the owner, 2026-10-26: decided once, for the library, what arrives and the harvest):
        one name for several, written into the files through Health's fixes. -->
   <Group title="Named otherwise">
@@ -425,11 +430,7 @@
     {:else}
       <Item name="Not available" />
     {/if}
-    <Item
-      name="Tag splitting"
-      line={[`Artists: ${ed.ruleText.artistSeps || 'not split'}`, `Genres: ${ed.ruleText.genreSeps || 'not split'}`].join(' · ')}
-      onclick={() => openThing('libraries', 'tags')}
-    />
+    <Item name="For new libraries and own music" line={splittingLine(ed.ruleText)} onclick={() => openThing('libraries', 'tags')} />
     {#if words.value}
       <Item name="Written to files" line={writtenLine} onclick={() => (writtenOpen = true)} />
       <Item name="Sources and spellings" onclick={() => openThing('libraries', 'words')} />
@@ -456,6 +457,35 @@
     {#if runtime.error}<Item lead="bad" name={runtime.error} />{/if}
   </Group>
 {/if}
+
+<!-- Tag splitting's editors, a library's own and the default's alike: separators, then what is never split. -->
+{#snippet splitting(text: SplitText, set: (key: keyof SplitText, v: string) => void)}
+  <Group title="Separators" more={TAGS_MORE}>
+    <Item
+      name="Artist separators"
+      line={text.artistSeps || 'None'}
+      onclick={() => (typing = { title: 'Artist separators', value: text.artistSeps, help: 'Separated by spaces', save: (v) => set('artistSeps', v) })}
+    />
+    <Item
+      name="Genre separators"
+      line={text.genreSeps || 'None'}
+      onclick={() =>
+        (typing = { title: 'Genre separators', value: text.genreSeps, help: 'Separated by spaces', refuse: genreSeparatorsRefused, save: (v) => set('genreSeps', v) })}
+    />
+  </Group>
+  <Group title="Never split">
+    <Item
+      name="Artists"
+      line={lines(text.artistKeep).join(' · ') || 'None'}
+      onclick={() => (typing = { title: 'Artists never split', value: text.artistKeep, help: 'One per line', placeholder: 'AC/DC', lines: true, save: (v) => set('artistKeep', v) })}
+    />
+    <Item
+      name="Genres"
+      line={lines(text.genreKeep).join(' · ') || 'None'}
+      onclick={() => (typing = { title: 'Genres never split', value: text.genreKeep, help: 'One per line', placeholder: 'Funk / Soul', lines: true, save: (v) => set('genreKeep', v) })}
+    />
+  </Group>
+{/snippet}
 
 {#if writtenOpen}
   <WrittenSheet onclose={() => (writtenOpen = false)} />
@@ -488,9 +518,22 @@
     suffix={t.suffix ?? null}
     min={t.type === 'number' ? 1 : null}
     max={t.type === 'number' ? 3650 : null}
-    onsave={(v) => t.save(v)}
-    onclose={() => (typing = null)}
-  />
+    oninput={t.refuse ? (v) => (refused = t.refuse?.(v) ?? null) : null}
+    onsave={(v) => {
+      // Refused: nothing taken, the sheet stays, and why is said under the field.
+      refused = t.refuse?.(v) ?? null;
+      if (refused) throw new Error(refused);
+      t.save(v);
+    }}
+    onclose={() => {
+      typing = null;
+      refused = null;
+    }}
+  >
+    {#snippet extra()}
+      {#if refused}<p class="check bad">{refused}</p>{/if}
+    {/snippet}
+  </ValueSheet>
 {/if}
 {#if flooring && floor.value}
   <ValueSheet

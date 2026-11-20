@@ -30,17 +30,18 @@ import {
   type SourceConfig,
   type SourceView,
   type TagAlias,
+  type TagEncoding,
   type TagRules,
 } from '../api';
 import { settingsRead, settingsSaved } from '../settingsSections.svelte';
 import { toast } from '../toast.svelte';
+import { encodingOf, textOf } from './tagRules';
 
 /** A server (a source, in the code) as the page edits it. Secrets typed here are kept apart: the server never sends saved ones. */
 export type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean };
 type ImportChoice = { user: string; account: string; what: ImportWhat };
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
-const fromWords = (text: string) => text.split(/\s+/).filter(Boolean);
 /** Aliases as typed, a line each: "Hip-Hop → Hip Hop", "Electronica, Electronic Music → Electronic" (-> or = will do). */
 const fromAliases = (text: string): TagAlias[] =>
   text
@@ -49,11 +50,6 @@ const fromAliases = (text: string): TagAlias[] =>
     .filter((p) => p.length === 2 && !!p[0].trim() && !!p[1].trim())
     .map(([from, to]) => ({ from: from.split(',').map((f) => f.trim()).filter(Boolean), to: to.trim() }));
 const toAliases = (list: TagAlias[] | undefined) => (list ?? []).map((a) => `${a.from.join(', ')} → ${a.to}`).join('\n');
-const fromLines = (text: string) =>
-  text
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
 export const str = (v: unknown) => (typeof v === 'string' ? v : '');
 export const count = (n: number) => n.toLocaleString();
 export const downloadedSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
@@ -87,7 +83,8 @@ class SettingsEditor {
   removing = $state<string | null>(null);
   addKind = $state('');
 
-  // Saved with the servers: how tags are split. Edited as text (so Enter and spaces can be typed) and parsed when
+  // Saved with the servers: how tags are split for new libraries and own music (each library has its own, in its
+  // settings: OQ-GEN-22), and the names given otherwise. Edited as text (so Enter and spaces can be typed) and parsed when
   // compared or saved.
   ruleText = $state({ artistSeps: '', genreSeps: '', artistKeep: '', genreKeep: '', genreAliases: '', artistAliases: '' });
   cat = $state<CatalogueStatus | null>(null);
@@ -124,10 +121,7 @@ class SettingsEditor {
   });
 
   rules = $derived<TagRules>({
-    artist_separators: fromWords(this.ruleText.artistSeps),
-    genre_separators: fromWords(this.ruleText.genreSeps),
-    artist_keep: fromLines(this.ruleText.artistKeep),
-    genre_keep: fromLines(this.ruleText.genreKeep),
+    ...encodingOf(this.ruleText),
     genre_aliases: fromAliases(this.ruleText.genreAliases),
     artist_aliases: fromAliases(this.ruleText.artistAliases),
   });
@@ -190,10 +184,7 @@ class SettingsEditor {
   fill = (next: Settings) => {
     this.s = next;
     this.ruleText = {
-      artistSeps: next.tag_rules.artist_separators.join(' '),
-      genreSeps: next.tag_rules.genre_separators.join(' '),
-      artistKeep: next.tag_rules.artist_keep.join('\n'),
-      genreKeep: next.tag_rules.genre_keep.join('\n'),
+      ...textOf(next.tag_rules),
       genreAliases: toAliases(next.tag_rules.genre_aliases),
       artistAliases: toAliases(next.tag_rules.artist_aliases),
     };
@@ -391,10 +382,12 @@ class SettingsEditor {
     fetcher: null as Fetcher | null,
     /** An Incoming library's Add to by default (0101 point 2): a main library; none: the first. */
     keep_to: null as string | null,
+    /** How its files write several values in one tag (OQ-GEN-22); none until saved, the default's then. */
+    tag_rules: null as TagEncoding | null,
     ...d.view?.policies?.[id],
     ...Object.fromEntries(Object.entries(d.libraries.find((l) => l.id === id) ?? {}).filter(([k, v]) => k !== 'id' && k !== 'kind' && v !== undefined)),
   });
-  setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null; fetcher?: Fetcher | null; keep_to?: string | null }) => {
+  setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null; fetcher?: Fetcher | null; keep_to?: string | null; tag_rules?: TagEncoding }) => {
     const l = d.libraries.find((x) => x.id === id);
     if (l) Object.assign(l, change);
   };

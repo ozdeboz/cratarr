@@ -1122,7 +1122,8 @@ export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
  *  music waiting to be heard and added. Own music is no setting (its folder's, 0101 point 9). Its own settings
  *  (decision 0034): its quality limit, its dot's colour and its name; an Incoming library's fetcher, whose records come
  *  into it (decision 0096: one Incoming library per fetcher), and where Add to puts them by default (`keep_to`, a main
- *  library; none: the first; 0101 point 2). */
+ *  library; none: the first; 0101 point 2); how its files write several values in one tag (`tag_rules`, its own since
+ *  0.18; one added starts from the default as it stands). */
 export type LibrarySetting = {
   id: string;
   kind: 'main' | 'incoming';
@@ -1131,6 +1132,7 @@ export type LibrarySetting = {
   name?: string | null;
   fetcher?: Fetcher | null;
   keep_to?: string | null;
+  tag_rules?: TagEncoding | null;
 };
 
 /** A server library as it is used: its kind in the list, someone's own music, or not used. */
@@ -1203,14 +1205,18 @@ export type NamingView = {
 export const checkNaming = (template?: string) =>
   quietly<NamingView>(`/api/settings/naming${template === undefined ? '' : `?template=${encodeURIComponent(template)}`}`);
 
-/** How tag values are split when read; the files are never changed. */
-export type TagRules = {
+/** How a library's files write several values in one tag, read so; the files are never changed. A library's own (its
+ *  `LibrarySetting`), and the default for new libraries and own music (`TagRules`). */
+export type TagEncoding = {
   artist_separators: string[];
   genre_separators: string[];
   /** Names containing a separator that are one artist (AC/DC). */
   artist_keep: string[];
   /** Genres containing a separator that are one genre ("Funk / Soul"). */
   genre_keep: string[];
+};
+/** The install's tag rules: the default encoding, and the names given otherwise, every library's. */
+export type TagRules = TagEncoding & {
   /** Names given otherwise (0.9.7): one `from` an alias ("Hip-Hop" → "Hip Hop"), several a merge; in what the library
    *  shows, in harvested words, and as a fix written into the files. */
   genre_aliases?: TagAlias[];
