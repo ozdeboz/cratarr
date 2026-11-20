@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::fixes::Fix;
-use super::health::{SHORT_SLACK_MS, clock, short_cause};
+use super::health_base::{SHORT_SLACK_MS, clock, short_cause};
 use crate::serve::Serve;
 
 /// The fields these fixes have (`<field>:<catalogue folder>:<path in it>`: a length is one file's, and copies differ in it, so
