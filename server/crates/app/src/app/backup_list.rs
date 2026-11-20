@@ -59,8 +59,8 @@ mod tests {
     /// the disk said) Music holds no original of its size and time on its track, and it leaves the list; after the Undo it is back.
     /// Bob's rows keep `shared = 0` and are never listed (OQ-E); Music's are never listed (they are Music's). Case 2, as T2b has it
     /// (an original in anyone's own music covers its copy, and a copy never holds another): Ann's FLAC, a Want's copy of Bob's, is
-    /// covered by Bob's original before, after and after the Undo, Music's new rows being copies that hold nothing. Case 3 (the
-    /// coordinator, T2b's own rule): as case 2, then Bob's original trashed after the Replace: it covers neither Ann's copy nor
+    /// covered by Bob's original before, after and after the Undo, Music's new rows being copies that hold nothing. Case 3
+    /// (T2b's own rule): as case 2, then Bob's original trashed after the Replace: it covers neither Ann's copy nor
     /// Music's new rows, and Ann's leaves the list, backed up.
     #[test]
     fn the_backup_list_follows_a_replace_from_a_copy() {
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(covered(&cat).len(), 1, "his Undo covers it again");
     }
 
-    /// T2b (the coordinator: two copies never cover each other on the list): Music's original M, Ann's copy A and Bob's copy B. M
+    /// T2b (two copies never cover each other on the list): Music's original M, Ann's copy A and Bob's copy B. M
     /// deleted and its trash emptied: A and B hold the same bytes, yet neither is an original, so neither covers the other and both
     /// are backed up.
     #[test]

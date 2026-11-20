@@ -1,5 +1,5 @@
 // The direction knob and the holds against it (lib/player/knob), over the sequences the owner met on 2026-10-30 (the
-// ThinkPad's playback log): a hold back whose stream came late, Previous while playing backwards, holding back while
+// laptop's playback log): a hold back whose stream came late, Previous while playing backwards, holding back while
 // playing backwards, holding forward there.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

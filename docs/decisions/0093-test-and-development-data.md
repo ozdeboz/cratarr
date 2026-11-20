@@ -2,9 +2,8 @@
 
 - Status: accepted (the owner, 2026-11-01: "Shouldn't we have some sort of test database? Like a development database,
   and also a test database for ephemeral stuff. How much of this makes sense? We want to keep it robust and tight.";
-  by question set: all three; reviewed by a5 the same day. Made neutral the same day: how a developer works, and how
-  a maintainer tries a release before it ships, are their own and not this project's to direct). For 0.13. The
-  server's parts are a5's, the page's 632's.
+  by question set: all three; reviewed the same day. Made neutral the same day: how a developer works, and how
+  a maintainer tries a release before it ships, are their own and not this project's to direct). For 0.13.
 - Date: 2026-11-01
 - Builds on: 0092 (one way to change files: writers that change real files), 0008 (the catalogue), 0011 (the journal)
 
@@ -34,6 +33,7 @@ Two parts every change passes, and one helper anyone may use.
    since it was planned" (a file changed between plan and write), the lock ("waiting"), the journal kept across a
    restart (the same binary stopped and started on the same data folder). Connections are off and the time is fixed
    where it matters. Everything is thrown away after the run. A stage of its own in the Dockerfile, after `test`.
+   (Amended 2026-11-20: most of it in-process, below.)
 3. **A development instance, optional.** `scripts/dev-instance.sh` starts a second Cratarr in docker with a data
    folder of its own and the fixture library, plus any albums of the developer's own in its music folder
    (`scripts/dev-sample.sh` copies a list of them read-only from a music server over SSH; the list stays out of the
@@ -54,3 +54,15 @@ MusicBrainz's are.
 - A preview is built only once the end-to-end suite passes, and a writer reaches one only after it was proved there.
   Where a maintainer runs a preview before release is theirs to decide and is not recorded here.
 - A development instance's data is never deployed or copied to a production server.
+
+## Amended 2026-11-20: the end-to-end suite as a pyramid (the owner, by question; for 0.18)
+
+Each end-to-end test started the real server binary on a fresh data folder, waited for it to read the fixture library and
+polled it, all of them competing for the processor: about fifteen minutes. Rule 2 becomes a pyramid:
+
+- **Most scenario tests run in-process,** through the router, as the sign-in and access tests do. The fixture library is
+  read once and copied for each test, and tests wait on the server's events, not by polling.
+- **About ten tests start the real server binary:** the first start, the upgrade, settings from the environment, a smoke
+  test, and the few that need a real process with real audio.
+- **Every assertion is kept;** tests move between the two, and the lists before and after name each move.
+- **The outbound guard holds in both:** connections stay off in-process as in the real process.

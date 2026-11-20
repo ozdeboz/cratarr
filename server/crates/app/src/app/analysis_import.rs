@@ -1,4 +1,4 @@
-//! Analyses made elsewhere (decision 0035: the ThinkBook's one-time pass), taken into the catalogue: JSON lines, one
+//! Analyses made elsewhere (decision 0035: a PC's one-time pass), taken into the catalogue: JSON lines, one
 //! file each, `{"rel":…,"size":…,"mtime":…,"analysis":{…}}`, `rel` relative to the library folder the import is for,
 //! with forward slashes. A line is taken only while the catalogue's file is as it was analysed (the same size and
 //! mtime); the others are counted, not kept.

@@ -132,11 +132,17 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   - **0.17 ends at its first preview and that preview's fixes** (the owner, 2026-11-19). What it was still to hold moves to
     0.18 ([whats-new-0.17](whats-new-0.17.md) says what 0.17 is).
 - **0.18: the crate split, then the domain core** (the owner, 2026-11-19):
-  - the server crate split first ([0106](decisions/0106-the-server-crate-split.md)), for a small edit-and-test loop;
-  - the domain core ([0104](decisions/0104-the-domain-core.md)) in three runs:
+  - the server crate split first and whole ([0106](decisions/0106-the-server-crate-split.md)), for a small
+    edit-and-test loop: phase 1, then right after 0.17 the untangling by area and the move night (the owner,
+    2026-11-20);
+  - the domain core ([0104](decisions/0104-the-domain-core.md)) in three runs, on the split crates:
     1. records and the one record sheet, with live updates;
     2. requests and Soulseek;
-    3. artists and labels, with pictures and their picker ([0107](decisions/0107-pictures-are-facts-with-one-picker.md));
+    3. artists and labels, with pictures and their picker ([0107](decisions/0107-pictures-are-facts-with-one-picker.md))
+       and artist relations ([0100](decisions/0100-cratarrs-own-records-artists-labels.md)'s amendment);
+  - the job runner and the gate's flows: every action through one command path;
+  - one genre model ([0097](decisions/0097-words.md)'s amendment): 26 genres, the rest styles or tags, and where a word
+    lives;
   - versions, none chosen ([0105](decisions/0105-no-source-ranks-above-another.md)), Health's issues as sheets, and filters
     per object kind on the core;
   - what 0.17 did not hold: uploads, and the rest of 0.17's list above.
@@ -220,12 +226,12 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   (it knows a sound, not a track list), at most an amber hint where AcoustID knows nothing: a track that sounds
   unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
   miss too much. AudioMuse runs after import, so in Health, not on the intake card.
-- Mockups of the intake card first (632), then the server's checks and references (a5).
+- Mockups of the intake card first, then the server's checks and references.
 - *All of it in 0.14* (the owner, 2026-11-02): Discogs' and Bandcamp's track lists and lengths as references, not only
   MusicBrainz's; a record checked by hand its own reference for its type and year; references that disagree side by
   side, and one found by guessing confirmed once; where a record came from for Lidarr and Bandcamp too.
 
-**From SoulSync and DroppedNeedle (reviewed 2026-11-02, the HomeAssistant session, placed by 632).** The owner's rule:
+**From SoulSync and DroppedNeedle (reviewed 2026-11-02).** The owner's rule:
 0.14 stays light, only truly helpful bug fixes; the rest into 0.15 or 0.16, 0.17 only for a very good reason. Never
 anything in without the owner's tick (0080); never a chat room.
 

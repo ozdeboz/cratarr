@@ -20,6 +20,9 @@ use lofty::config::{ParseOptions, WriteOptions};
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
 
+pub(crate) mod gate;
+pub use gate::gate_cases;
+
 /// How long a track is (s), unless its album says.
 const SECONDS: u32 = 3;
 const RATE: u32 = 44_100;

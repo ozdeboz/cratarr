@@ -529,6 +529,11 @@ async fn full(serve: &Serve, account: &str) -> bool {
     rooms_now(serve, std::slice::from_ref(&account.to_string())).await.get(account).is_some_and(|r| r.full)
 }
 
+/// The accounts of `accounts` over their room now (AL01, one read): Soulseek's own picks of theirs wait for room (SK3.5).
+pub(crate) async fn full_askers(serve: &Serve, accounts: &[String]) -> std::collections::HashSet<String> {
+    rooms_now(serve, accounts).await.into_iter().filter(|(_, r)| r.full).map(|(a, _)| a).collect()
+}
+
 /// The rooms of `accounts` now, by name (`room::rooms_in`, one read, who asked first read now and not as kept: a room just freed is
 /// seen at once): none for an administrator or an account not known, nor where they cannot be read (said in the log).
 async fn rooms_now(serve: &Serve, accounts: &[String]) -> HashMap<String, super::room::Room> {

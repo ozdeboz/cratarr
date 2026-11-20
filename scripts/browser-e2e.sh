@@ -1,5 +1,5 @@
 #!/bin/sh
-# The browser end-to-end tests (decision 0093's end-to-end suite, its page side; with a5, 2026-11-03): the page under
+# The browser end-to-end tests (decision 0093's end-to-end suite, its page side; 2026-11-03): the page under
 # development, in a real browser, against a real server that is thrown away after the run. Not a gate for previews.
 #
 #   scripts/browser-e2e.sh [image]        (from web/: npm run e2e:browser)

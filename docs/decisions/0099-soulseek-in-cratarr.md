@@ -1,7 +1,7 @@
 # 0099: Soulseek in Cratarr — whole records fetched by their release, on a tick
 
 - Status: accepted (the owner, 2026-11-02: "Cratarr does Soulseek, Lidarr stays", in 0.15; the choices below by question
-  set in a5's session, 2026-11-03)
+  set, 2026-11-03)
 - Date: 2026-11-03
 - Builds on: 0080 (single-track intake and its gate; its amendment, the bulk intake), 0034 (Incoming), 0096 (a library's
   fetcher is a setting), 0092 (one way to change files: the intake card), docs/plans.md (Soulseek in Cratarr, not through
@@ -48,7 +48,7 @@ the next candidate by the same tick, a file that fails the gate set aside with w
 - soularr is stopped when this is deployed, and the NAS gives Cratarr a writable folder for the new library (a NAS
   change, on the owner's go).
 - The page lists Lidarr's Wanted with each record's state, folders and set-asides, ticks many at once, and offers
-  Search now (632).
+  Search now.
 - Not planned: other sources (Usenet, streaming). With each user's own music (0084, 0.16): the intake per library.
 
 ## Amendment (2026-11-03): the fetchers are siblings
@@ -69,8 +69,7 @@ configuration that Lidarr abstracts for our app. But they are still siblings fro
   each its own page (Lidarr: its address and key; Soulseek: slskd's address, key and folder). An Incoming library's
   "Fetched by" names its fetcher (0096: one Incoming library per fetcher).
 - This replaces the decision's "What is wanted" above (Lidarr's Wanted, read every six hours) for Soulseek.
-- The server's part (Soulseek's wanted list from Cratarr's Requests, a library's fetcher "lidarr" beside "soulseek")
-  is a5's; the page's 632's.
+- The server's part: Soulseek's wanted list from Cratarr's Requests, a library's fetcher "lidarr" beside "soulseek".
 
 
 ## Amendment (2026-11-06): what could not be asked is no verdict
@@ -88,3 +87,48 @@ folder go when a file fails; an outage is not a failed file.
   approved record stays approved with its folders, a fetch under way keeps its batch and is followed again, and a search
   counts no miss. Tried again in five minutes. Only slskd answering that it no longer knows a batch ends that fetch. The
   bulk intake's track stops and says why, as above.
+
+## Amendment (2026-11-19): clipping, a pop and clicks are notes, not refusals
+
+The owner, by the question tool. Production's queue (0.16.3): of 27 folders set aside across 10 records, 20 were for
+clipping, pops or clicks alone; for 5 records every copy failed that way (the release's own loud master), so good copies
+kept being refused and the record went back to Found. Only 7 failed for real faults.
+
+- **Soulseek's check sets a folder aside only for a fault:** a transcode (highs that stop at a lossy wall: "Not
+  lossless: it stops at 16 kHz", "Re-encoded from a lower bitrate: …"), a wrong recording (AcoustID knows the file as
+  another; a length more than 2 s off the recording's), or broken or missing files (frames that would not decode, a file
+  that will not decode at all, a file not in slskd's folder).
+- **Clipping, a pop at the very end and clicks** (mid-track too) are notes: the file passes on them, AcoustID is still
+  asked, and the arrival's intake card in Incoming shows them amber, in the gate's words.
+- **Single-track intake and the bulk intake keep refusing them** (0080): they add into an album in Music with no review,
+  the bulk intake by itself.
+
+## Amendment (2026-11-19): automatic when certain
+
+Decided by the owner for 0.17. On 2026-11-19 production's queue (0.16.3) held 18 records found
+and waiting for a tick.
+
+- **A certain record starts by itself.** Cratarr picks its folder as an empty tick would, when all of these hold at
+  that moment:
+  - the folder is the record's best one, lossless first, then bitrate: an MP3 with a free slot never goes before a
+    queued FLAC;
+  - it holds every track of the list the record is judged by, each paired with one file by title and length (within
+    2 s), and no other audio file;
+  - its user had a free slot, by a search within the hour, and has not failed this record;
+  - the record is not had, and its request is still open;
+  - the server is above its disk floor, and the asker within their room.
+- **Only that folder.** Where its user fails, the next folder goes by itself only if it is certain too; else the record
+  goes back to Found, for a tick.
+- **The rest waits for an administrator's tick, as before:** a fuller folder, a folder found by titles alone (no
+  lengths to check), a best folder that is queued, no folder certain. An administrator may tick any found record, a
+  certain one too, and the tick goes as before.
+- **An old answer is searched again first:** a folder found over an hour ago, or one 0.16 found, never starts by itself
+  until a new search finds it.
+- **Lidarr still goes first** (2026-11-06): nothing starts by itself before Lidarr's five minutes, even after Search now.
+- **Below the disk's floor nothing starts by itself,** an administrator's record included; over their room, a user's
+  record waits. Each says so ("Waits for space", "Waits for room"), and starts once there is space or room.
+- **What the tick guarded still holds** (March 2026's unattended batches): every file gated, every arrival into the
+  Incoming library whose fetcher is "soulseek" for the intake card, nothing into Music, nothing kept without a person's
+  Keep. Soulseek switched off starts nothing, and nothing starts by itself while Cratarr cannot read its own requests
+  and records.
+- This replaces "Fetched only with a tick" above: nothing uncertain is fetched without a tick.

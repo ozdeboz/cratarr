@@ -2969,7 +2969,7 @@ export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: num
 // listening (the wind stream is no play). Any press takes it over where the counter shows it (`windTakeover`); a seek
 // ends it and goes there; another queue or track ends it.
 const WIND_WAIT_MS = 1500;
-/** Asked again, how long it may take: a busy server answered in up to 7 s (the ThinkPad's log, 2026-10-30). */
+/** Asked again, how long it may take: a busy server answered in up to 7 s (the laptop's log, 2026-10-30). */
 const WIND_RETRY_MS = 6000;
 /** How often its speed and the counter follow it (the tick's four times a second is too coarse to see it go). */
 const WIND_STEP_MS = 40;
@@ -4593,7 +4593,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
       if (local.index < 0) fresh(0, 0, false);
       else if (m.now === true && at > local.index) {
-        // Played now (a5's Command::Add now): started at once, the one playing told as played.
+        // Played now (the server's Command::Add now): started at once, the one playing told as played.
         const cur = local.queue[local.index];
         cutForNow.at = cur ? `${local.index}/${cur.source}/${cur.id}` : null;
         cutFrom(at);
@@ -4713,7 +4713,7 @@ if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) lockScreenA
 // --- The tape on the page's own head (decision 0102) ---
 // The playing track's file fetched whole as it starts and read by the head (lib/tape) at any speed either way, the
 // track's own player waiting paused, handed back to where the head was heard. What a press does, the deck's state
-// machine says (0102, amended 2026-11-04: one pure machine in the rules crate, a5's, carried out here and in the app);
+// machine says (0102, amended 2026-11-04: one pure machine in the rules crate, carried out here and in the app);
 // this is what carries its outcomes out: a motion started on the head ([headStart]), followed ([headStep]), let go,
 // handed back ([headFinish]) or dropped ([headEnd]). Until the machine is here, the server's wind streams as before.
 
@@ -4833,7 +4833,7 @@ function headEnd() {
   sought.n++;
 }
 
-// The app's own head could not sound a wind (a5's `tape` message): the knob stays as turned, and the deck says why.
+// The app's own head could not sound a wind (the app's `tape` message): the knob stays as turned, and the deck says why.
 if (inApp)
   onApp('tape', (m) => {
     const text = refusedText(m.refused, m.way);

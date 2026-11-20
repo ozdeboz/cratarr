@@ -1,5 +1,5 @@
 // What the deck says when the tape cannot do what it was turned to (the owner's truth rule, 2026-11-03: the knob stays
-// as turned, and the reason shows; a5's app sends `{type: 'tape', refused, way}`, the page's own head the same words).
+// as turned, and the reason shows; the app sends `{type: 'tape', refused, way}`, the page's own head the same words).
 
 /** Why a wind could not sound: its sound came too late, or Cratarr could not be reached for it. */
 export type Refused = 'late' | 'unreachable';

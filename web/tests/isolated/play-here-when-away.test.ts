@@ -1,6 +1,6 @@
 // With Cratarr out of reach a player of its own cannot be reached either, so the music goes to this device for the moment,
 // and the choice stays as it was (the owner, 2026-11-08: "Play here instead"; 0.16.0 pressed play on the tablet for the
-// ThinkPad, and nothing played). lib/outputNow and lib/playOn, the real ones.
+// laptop, and nothing played). lib/outputNow and lib/playOn, the real ones.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -11,14 +11,14 @@ const { reach } = await import('../../src/lib/reach.svelte.ts');
 const { outputNow } = await import('../../src/lib/outputNow.svelte.ts');
 
 test('away, a player chosen plays here for the moment; back, the choice is used as before and was never changed', () => {
-  prefs.output = 'player:ThinkPad';
+  prefs.output = 'player:Laptop';
   reach.away = false;
-  assert.equal(outputNow(), 'player:ThinkPad');
+  assert.equal(outputNow(), 'player:Laptop');
   reach.away = true;
   assert.equal(outputNow(), 'local', 'Cratarr out of reach: here');
-  assert.equal(prefs.output, 'player:ThinkPad', 'the choice stays');
+  assert.equal(prefs.output, 'player:Laptop', 'the choice stays');
   reach.away = false;
-  assert.equal(outputNow(), 'player:ThinkPad', 'back: as chosen');
+  assert.equal(outputNow(), 'player:Laptop', 'back: as chosen');
   prefs.output = 'local';
   reach.away = true;
   assert.equal(outputNow(), 'local');

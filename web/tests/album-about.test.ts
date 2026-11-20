@@ -62,7 +62,7 @@ test("About's Sources row: labelled as its other rows, a chip per source opening
   assert.match(source('api.ts'), /sources\?: RecordSource\[\];/);
 });
 
-// F9.1 (the coordinator's: every label in About opens its page where it has a reference).
+// F9.1 (every label in About opens its page where it has a reference).
 const warp = { id: 'la-5', name: 'Warp', catno: 'WARP123' };
 
 test('F9 (a): labels by their ids: a chip each opening its page, as today', () => {

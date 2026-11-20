@@ -1,13 +1,13 @@
 # 0090: Cratarr as an MCP server
 
-- Status: accepted (the owner, 2026-10-31, via the ThinkPad session: "Yes, 0.13 MCP server built inside"); for 0.13
+- Status: accepted (the owner, 2026-10-31: "Yes, 0.13 MCP server built inside"); for 0.13
 - Date: 2026-10-31
 - Builds on: 0043 and 0051 (sign-in, accounts, API keys and their scopes), 0081 and 0089 (release types and why; facts
   set by hand), 0082 and 0086 (classical, works)
 
 ## Context
 
-The owner reviews the library with an assistant (Claude Code on the ThinkPad): which records are EPs or singles, which
+The owner reviews the library with an assistant (such as Claude Code): which records are EPs or singles, which
 are classical and why. The assistant had no way to read Cratarr's answers: the API needs a sign-in or a key, and the
 reasons were not kept anywhere. Existing MCP servers for Subsonic, Navidrome and Jellyfin were looked at first; they
 reach a music server through its API from outside, and none knows Cratarr's types, reasons, works or crates.

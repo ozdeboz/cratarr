@@ -1,4 +1,4 @@
-//! Cratarr as an MCP server (0.13, the owner via the ThinkPad session: "Yes, 0.13 MCP server built inside"): a thin
+//! Cratarr as an MCP server (0.13, the owner: "Yes, 0.13 MCP server built inside"): a thin
 //! layer over the server's own reads, for an assistant such as Claude Code. Streamable HTTP at `/mcp` (the MCP Rust
 //! SDK, `rmcp`), behind the same access check as the API; an API key only (no sign-in cookie, no open or loopback way
 //! in), a reading key enough: every tool reads, none changes anything. Few tools, each with an action or filters, so a

@@ -1,6 +1,6 @@
 # 0103: Cratarr peers — a friend's Cratarr as a library of your own
 
-- Status: accepted (the owner, 2026-11-04, one decision at a time by question in a5's session); step 1 for 0.18
+- Status: accepted (the owner, 2026-11-04, one decision at a time by question); step 1 for 0.18
 - Date: 2026-11-04
 - Builds on: 0085 (offline first), 0098 (modes per server), 0100 (records and copies), 0101 (stable track ids,
   libraries as equals, own music, the library's index and its change feed), 0070 (requests), docs/plans.md (External
@@ -11,7 +11,7 @@
 
 ## Context
 
-The owner, 2026-11-04, brainstormed in another session and planned in a5's and 632's: friends who each self-host
+The owner, 2026-11-04, brainstormed and planned: friends who each self-host
 Cratarr and use each other's libraries. Their choices:
 
 1. Each user self-hosts their own library and connects with chosen peers; each can use the others' libraries.
@@ -75,7 +75,7 @@ sees one account streaming, never your players, your users or their plays.
 - Later: bandwidth limits per peer.
 - Not: Jellyfin or Navidrome peers. They stay modes (0098).
 
-## How, on the server (a5's audit, 2026-11-04, on 0.16's foundation)
+## How, on the server (an audit, 2026-11-04, on 0.16's foundation)
 
 Every lookup goes (source, id) → track → a present `files` row → its folder's path. Where that is baked in deepest, and
 what step 1 does about it:

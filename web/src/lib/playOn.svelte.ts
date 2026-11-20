@@ -141,7 +141,7 @@ function take(players: PlayOnPlayer[]) {
   const sleep = p.sleep ? { atMs: p.sleep.at_ms, endOfTrack: p.sleep.end_of_track } : null;
   const m = p as PlayOnPlayer & Moving;
   // Counted on from when its place was so, at its speed (the owner, 2026-10-30: through a wind the tablet glided to each
-  // report and stood, while the ThinkPad wound on): as it says it, else measured between its reports.
+  // report and stood, while the laptop wound on): as it says it, else measured between its reports.
   measured = measure(measured, { index: p.index, pos: p.position_ms / 1000, at: p.position_at });
   const speedX = speedOf(m.speed_x, p.rewinding ?? false, p.playing, measured.v);
   const l = m.landing;

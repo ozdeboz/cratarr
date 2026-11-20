@@ -2,7 +2,7 @@
 
 How each place that changes files today moves onto [0092](decisions/0092-one-way-to-change-files.md)'s path: a plan,
 the review sheet where Cratarr proposes, the yes, one run in Changes to files with its Undo, and the record's state
-line. Written 2026-11-01 from a read of the page (trunk at 0.14's start); design only, for the owner and a5 before
+line. Written 2026-11-01 from a read of the page (trunk at 0.14's start); design only, for the owner before
 code. The owner's choices are at the end.
 
 0092's rule, applied below: **what Cratarr proposes is reviewed** on the sheet first; **what you set yourself on what
@@ -37,7 +37,7 @@ one run in Changes to files, with Undo there and on the record's line.
   ReplaceTrackSheet's Undo toast, the bulk intake's row Undo. withUndo stays for what is not a file (playlists,
   crates, queues).
 
-## What the server gives (a5)
+## What the server gives
 
 - A plan per kind on `GET /api/file-changes/plans/{kind}`: `fixes:<finding>`, `renumber:<album>` (with the look's
   progress until it is made), `intake:<album>`, `tracks` (the bulk intake). Fields may carry choices (`options`) and a
