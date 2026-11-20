@@ -78,6 +78,12 @@ mod backup_list_tests;
 mod file_words_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod references_playing_tests;
+#[cfg(test)]
+mod discover_playing_tests;
+#[cfg(test)]
+mod labels_playing_tests;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
