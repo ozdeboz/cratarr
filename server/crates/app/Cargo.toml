@@ -12,10 +12,10 @@ doctest = false
 
 [features]
 # Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
-test-support = ["cratarr-base/test-support"]
+test-support = ["cratarr-records/test-support"]
 
 [dependencies]
-cratarr-base.workspace = true
+cratarr-records.workspace = true
 cratarr-rules.workspace = true
 alac-encoder.workspace = true
 anyhow.workspace = true
@@ -28,7 +28,6 @@ image.workspace = true
 ipnet.workspace = true
 libc.workspace = true
 lofty.workspace = true
-md-5.workspace = true
 mp3lame-encoder.workspace = true
 realfft.workspace = true
 reqwest.workspace = true
@@ -48,7 +47,7 @@ zip.workspace = true
 [dev-dependencies]
 # Radio's modes are among the page's types the tests write, and live in the rules.
 cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
-cratarr-base = { workspace = true, features = ["test-support"] }
+cratarr-records = { workspace = true, features = ["test-support"] }
 tower.workspace = true
 ts-rs.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

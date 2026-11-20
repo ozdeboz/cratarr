@@ -1,0 +1,37 @@
+[package]
+name = "cratarr-records"
+description = "Cratarr's records: discovery, references, labels, classical, Discogs, artists, works"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-listening/test-support", "dep:ts-rs"]
+
+[dependencies]
+cratarr-listening.workspace = true
+cratarr-rules.workspace = true
+anyhow.workspace = true
+# The references' tests' stand-in servers (test-support, for playing's tests too).
+axum.workspace = true
+image.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# The page's types: the app's hold records' (test-support only, as a dev-dependency today).
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+cratarr-listening = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
+ts-rs.workspace = true

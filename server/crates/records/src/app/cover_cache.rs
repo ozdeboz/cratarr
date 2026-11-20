@@ -306,7 +306,7 @@ async fn fetch(of: &Of) -> Result<Option<Vec<u8>>> {
 
 /// An image's bytes, `most` of them at most (`MOST_BYTES` for the covers kept; Soulseek's placed cover reads larger ones, Y3);
 /// `None` where there is none (404), or where the address is none of the covers' hosts (O1: Discogs names it).
-pub(super) async fn image(http: &reqwest::Client, url: &str, most: usize) -> Result<Option<Vec<u8>>> {
+pub async fn image(http: &reqwest::Client, url: &str, most: usize) -> Result<Option<Vec<u8>>> {
     if !reqwest::Url::parse(url).is_ok_and(|u| super::reach::Purpose::Covers.allows(&u)) {
         return Ok(None);
     }

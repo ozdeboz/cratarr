@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::ToggleError;
 use super::settings_base::Later;
 
-pub(super) trait InsightsPlaylists: Send + Sync {
+pub trait InsightsPlaylists: Send + Sync {
     fn asking_account(&self) -> Option<String>;
     fn served(&self) -> Option<Arc<crate::serve::Serve>>;
     fn crated_lines<'a>(&'a self, want: Option<&'a str>, without: &'a [String]) -> Later<'a, Result<HashSet<String>, ToggleError>>;

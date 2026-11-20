@@ -29,11 +29,11 @@ pub struct ReleaseTrack {
     pub recording: String,
     pub have: Option<Have>,
     #[serde(skip)]
-    pub(super) track_id: String,
+    pub track_id: String,
     #[serde(skip)]
-    pub(super) artist_id: Option<String>,
+    pub artist_id: Option<String>,
     #[serde(skip)]
-    pub(super) path: Option<PathBuf>,
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,7 +51,7 @@ pub struct ReleaseView {
 }
 
 /// A release's tracks as MusicBrainz gives them (with its recordings and artist credits).
-pub(super) fn release_of(v: &Value) -> ReleaseView {
+pub fn release_of(v: &Value) -> ReleaseView {
     let credit = |c: &Value| -> (String, Option<String>) {
         let parts = c.as_array().cloned().unwrap_or_default();
         let name = parts.iter().map(|p| format!("{}{}", p["name"].as_str().unwrap_or_default(), p["joinphrase"].as_str().unwrap_or_default())).collect::<String>();

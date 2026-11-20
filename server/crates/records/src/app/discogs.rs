@@ -81,7 +81,7 @@ fn gap(per_minute: u32) -> Duration {
 /// Whether `get` asks once more after an answer (its status and headers, heard by `turn`): after its first 429 only (`again`). Every
 /// 429 holds every caller first, for its Retry-After, else its policy's wait doubling in a row (TN.3), a second in a row too, and one
 /// while a hold is on pushes it out (O6, Y8); any other answer ends the run. A second in a row is the pause it asks for (TN.1).
-pub(crate) fn again_after(turn: &Turn, status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap, again: &mut bool) -> Result<bool, Paused> {
+pub fn again_after(turn: &Turn, status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap, again: &mut bool) -> Result<bool, Paused> {
     match turn.heard_answer(status, headers) {
         Ok(()) => Ok(false),
         Err(_) if std::mem::take(again) => Ok(true),
@@ -576,7 +576,7 @@ async fn genres_pass() -> Result<()> {
 }
 
 /// A MusicBrainz release's release group.
-pub(super) async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
+pub async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json")).asked().await?.error_for_status()?.json().await?;
     Ok(v["release-group"]["id"].as_str().map(str::to_string))
 }

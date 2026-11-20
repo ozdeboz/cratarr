@@ -11,12 +11,12 @@
 //! - `sync`: the user's own server playlists, kept in step with the files;
 //! - `settings`: the Settings page.
 
-pub use cratarr_base::app::{albums_base, along_base, analysis_pass_base, audiomuse, backup_list, base_host, changes, collection, describe, device_index_base, error, excluded_artists, file_facts_base, file_runs_base, file_words, first_start, fixes_base, follow, health_base, health_findings, heavy_base, history, incoming_base, incomplete_base, intake_card_base, library, listening_base, matching_base, moment, musicbrainz, playlists_base, playon_base, queue_base, radio_base, reach, references_turn, renumber_base, replace_base, requests_base, requests_turn, retention_base, retention_protected, runtime_base, search_base, settings, settings_base, shelf, soulseek_base, switches, sync, tasks, taste, tempo, track_fetch_turn, track_intake_base, turn, words};
-pub use cratarr_base::app::{CollectionService, CollectionView, FollowTarget, FreshIds, Library, LidarrView, NamingView, PlayOnCommand, Players, QueueTrack, SettingsService, SettingsView, SourceTab, SourceView, TargetChoice, ToggleError, VERSION, plain, players};
+pub use cratarr_records::app::{albums_base, along_base, analysis_pass_base, around_records, artists, audiomuse, backup_list, base_host, beyond, changes, classical, collection, cover_cache, describe, device_index_base, discogs, discogs_facts, discover, editions, error, excluded_artists, file_facts_base, file_runs_base, file_words, first_start, fixes_base, follow, health_base, health_findings, heavy_base, history, import, incoming_base, incomplete_base, insights, insights_records, intake_card_base, labels, lastfm, library, listenbrainz, listening, listening_base, matching_base, moment, musicbrainz, originals, playlists_base, playon_base, plays, queue_base, queues_listening, radio_base, reach, records_host, references, references_turn, related, renumber_base, replace_base, requests_base, requests_turn, resume, retention_base, retention_protected, runtime_base, scrobble, search_base, settings, settings_base, shelf, soulseek_base, switches, sync, tasks, taste, tempo, track_fetch_records, track_fetch_turn, track_intake_base, turn, words, works};
+pub use cratarr_records::app::{CollectionService, CollectionView, FollowTarget, FreshIds, InsightsService, Library, LidarrView, NamingView, PlayEvent, PlayOnCommand, Players, Plays, QueueTrack, SettingsService, SettingsView, SourceTab, SourceView, TargetChoice, ToggleError, VERSION, plain, players};
+
 
 mod albums;
 mod app_albums;
-pub mod artists;
 pub mod beat_this;
 pub mod capabilities;
 mod app_served;
@@ -36,7 +36,6 @@ mod incoming;
 mod incoming_served;
 pub mod incoming_host;
 mod app_incoming;
-mod insights;
 pub mod kept;
 mod kodi;
 mod playing;
@@ -48,18 +47,11 @@ mod playlists_served;
 mod app_playlists;
 mod playon;
 mod playon_served;
-mod plays;
 mod queue;
 pub mod home;
 mod app_home;
-pub mod import;
 pub mod import_files;
-pub mod discover;
-pub mod editions;
-pub mod beyond;
-pub mod labels;
 pub mod around;
-pub mod around_records;
 pub mod harvest;
 pub mod fixes;
 pub mod fix_plans;
@@ -78,7 +70,6 @@ mod discover_playing_tests;
 #[cfg(test)]
 mod labels_playing_tests;
 pub mod intake_card;
-pub mod references;
 pub mod file_facts;
 pub mod file_runs;
 pub mod matching;
@@ -88,17 +79,7 @@ pub mod track_fetch;
 pub mod track_intake;
 pub mod soulseek;
 pub mod runtime;
-pub mod discogs_facts;
-pub mod resume;
-pub mod lastfm;
-pub mod listening;
-#[cfg(test)]
-mod served_tests_listening;
-pub mod queues_listening;
-pub mod scrobble;
-pub mod listenbrainz;
 pub mod refind;
-pub mod related;
 pub mod search;
 pub mod features_host;
 mod app_features;
@@ -124,12 +105,7 @@ pub mod radio;
 mod radio_proof;
 pub mod similar;
 pub mod together;
-pub mod originals;
-pub mod works;
-pub mod classical;
-pub mod discogs;
 pub mod covers;
-pub mod cover_cache;
 pub mod renumber;
 pub mod device_covers;
 pub mod device_index;
@@ -140,10 +116,7 @@ pub mod visuals;
 mod incoming_settings;
 mod playlists_settings;
 mod playon_players;
-pub mod track_fetch_records;
-mod insights_records;
 mod playlists_insights;
-pub mod records_host;
 
 use std::sync::Arc;
 
@@ -152,11 +125,9 @@ use serde::Serialize;
 
 pub use albums::{AlbumsView, ReplaceAsk};
 pub use incoming::{AlbumFate, CopySheet, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, ReplacePreview, ReplaceSheet, shown_jobs as incoming_jobs_shown};
-pub use insights::InsightsService;
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateLook, CrateOrder, CratePage, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};
 pub use playon::{PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTracks, Report as PlayerReport, whose as whose_players};
-pub use plays::{PlayEvent, Plays};
 pub use events::connect as events;
 
 use crate::config::Config;

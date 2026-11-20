@@ -45,7 +45,7 @@ impl InsightsService {
         Some(self.lib.catalogue().folders().iter().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i).collect())
     }
 
-    pub(super) fn new(lib: Arc<Library>, playlists: Arc<dyn InsightsPlaylists>) -> Self {
+    pub fn new(lib: Arc<Library>, playlists: Arc<dyn InsightsPlaylists>) -> Self {
         Self { lib, playlists, kept: Mutex::new(Vec::new()) }
     }
 

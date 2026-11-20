@@ -111,7 +111,7 @@ pub fn ref_of_link(url: &str) -> Option<Ref> {
 }
 
 /// A reference's page at its source.
-pub(crate) fn url_of(r: &Ref) -> Option<String> {
+pub fn url_of(r: &Ref) -> Option<String> {
     Some(match (r.source.as_str(), r.kind.as_str()) {
         ("musicbrainz", "release" | "release-group") => format!("https://musicbrainz.org/{}/{}", r.kind, r.value),
         ("discogs", "release" | "master") => format!("https://www.discogs.com/{}/{}", r.kind, r.value),
@@ -157,7 +157,7 @@ async fn read_list(r: &Ref) -> Result<Option<Vec<RefTrack>>> {
 // ---- A record's counting list (C51a)
 
 /// A source by the name the pages give it.
-pub(super) fn source_name(source: &str) -> &'static str {
+pub fn source_name(source: &str) -> &'static str {
     match source {
         "musicbrainz" => "MusicBrainz",
         "discogs" => "Discogs",
@@ -212,7 +212,7 @@ where
 /// What a source said of a record's list where it gave none (F1): switched off, held back after Bandcamp's bot check, not
 /// answering (out of reach, or a page's read cut at `PAGE_READ_AT_MOST`), or no list of it (no such release, none with tracks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Off,
     Held,
     Unanswered,
@@ -430,7 +430,7 @@ const PAGE_READ_AGAIN_SECS: i64 = 15 * 60;
 
 /// The longest a page's read may take (F1.9), as an artist's list's (`discover`'s `LIST_READ_AT_MOST`): past it, the source it waits
 /// on did not answer.
-const PAGE_READ_AT_MOST: std::time::Duration = std::time::Duration::from_secs(if cfg!(test) { 1 } else { 300 });
+const PAGE_READ_AT_MOST: std::time::Duration = std::time::Duration::from_secs(if cfg!(any(test, feature = "test-support")) { 1 } else { 300 });
 
 /// What a source said of a record not had's list where it gave none, as its page tells it (F1, `AlbumMore::no_list`): `off`
 /// (switched off), `held` (Bandcamp held back after its bot check, `until` when), `unanswered` (out of reach, or too slow), `none`
@@ -681,8 +681,8 @@ where
 }
 
 /// Tests: where a page's read of `record` stands: being read (true), ended without a list (false), or none kept.
-#[cfg(test)]
-pub(crate) fn page_read_of(cat: &Arc<Catalogue>, record: i64) -> Option<bool> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn page_read_of(cat: &Arc<Catalogue>, record: i64) -> Option<bool> {
     page_reads().get(&(Arc::as_ptr(cat) as usize, record)).map(|(_, s)| matches!(s, PageReadState::Reading(_)))
 }
 
@@ -1223,16 +1223,16 @@ pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String,
 
 /// Tests: what a page's read looks at that the whole process shares (Y12): every source and background reading switched on, Bandcamp
 /// not held back, under the one test lock (`switches::TEST_STATE`); put back as they were when it ends.
-#[cfg(test)]
-pub(crate) struct TestState {
+#[cfg(any(test, feature = "test-support"))]
+pub struct TestState {
     was: Vec<(&'static str, bool)>,
     held: i64,
     _one: tokio::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TestState {
-    pub(crate) async fn set() -> TestState {
+    pub async fn set() -> TestState {
         use super::switches::{BACKGROUND, BANDCAMP, DISCOGS, MUSICBRAINZ, TEST_STATE, set_for_tests};
         let one = TEST_STATE.lock().await;
         let was = [MUSICBRAINZ, DISCOGS, BANDCAMP, BACKGROUND].into_iter().map(|name| (name, set_for_tests(name, true))).collect();
@@ -1240,7 +1240,7 @@ impl TestState {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for TestState {
     fn drop(&mut self) {
         for &(name, on) in &self.was {
@@ -1251,8 +1251,8 @@ impl Drop for TestState {
 }
 
 /// Tests: waits for a page's read of `record` to end (ten seconds at most).
-#[cfg(test)]
-pub(crate) async fn page_read_settled(cat: &Arc<Catalogue>, record: i64) {
+#[cfg(any(test, feature = "test-support"))]
+pub async fn page_read_settled(cat: &Arc<Catalogue>, record: i64) {
     for _ in 0..1_000 {
         if page_read_of(cat, record) != Some(true) {
             return;
@@ -1262,8 +1262,10 @@ pub(crate) async fn page_read_settled(cat: &Arc<Catalogue>, record: i64) {
     panic!("a page's read of record {record} never ended");
 }
 
-#[cfg(test)]
-pub(super) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests {
+    // Shared with the tests of the crates above (test-support): idle where no test calls it.
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
 
     #[test]
@@ -1284,7 +1286,7 @@ pub(super) mod tests {
         assert_eq!(r("not a link"), None);
     }
 
-    pub(in crate::app) fn list(tracks: &[(&str, Option<i64>)]) -> Vec<RefTrack> {
+    pub fn list(tracks: &[(&str, Option<i64>)]) -> Vec<RefTrack> {
         tracks.iter().zip(1..).map(|((title, length_ms), position)| RefTrack { disc: 1, position, title: title.to_string(), length_ms: *length_ms, recording: None }).collect()
     }
 
@@ -1667,7 +1669,7 @@ pub(super) mod tests {
     }
 
     /// A record not had, of `title`, holding these references (`link`).
-    pub(in crate::app) fn wanted(cat: &Catalogue, title: &str, refs: &[(&str, &str, &str)]) -> i64 {
+    pub fn wanted(cat: &Catalogue, title: &str, refs: &[(&str, &str, &str)]) -> i64 {
         let record = cat.record_for_tests(title, 0);
         for (source, kind, value) in refs {
             assert!(cat.set_reference(&ids::record(record), &Ref::new(source, kind, value), "link").unwrap());
@@ -1677,7 +1679,7 @@ pub(super) mod tests {
 
     /// A reader answering each reference by its source: a list of `titles` for those named, the rest as `other` says; it
     /// counts what it was asked.
-    pub(in crate::app) fn reader(lists: &'static [(&'static str, &'static [&'static str])], asked: Arc<std::sync::Mutex<Vec<String>>>, other: fn() -> Result<Option<Read>>) -> impl Fn(Ref) -> std::future::Ready<Result<Option<Read>>> {
+    pub fn reader(lists: &'static [(&'static str, &'static [&'static str])], asked: Arc<std::sync::Mutex<Vec<String>>>, other: fn() -> Result<Option<Read>>) -> impl Fn(Ref) -> std::future::Ready<Result<Option<Read>>> {
         move |r: Ref| {
             asked.lock().unwrap().push(format!("{}:{}", r.source, r.kind));
             let answer = match lists.iter().find(|(s, _)| *s == r.source) {

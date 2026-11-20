@@ -90,6 +90,8 @@ cratarr-clients = { path = "crates/clients" }
 cratarr-gate = { path = "crates/gate" }
 cratarr-served = { path = "crates/served" }
 cratarr-base = { path = "crates/base" }
+cratarr-listening = { path = "crates/listening" }
+cratarr-records = { path = "crates/records" }
 cratarr-app = { path = "crates/app" }
 cratarr-api = { path = "crates/api" }
 ts-rs = "12.0.1"
@@ -110,6 +112,8 @@ cratarr-api = { workspace = true, features = ["test-support"] }
 cratarr-app = { workspace = true, features = ["test-support"] }
 cratarr-served = { workspace = true, features = ["test-support"] }
 cratarr-base = { workspace = true, features = ["test-support"] }
+cratarr-listening = { workspace = true, features = ["test-support"] }
+cratarr-records = { workspace = true, features = ["test-support"] }
 cratarr-gate = { workspace = true, features = ["test-support"] }
 cratarr-clients = { workspace = true, features = ["test-support"] }
 cratarr-store = { workspace = true, features = ["test-support"] }

@@ -420,7 +420,7 @@ fn readings() -> &'static Readings {
 /// How long a source that did not answer is left before it is asked again, by an open or by "More" (Z8).
 const RETRY_SECS: i64 = 15 * 60;
 /// The longest a page of a label's list may take: past it, it counts as not read, and `looking` ends.
-const READ_AT_MOST: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 300 });
+const READ_AT_MOST: Duration = Duration::from_secs(if cfg!(any(test, feature = "test-support")) { 5 } else { 300 });
 
 /// Ends a read, whatever becomes of its task: done (kept in the catalogue), else failed now (an error, a panic, a task dropped).
 struct Settles(Option<(usize, i64, &'static str)>, bool);
@@ -783,7 +783,7 @@ pub fn about(cat: &Catalogue, discogs: &[super::discogs::Label], musicbrainz: &[
 }
 
 /// A catalogue number added to a label's shown ones (A2.5): after them, ", " between, each once; an empty one adds nothing.
-pub(super) fn add_catno(shown: &mut Option<String>, catno: &str) {
+pub fn add_catno(shown: &mut Option<String>, catno: &str) {
     let catno = catno.trim();
     if catno.is_empty() || shown.as_deref().is_some_and(|s| s.split(", ").any(|c| c == catno)) {
         return;
@@ -848,8 +848,10 @@ pub fn open_label(cat: &Catalogue, o: &LabelOpened, named: impl FnOnce(&Ref) -> 
     Ok(LabelOpen::Opened(cat.open_label(&r, &name, !namesake)?))
 }
 
-#[cfg(test)]
-pub(super) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests {
+    // Shared with the tests of the crates above (test-support): idle where no test calls it.
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
 
     const LABEL_MBID: &str = "00000000-0000-4000-8000-000000000560";
@@ -1607,12 +1609,12 @@ pub(super) mod tests {
     // ---- F18.1, F15.1, A2.3
 
     /// A row of a label's Discogs list: by its release, of `title` by `artist`.
-    pub(in crate::app) fn discogs_row(release: &str, title: &str, artist: &str, catno: &str) -> LabelListed {
+    pub fn discogs_row(release: &str, title: &str, artist: &str, catno: &str) -> LabelListed {
         LabelListed { reference: Ref::new("discogs", "release", release), title: title.into(), artist: artist.into(), year: Some(2020), catno: catno.into(), ..Default::default() }
     }
 
     /// A row opened from `label`'s page as the page sends it (`POST /api/records/open`): its references, names and the label.
-    pub(in crate::app) fn open_row(cat: &Catalogue, label: i64, l: &LabelListed) -> i64 {
+    pub fn open_row(cat: &Catalogue, label: i64, l: &LabelListed) -> i64 {
         let r = &l.reference;
         let o = Opened {
             release_group: (r.kind == "release-group").then(|| r.value.clone()),

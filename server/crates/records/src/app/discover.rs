@@ -286,7 +286,7 @@ pub struct Candidate {
     pub score: f64,
 }
 
-pub(super) fn http() -> Result<reqwest::Client> {
+pub fn http() -> Result<reqwest::Client> {
     #[cfg(any(test, feature = "test-support"))]
     if MB_FAKE.with(|f| f.borrow().is_some()) {
         // The test's fake MusicBrainz, plain http on this machine (`FakeMusicBrainz`), which `reach::client` would refuse.
@@ -516,7 +516,7 @@ async fn from_listenbrainz(user: &str, progress: &Progress) -> Result<(Vec<Candi
 // ---- Last.fm
 
 /// One call to Last.fm, signed with the account's sign-in where it has one.
-pub(super) async fn fm(http: &reqwest::Client, auth: &Auth, method: &str, params: &[(&str, &str)]) -> Result<serde_json::Value> {
+pub async fn fm(http: &reqwest::Client, auth: &Auth, method: &str, params: &[(&str, &str)]) -> Result<serde_json::Value> {
     let mut q: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
     q.insert("method", method.to_string());
     q.insert("api_key", auth.key.clone());
@@ -636,7 +636,7 @@ struct Group {
 /// An artist's discography as kept (`discography`'s JSON, a list of `Group`) as records a list names (0100, C48b): each release
 /// group a listing by its MusicBrainz id, its type in the library's words ("album", "ep"), its first release date and genres.
 /// The artist's name is left for whoever knows it.
-pub(super) fn discography_listings(groups: &str) -> Result<Vec<crate::catalogue::records::Listing>> {
+pub fn discography_listings(groups: &str) -> Result<Vec<crate::catalogue::records::Listing>> {
     Ok(group_listings(serde_json::from_str(groups)?))
 }
 
@@ -661,10 +661,10 @@ fn group_listings(groups: Vec<Group>) -> Vec<crate::catalogue::records::Listing>
 
 /// An artist the library has, with how much the account plays them.
 #[derive(Debug, Clone)]
-pub(super) struct OwnArtist {
-    pub(super) name: String,
-    pub(super) mbid: Option<String>,
-    pub(super) plays: u32,
+pub struct OwnArtist {
+    pub name: String,
+    pub mbid: Option<String>,
+    pub plays: u32,
 }
 
 /// Today as MusicBrainz writes dates (UTC).
@@ -953,7 +953,7 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
 /// every account, looked up now where none are), an album each: the one that plays on Bandcamp where they have one
 /// (it plays at once), else their newest album on MusicBrainz with its cover. Each says "Like <seed>" and how related
 /// (the most related 1), as Last.fm's suggestions do, so the page groups them with that seed's.
-pub(super) async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, seeds: &[(String, String)], progress: &Progress) -> Vec<Candidate> {
+pub async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, seeds: &[(String, String)], progress: &Progress) -> Vec<Candidate> {
     let today = today();
     let mut out = Vec::new();
     for (i, (seed, mbid)) in seeds.iter().enumerate() {
@@ -1063,7 +1063,7 @@ pub struct Have {
 }
 
 impl Have {
-    pub(super) fn has(&self, c: &Candidate) -> bool {
+    pub fn has(&self, c: &Candidate) -> bool {
         c.release_group.as_deref().is_some_and(|g| self.release_groups.contains(g)) || self.matcher.find_album(&c.album, Some(&c.artist)).is_some()
     }
 }
@@ -1796,7 +1796,7 @@ fn artist_plays(ud: &crate::userdata::UserData, account: &str) -> Result<HashMap
 
 /// The library's artists, the account's most played first (its own plays, 0064, `artist_plays`), and what the library
 /// has.
-pub(super) async fn own(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str) -> Result<(Have, Vec<OwnArtist>)> {
+pub async fn own(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str) -> Result<(Have, Vec<OwnArtist>)> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
     let (lib, ud, a) = (serve.library.clone(), serve.userdata.clone(), account.to_string());
     crate::run::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
@@ -2103,7 +2103,7 @@ pub fn reread_sources() -> Vec<Arc<dyn ArtistList>> {
 /// An artist's list at one source read again by the paced re-read (RT01c, `retention`), as a page's is (`read_lists`): in the
 /// source's one turn, so it never runs beside a page's read there, with the same cut once it asks. An error where it failed or
 /// ran past the cut; read, whether the source knows them (`read_one`).
-pub(crate) async fn reread_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<bool> {
+pub async fn reread_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<bool> {
     let _turn = turn_of(source.source()).acquire_owned().await?;
     // F14: Discogs' list by MusicBrainz's link, as a page's read has it.
     let linked = if source.source() == "discogs" && artist.at("discogs").is_none() {
@@ -2121,7 +2121,7 @@ pub(crate) async fn reread_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &
 /// An artist's list at one source, as it stands: being read now; read (or known not to be there) at a time; failed at a time, and
 /// how (F8: F1's outcomes, a page's section says it).
 #[derive(Debug, Clone, Copy)]
-pub(super) enum Reading {
+pub enum Reading {
     Now,
     Done(i64),
     Failed(i64, super::references::Outcome),
@@ -2130,7 +2130,7 @@ pub(super) enum Reading {
 /// Who is being read where: by catalogue (its address), artist and source.
 type Readings = std::sync::Mutex<HashMap<(usize, i64, &'static str), Reading>>;
 
-pub(super) fn readings() -> &'static Readings {
+pub fn readings() -> &'static Readings {
     static READINGS: std::sync::OnceLock<Readings> = std::sync::OnceLock::new();
     READINGS.get_or_init(Default::default)
 }
@@ -2140,7 +2140,7 @@ const LIST_FRESH_SECS: i64 = DISCOGRAPHY_FRESH_SECS;
 /// How long a source that did not answer (its bot check, out of reach, too slow) is left before it is asked again.
 pub(super) const LIST_RETRY_SECS: i64 = 15 * 60;
 /// The longest a list's read may take: past it, it counts as not read, and `looking` ends.
-const LIST_READ_AT_MOST: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 300 });
+const LIST_READ_AT_MOST: Duration = Duration::from_secs(if cfg!(any(test, feature = "test-support")) { 1 } else { 300 });
 
 /// One reader a source (O5): its artists' lists read one at a time, first come first served (a fair semaphore).
 fn turn_of(source: &'static str) -> Arc<tokio::sync::Semaphore> {
@@ -2399,7 +2399,7 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
     .await??;
     // A1.1.2: their Discogs masters waiting for a type, typed by their main releases in Discogs' turn (background reading's pause
     // holds it), the records of their own made.
-    if !cfg!(test) && source.source() == "discogs" && holder.is_none() && !super::switches::background_paused() {
+    if !cfg!(any(test, feature = "test-support")) && source.source() == "discogs" && holder.is_none() && !super::switches::background_paused() {
         let cat = cat.clone();
         crate::run::spawn(async move {
             let read = |m: u64| async move { super::discogs::master_format(m).await };
@@ -2959,8 +2959,10 @@ pub fn undo(serve: &crate::serve::Serve, account: &str, token: &str) -> Result<S
     }
 }
 
-#[cfg(test)]
-pub(super) mod missing_tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod missing_tests {
+    // Shared with the tests of the crates above (test-support): idle where no test calls it.
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
     use crate::catalogue::Catalogue;
     use crate::catalogue::records::{Listing, Ref};
@@ -3000,7 +3002,7 @@ pub(super) mod missing_tests {
     }
 
     /// The list once no read runs: `looking` must end (a test fails rather than waits for good).
-    pub(in crate::app) async fn settled(cat: &Arc<Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Vec<Missing> {
+    pub async fn settled(cat: &Arc<Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Vec<Missing> {
         for _ in 0..500 {
             let m = missing_albums(cat.clone(), artist, sources).await.unwrap();
             if !m.looking {
@@ -3252,14 +3254,14 @@ pub(super) mod missing_tests {
     // ---- F2: an album read from an artist's own list joins the record of its names
 
     /// MusicBrainz's release groups of the finding's four records, and Bandcamp's pages of them.
-    pub(in crate::app) const THEIR_GROUPS: [&str; 4] = ["00000000-0000-4000-8000-000000002101", "00000000-0000-4000-8000-000000002102", "00000000-0000-4000-8000-000000002103", "00000000-0000-4000-8000-000000002104"];
-    pub(in crate::app) const THEIR_PAGES: [&str; 4] = [
+    pub const THEIR_GROUPS: [&str; 4] = ["00000000-0000-4000-8000-000000002101", "00000000-0000-4000-8000-000000002102", "00000000-0000-4000-8000-000000002103", "00000000-0000-4000-8000-000000002104"];
+    pub const THEIR_PAGES: [&str; 4] = [
         "https://kitetheory.bandcamp.com/album/fourth-the-golden-eagle",
         "https://kitetheory.bandcamp.com/album/the-curved-line",
         "https://kitetheory.bandcamp.com/album/break-synonyms",
         "https://kitetheory.bandcamp.com/album/answered-ep",
     ];
-    pub(in crate::app) const THEIR_TITLES: [&str; 4] = ["Fourth: The Golden Eagle", "The Curved Line", "Break Synonyms", "Answered"];
+    pub const THEIR_TITLES: [&str; 4] = ["Fourth: The Golden Eagle", "The Curved Line", "Break Synonyms", "Answered"];
     const THEIR_ARTIST: &str = "00000000-0000-4000-8000-000000002100";
     /// Two albums of theirs the library has, untagged (staging's had halves of the doubles): MusicBrainz's group and Bandcamp's page
     /// of the one, Bandcamp's page alone of the other.
@@ -3293,7 +3295,7 @@ pub(super) mod missing_tests {
     }
 
     /// Their two had albums, "Kyverdale Road" and "Cambio Wechsel": untagged (no reference), their files crediting `artist`.
-    pub(in crate::app) fn their_had(cat: &Catalogue, artist: i64) -> [i64; 2] {
+    pub fn their_had(cat: &Catalogue, artist: i64) -> [i64; 2] {
         ["Kyverdale Road", "Cambio Wechsel"].map(|title| {
             let record = cat.record_for_tests(title, 3);
             cat.db_for_tests().execute("UPDATE records SET artist = 'Kite Theory' WHERE id = ?1", [record]).unwrap();
@@ -3304,17 +3306,17 @@ pub(super) mod missing_tests {
 
     /// What a had album of theirs holds once their lists are read: the group and page of "Kyverdale Road", the page of "Cambio
     /// Wechsel"; each a list's row joined to it, none of them a record of its own.
-    pub(in crate::app) fn their_had_hold(cat: &Catalogue, had: [i64; 2]) {
+    pub fn their_had_hold(cat: &Catalogue, had: [i64; 2]) {
         let refs = |record: i64| cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>();
         assert_eq!(refs(had[0]), [KYVERDALE_PAGE, KYVERDALE_GROUP], "Kyverdale Road: MusicBrainz's row and Bandcamp's joined the had album");
         assert_eq!(refs(had[1]), [CAMBIO_PAGE], "Cambio Wechsel: Bandcamp's row joined the had album");
     }
 
-    pub(in crate::app) fn their_musicbrainz() -> Arc<dyn ArtistList> {
+    pub fn their_musicbrainz() -> Arc<dyn ArtistList> {
         Arc::new(Stub("musicbrainz", |_| Ok(Some((Ref::new("musicbrainz", "artist", THEIR_ARTIST), Some("search"), their_musicbrainz_list())))))
     }
 
-    pub(in crate::app) fn their_bandcamp() -> Arc<dyn ArtistList> {
+    pub fn their_bandcamp() -> Arc<dyn ArtistList> {
         Arc::new(Stub("bandcamp", |_| Ok(Some((Ref::new("bandcamp", "artist", "https://kitetheory.bandcamp.com"), Some("search"), their_bandcamp_list())))))
     }
 
@@ -3327,7 +3329,7 @@ pub(super) mod missing_tests {
         (cat, artist)
     }
 
-    pub(in crate::app) fn count_records(cat: &Catalogue) -> i64 {
+    pub fn count_records(cat: &Catalogue) -> i64 {
         cat.db_for_tests().query_row("SELECT count(*) FROM records", [], |r| r.get(0)).unwrap()
     }
 
@@ -3340,7 +3342,7 @@ pub(super) mod missing_tests {
     }
 
     /// The record that holds `r`.
-    pub(in crate::app) fn holder_of(cat: &Catalogue, r: &Ref) -> i64 {
+    pub fn holder_of(cat: &Catalogue, r: &Ref) -> i64 {
         let held = cat.subject_of(r).unwrap();
         assert_eq!(held.len(), 1, "{r:?} held by {held:?}");
         crate::serve::ids::record_number(&held[0]).unwrap()
