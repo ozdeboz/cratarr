@@ -24,8 +24,6 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    use anyhow::Result;
-
     use crate::catalogue::Catalogue;
     use crate::serve::backup_list_write::part_in;
 

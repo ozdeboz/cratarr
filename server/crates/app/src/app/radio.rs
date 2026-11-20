@@ -77,13 +77,13 @@ pub struct Autoplay {
 }
 
 /// `Within` as a play names it: here, as `Within` sits in base, below the play it names.
-trait AsCollection {
+pub trait AsCollection {
     fn collection(&self) -> super::play::Collection;
 }
 
 impl AsCollection for Within {
     /// As a play names it (app::play), to read its tracks as a play does.
-    pub fn collection(&self) -> super::play::Collection {
+    fn collection(&self) -> super::play::Collection {
         use super::play::Collection;
         match self.clone() {
             Within::Crate { id, without } => {
