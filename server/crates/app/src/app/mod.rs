@@ -107,6 +107,8 @@ pub mod search;
 pub mod features_host;
 mod app_features;
 pub mod requests;
+pub mod requests_host;
+mod app_requests;
 #[cfg(test)]
 mod served_tests_requests;
 // What counts against each user's room (AL01).

@@ -23,6 +23,7 @@ use crate::serve::users::Permissions;
 use crate::userdata::Request;
 
 pub use super::requests_base::{Album, Fetching, Mark, Marks, RequestState, View, mark_of, requested};
+use super::requests_host::RequestsHost;
 
 pub const PENDING: &str = "pending";
 pub const APPROVED: &str = "approved";
@@ -127,9 +128,9 @@ pub fn rights(serve: &Serve) -> Permissions {
 
 /// The fetcher approved requests are handed to: Lidarr, where it is connected and switched on, with the profiles and
 /// root folder chosen on its page in Connections.
-pub fn fetcher(app: &super::App) -> Option<Box<dyn Fetcher>> {
-    let lidarr = super::discover::lidarr(app)?;
-    Some(Box::new(LidarrFetcher { lidarr, with: super::discover::add_with(app) }))
+pub fn fetcher(app: &dyn RequestsHost) -> Option<Box<dyn Fetcher>> {
+    let lidarr = app.lidarr()?;
+    Some(Box::new(LidarrFetcher { lidarr, with: app.lidarr_add_with() }))
 }
 
 /// What a Want is handed with (AL02): Lidarr where it is connected, whether Soulseek is, the house's copy of a record held whole
@@ -148,20 +149,19 @@ pub(crate) trait House: Send + Sync {
     fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>>;
 }
 
-impl House for super::App {
-    fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>> {
-        Box::pin(self.copy_for(account, record, sharing))
-    }
-}
-
 /// The fetchers as they are now, for a `Hands`: Lidarr where connected and switched on, and whether Soulseek is.
-async fn fetchers(app: &super::App) -> (Option<Box<dyn Fetcher>>, bool) {
+async fn fetchers(app: &dyn RequestsHost) -> (Option<Box<dyn Fetcher>>, bool) {
     (fetcher(app), super::soulseek::connected().await)
 }
 
 /// A suggestion of the account's Discover asked for: a Want, gone ahead (`ask_for`). Asked again, the request already open is the
 /// answer.
-pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> Result<Request> {
+pub async fn ask<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, key: &str) -> Result<Request> {
+    ask_on(&**app, serve, account, key).await
+}
+
+/// [`ask`], on its host.
+async fn ask_on(app: &dyn RequestsHost, serve: &Serve, account: &str, key: &str) -> Result<Request> {
     if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
     }
@@ -171,14 +171,20 @@ pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> R
     }
     let record = record_of_album_in(serve, s.release_group.clone(), &s.artist, &s.album, s.year, s.cover.clone(), s.bandcamp.clone()).await?;
     let (lidarr, soulseek) = fetchers(app).await;
-    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, account, record, Some(s.key), s.release_group).await
+    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app.house(), disks: &super::room::TheDisks }, serve, account, record, Some(s.key), s.release_group).await
 }
 
 /// Any album asked for by its names (0.9.3, the owner: Want for any album an artist's page says is missing): keyed as
 /// Discover keys albums (its release group, else its artist's and its name's), so its suggestion leaves Discover too; its
 /// record found or made first (`record_of_album`, C49a), whose names the request shows.
 #[allow(clippy::too_many_arguments)]
-pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<Request> {
+pub async fn ask_album<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<Request> {
+    ask_album_on(&**app, serve, account, release_group, artist, album, year, cover, page).await
+}
+
+/// [`ask_album`], on its host.
+#[allow(clippy::too_many_arguments)]
+async fn ask_album_on(app: &dyn RequestsHost, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<Request> {
     if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
     }
@@ -194,14 +200,14 @@ pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_g
     }
     let record = record_of_album_in(serve, release_group.clone(), artist, album, year, cover, page).await?;
     let (lidarr, soulseek) = fetchers(app).await;
-    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, account, record, Some(key), release_group).await
+    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app.house(), disks: &super::room::TheDisks }, serve, account, record, Some(key), release_group).await
 }
 
 /// A record asked for by its id (C49a): an artist's or a label's missing record, any record not had. The account's open
 /// request for it is the answer where there is one.
-pub async fn ask_record(app: &super::App, serve: &Serve, account: &str, record: i64) -> Result<Request> {
-    let (lidarr, soulseek) = fetchers(app).await;
-    ask_record_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, account, record).await
+pub async fn ask_record<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, record: i64) -> Result<Request> {
+    let (lidarr, soulseek) = fetchers(&**app).await;
+    ask_record_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app.house(), disks: &super::room::TheDisks }, serve, account, record).await
 }
 
 /// [`ask_record`], handed with `h`.
@@ -922,7 +928,12 @@ async fn hand_to_as(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve,
 
 /// The requests' round (X1), once a minute: an album now out handed to Lidarr; the first arrival stopping the other fetcher; Lidarr
 /// asked whether it can be reached; and, at the first 0.17 start, the approved requests no fetcher spoke of handed to Lidarr once.
-pub fn start(app: &std::sync::Arc<super::App>) {
+pub fn start<H: RequestsHost>(app: &Arc<H>) {
+    start_on(app.clone())
+}
+
+/// [`start`], on its host.
+fn start_on(app: Arc<dyn RequestsHost>) {
     static STARTED: OnceLock<()> = OnceLock::new();
     if STARTED.set(()).is_err() {
         return;
@@ -932,7 +943,7 @@ pub fn start(app: &std::sync::Arc<super::App>) {
     crate::run::spawn(async move {
         let mut asked_at = 0;
         loop {
-            if let Err(e) = round(&app, &serve, &mut asked_at).await {
+            if let Err(e) = round(&*app, &serve, &mut asked_at).await {
                 tracing::warn!(target: "requests", reason = %format!("{e:#}"), "the requests' round");
             }
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -947,14 +958,14 @@ const ASK_LIDARR_EVERY: i64 = 300;
 const HANDED_AT_START: &str = "requests: handed to Lidarr at 0.17's first start";
 
 /// One round of `start`.
-async fn round(app: &super::App, serve: &Serve, asked_at: &mut i64) -> Result<()> {
+async fn round(app: &dyn RequestsHost, serve: &Serve, asked_at: &mut i64) -> Result<()> {
     let (lidarr, soulseek) = fetchers(app).await;
     let now = super::moment::now_secs();
     if let Some(f) = lidarr.as_deref()
         && now - *asked_at >= ASK_LIDARR_EVERY
     {
         *asked_at = now;
-        let reached = match super::discover::lidarr(app) {
+        let reached = match app.lidarr() {
             Some(l) => l.version().await.is_ok(),
             None => true,
         };
@@ -964,7 +975,7 @@ async fn round(app: &super::App, serve: &Serve, asked_at: &mut i64) -> Result<()
             serve.userdata.set_migration_part(HANDED_AT_START, &serde_json::json!({ "handed": handed }))?;
         }
     }
-    round_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, now).await
+    round_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app.house(), disks: &super::room::TheDisks }, serve, now).await
 }
 
 /// The round's own work (X1, AL02, AL03), handed with `h`, at `now`, the disk floor read once for it (`room::short_on`), in this order:
@@ -1259,9 +1270,9 @@ pub async fn stop_arrived(lidarr: Option<&dyn Fetcher>, serve: &Serve) -> Vec<i6
 /// reason, if one was given. Only pending ones are answered (0.16's, till the first round: AL02.7); an approved one that was not
 /// handed over is handed over again, room permitting. One waiting for room is let through by no yes (AL02.2): the answer says so.
 /// Each id's outcome, in words.
-pub async fn decide(app: &super::App, serve: &Serve, by: &str, ids: &[i64], approve: bool, reason: Option<&str>) -> Result<Vec<(i64, String)>> {
-    let (lidarr, soulseek) = fetchers(app).await;
-    decide_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, by, ids, approve, reason).await
+pub async fn decide<H: RequestsHost>(app: &Arc<H>, serve: &Serve, by: &str, ids: &[i64], approve: bool, reason: Option<&str>) -> Result<Vec<(i64, String)>> {
+    let (lidarr, soulseek) = fetchers(&**app).await;
+    decide_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app.house(), disks: &super::room::TheDisks }, serve, by, ids, approve, reason).await
 }
 
 /// [`decide`], handed with `h`.
@@ -1308,8 +1319,8 @@ pub(crate) async fn decide_with(h: &Hands<'_>, serve: &Serve, by: &str, ids: &[i
 /// A request taken back: the account's own, pending or approved (since 0.17 a Want goes ahead with no one's yes, AL02, so it is its
 /// asker's to take back, waiting for room or handed); anyone's by those who answer requests. The fetcher told to stop looking for it
 /// (what is there already stays).
-pub async fn cancel(app: &super::App, serve: &Serve, account: &str, id: i64) -> Result<()> {
-    cancel_with(fetcher(app).as_deref(), serve, account, id).await
+pub async fn cancel<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, id: i64) -> Result<()> {
+    cancel_with(fetcher(&**app).as_deref(), serve, account, id).await
 }
 
 /// [`cancel`], Lidarr as `lidarr`.
@@ -1377,7 +1388,12 @@ async fn retry_stops(lidarr: Option<&dyn Fetcher>, serve: &Serve) -> Vec<i64> {
 }
 
 /// The Requests page's lists, each request with its album's state.
-pub async fn list(app: &super::App, serve: &Serve, account: &str) -> Result<Listing> {
+pub async fn list<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str) -> Result<Listing> {
+    list_on(&**app, serve, account).await
+}
+
+/// [`list`], on its host.
+async fn list_on(app: &dyn RequestsHost, serve: &Serve, account: &str) -> Result<Listing> {
     let may = rights(serve);
     let mine = serve.userdata.requests(Some(account), None, LIST)?;
     let waiting = if may.manage_requests { Some(serve.userdata.requests(None, Some(PENDING), LIST)?) } else { None };
@@ -1393,7 +1409,12 @@ pub async fn list(app: &super::App, serve: &Serve, account: &str) -> Result<List
 }
 
 /// The account's requests by their suggestion's key, for Discover's cards: the newest of each album, with its state.
-pub async fn of_suggestions(app: &super::App, serve: &Serve, account: &str, keys: &[String]) -> Result<Vec<(String, View)>> {
+pub async fn of_suggestions<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, keys: &[String]) -> Result<Vec<(String, View)>> {
+    of_suggestions_on(&**app, serve, account, keys).await
+}
+
+/// [`of_suggestions`], on its host.
+async fn of_suggestions_on(app: &dyn RequestsHost, serve: &Serve, account: &str, keys: &[String]) -> Result<Vec<(String, View)>> {
     let mut newest: Vec<Request> = Vec::new();
     for r in serve.userdata.requests(Some(account), None, LIST)? {
         if keys.contains(&r.album_key) && !newest.iter().any(|n| n.album_key == r.album_key) {
@@ -1410,8 +1431,8 @@ pub async fn of_suggestions(app: &super::App, serve: &Serve, account: &str, keys
 
 /// The account's newest request of a record (C54: the page of a record not had), whatever its status, as the Requests page shows
 /// it. None: it asked for none.
-pub async fn request_of_record(app: &super::App, serve: &Serve, account: &str, record: i64) -> Result<Option<View>> {
-    let f = fetcher(app);
+pub async fn request_of_record<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, record: i64) -> Result<Option<View>> {
+    let f = fetcher(&**app);
     let newest = newest_of_record(serve, f.as_deref(), account, record).await?;
     Ok(shown_to(newest.into_iter().collect(), crate::serve::access::administering()).pop())
 }
@@ -1419,16 +1440,16 @@ pub async fn request_of_record(app: &super::App, serve: &Serve, account: &str, r
 /// The account's newest request of an album a view names by its record, else by its release group (G3: a Bandcamp album Discover
 /// found by its group, which no record holds by its page): the record that group names. As the Requests page shows it; none where
 /// it asked for neither.
-pub async fn request_of(app: &super::App, serve: &Serve, account: &str, record: Option<i64>, group: Option<&str>) -> Result<Option<View>> {
-    let f = fetcher(app);
+pub async fn request_of<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, record: Option<i64>, group: Option<&str>) -> Result<Option<View>> {
+    let f = fetcher(&**app);
     let newest = newest_of(serve, f.as_deref(), account, record, group).await?;
     Ok(shown_to(newest.into_iter().collect(), crate::serve::access::administering()).pop())
 }
 
 /// A request just asked for as every view shows it (G11): with where it stands (`state`), as the Requests page reads it, so Want's
 /// answer needs no second read. As it was asked where it has no record, which no request since 0.17 lacks.
-pub async fn as_viewed(app: &super::App, serve: &Serve, account: &str, r: Request) -> serde_json::Value {
-    let f = fetcher(app);
+pub async fn as_viewed<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, r: Request) -> serde_json::Value {
+    let f = fetcher(&**app);
     match viewed(serve, f.as_deref(), account, &r).await {
         Some(v) => serde_json::json!(shown_to(vec![v], crate::serve::access::administering()).pop()),
         None => serde_json::json!(r),
@@ -1554,9 +1575,9 @@ pub enum Step {
 
 /// A request's story for `account` (RQ01): its asker's and the administrators' (OQ-RQ2 (a): "Manage requests" reads one's own alone);
 /// none for anyone else, as for a request that does not exist. Lidarr as it is connected; libraries named as the Library names them.
-pub async fn story(app: &super::App, serve: &Serve, account: &str, id: i64) -> Result<Option<Story>> {
-    let f = fetcher(app);
-    let named = |folder: i64| app.incoming.library_name(crate::source::cratarr::KIND.id, folder);
+pub async fn story<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, id: i64) -> Result<Option<Story>> {
+    let f = fetcher(&**app);
+    let named = |folder: i64| app.library_name(crate::source::cratarr::KIND.id, folder);
     story_with(serve, f.as_deref(), account, id, &named).await
 }
 
@@ -1707,8 +1728,8 @@ fn lidarr_part(r: &Request, progress: Option<&Progress>) -> Option<LidarrPart> {
 
 /// What Lidarr is looking for and fetching now (the page's "Lidarr is looking for these"); asked while the page is
 /// open, not watched.
-pub async fn watching(app: &super::App) -> Result<Option<crate::lidarr::Watching>> {
-    match super::discover::lidarr(app) {
+pub async fn watching<H: RequestsHost>(app: &Arc<H>) -> Result<Option<crate::lidarr::Watching>> {
+    match app.lidarr() {
         Some(l) => Ok(Some(l.watching(WATCHED).await?)),
         None => Ok(None),
     }
@@ -1732,7 +1753,7 @@ fn mark(state: &Album) -> Option<Mark> {
 
 /// Every open request's mark (pending or approved, any account's: an album someone asked for comes for the whole server), by
 /// its record and by what names its record (C49b, `marks_of`); one coming wins over one only wanted. Kept `MARKS_KEEP`.
-pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<Marks>> {
+pub async fn marks(app: &dyn RequestsHost, serve: &Serve) -> Result<Arc<Marks>> {
     type Kept = Option<(Instant, Arc<Marks>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
     let kept = KEPT.get_or_init(Default::default);

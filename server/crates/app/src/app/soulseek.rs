@@ -1377,7 +1377,7 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
     }
     // The owner's 6 November order (X1): Lidarr first, Soulseek five minutes after, or at once where Lidarr is not connected or did
     // not take it; an album not out yet waits for its release.
-    let lidarr = super::requests::fetcher(app);
+    let lidarr = super::requests::fetcher(&**app);
     let firsts = firsts_of(&approved, &of, lidarr.is_some());
     *NOT_BEFORE.lock().unwrap_or_else(|e| e.into_inner()) = approved.iter().map(|r| r.id).zip(firsts.iter().copied()).collect();
     // The first arrival stops the other (X1), and a request that left takes its item with it (Y2): a fetch, a check or a placing
