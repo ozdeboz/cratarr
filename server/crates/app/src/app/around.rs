@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
+use super::around_records::{change, kept};
+pub use super::around_records::{State, suggestions};
 use super::discover::Suggestion;
 use super::playing_host::PlayingHost;
 
@@ -22,27 +23,9 @@ const WAIT: Duration = Duration::from_secs(5);
 /// How long a group being made waits for the look ahead of the same account to finish (it looks up the same seeds).
 const AHEAD_WAIT: Duration = Duration::from_secs(180);
 
-/// An account's Around, as kept (`UserData::discover_around`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct State {
-    /// The seeds shown this round (MusicBrainz ids), the group showing among them.
-    #[serde(default)]
-    pub shown: Vec<String>,
-    /// The group showing: its seeds (name, MusicBrainz id), and their suggestions once made.
-    #[serde(default)]
-    pub seeds: Vec<(String, String)>,
-    #[serde(default)]
-    pub albums: Option<Vec<Suggestion>>,
-    /// The group after it, looked up ahead.
-    #[serde(default)]
-    pub next: Vec<(String, String)>,
-}
-
 /// The accounts whose group showing is being made, and those whose next group is being looked up.
 static MAKING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 static AHEAD: Mutex<Option<HashSet<String>>> = Mutex::new(None);
-/// One change of an account's State at a time (read, changed, kept).
-static CHANGING: Mutex<()> = Mutex::new(());
 
 fn claim(set: &Mutex<Option<HashSet<String>>>, account: &str) -> bool {
     set.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).insert(account.to_string())
@@ -56,19 +39,6 @@ fn release(set: &Mutex<Option<HashSet<String>>>, account: &str) {
 
 fn busy(set: &Mutex<Option<HashSet<String>>>, account: &str) -> bool {
     set.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|s| s.contains(account))
-}
-
-fn kept(serve: &crate::serve::Serve, account: &str) -> Result<State> {
-    Ok(serve.userdata.discover_around(account)?.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default())
-}
-
-/// The account's State read, changed by `change` and kept, one change at a time.
-fn change<T>(serve: &crate::serve::Serve, account: &str, change: impl FnOnce(&mut State) -> T) -> Result<(State, T)> {
-    let _one = CHANGING.lock().unwrap_or_else(|e| e.into_inner());
-    let mut st = kept(serve, account)?;
-    let out = change(&mut st);
-    serve.userdata.set_discover_around(account, &serde_json::to_string(&st)?)?;
-    Ok((st, out))
 }
 
 /// The account's seeds: every artist it has played with a MusicBrainz id, the most played first.
@@ -177,11 +147,6 @@ async fn answered(serve: &Arc<crate::serve::Serve>, account: &str, st: State) ->
     let mut albums = st.albums.unwrap_or_default();
     albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key) && !super::discover::excluded_everywhere(s, &everywhere));
     Ok((st.seeds.into_iter().map(|(name, _)| name).collect(), albums, making))
-}
-
-/// The group showing's suggestions as kept, for what is done with one of them (Want, Hide, Not interested).
-pub fn suggestions(serve: &crate::serve::Serve, account: &str) -> Result<Vec<Suggestion>> {
-    Ok(kept(serve, account)?.albums.unwrap_or_default())
 }
 
 /// The group showing made in the background (after the look ahead, which asks for the same seeds), and kept; then the
