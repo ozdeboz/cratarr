@@ -22,8 +22,8 @@ const API: &str = "https://api.discogs.com";
 /// Discogs' limits a minute, until a reply says.
 const ANONYMOUS_PER_MINUTE: u32 = 25;
 const KEYED_PER_MINUTE: u32 = 60;
-/// Too many asked (429): once more after this.
-const TOO_MANY_WAIT: Duration = Duration::from_secs(60);
+/// Too many asked (429) without a Retry-After: once more after this (its policy's, `turn::DISCOGS`).
+const TOO_MANY_WAIT: Duration = super::turn::DISCOGS.first;
 /// An album's cover found (or not) is kept this long before it is looked for again.
 const COVER_FOUND_SECS: i64 = 30 * 86_400;
 const COVER_NONE_SECS: i64 = 7 * 86_400;
@@ -96,18 +96,25 @@ async fn pace(keyed: bool) {
     *next = Instant::now() + gap(limit);
 }
 
-/// Discogs said "too many" (429): every caller held `TOO_MANY_WAIT` (O6).
-fn too_many() {
-    HOLD_UNTIL.fetch_max(now_ms() + TOO_MANY_WAIT.as_millis() as u64, Ordering::Relaxed);
+/// Discogs said "too many" (429): every caller held `wait` (O6), a later hold kept.
+fn too_many(wait: Duration) {
+    HOLD_UNTIL.fetch_max(now_ms() + wait.as_millis() as u64, Ordering::Relaxed);
 }
 
-/// Whether `get` asks once more after an answer of `status`: after its first 429 only (`again`). Every 429 holds every caller first, a
-/// second in a row too, and one while a hold is on pushes it out (O6, Y8).
-fn again_after(status: reqwest::StatusCode, again: &mut bool) -> bool {
+/// Discogs' "too many" (429) as the pause it is (TN.1): its Retry-After where it says, else `TOO_MANY_WAIT`. The wait, and the pause
+/// from `now` (epoch s). Pure.
+pub(crate) fn too_many_said(headers: &reqwest::header::HeaderMap, now: i64) -> (Duration, super::turn::Paused) {
+    let wait = super::turn::retry_after(headers, now).unwrap_or(TOO_MANY_WAIT);
+    (wait, super::turn::Paused { source: super::turn::DISCOGS.name, until: now + wait.as_secs() as i64 })
+}
+
+/// Whether `get` asks once more after an answer of `status`: after its first 429 only (`again`). Every 429 holds every caller first
+/// (`wait`), a second in a row too, and one while a hold is on pushes it out (O6, Y8).
+fn again_after(status: reqwest::StatusCode, wait: Duration, again: &mut bool) -> bool {
     if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
         return false;
     }
-    too_many();
+    too_many(wait);
     std::mem::take(again)
 }
 
@@ -202,12 +209,15 @@ async fn get(path: &str) -> Result<Option<Value>> {
         }
         let r = req.sent().await?;
         note_limits(r.headers());
+        let (wait, paused) = too_many_said(r.headers(), super::moment::now_secs());
         // Everyone held, not only this caller (O6): `pace` waits it out.
-        if again_after(r.status(), &mut again) {
+        if again_after(r.status(), wait, &mut again) {
             continue;
         }
         match r.status() {
             reqwest::StatusCode::NOT_FOUND => return Ok(None),
+            // A second in a row, not asked again: the pause it asks for (TN.1).
+            reqwest::StatusCode::TOO_MANY_REQUESTS => return Err(paused.into()),
             _ => return Ok(Some(r.error_for_status()?.json().await?)),
         }
     }
@@ -832,11 +842,11 @@ mod tests {
         let busy = reqwest::StatusCode::TOO_MANY_REQUESTS;
         let mut again = true;
         HOLD_UNTIL.store(0, Ordering::Relaxed);
-        let first = again_after(busy, &mut again);
+        let first = again_after(busy, TOO_MANY_WAIT, &mut again);
         HOLD_UNTIL.store(0, Ordering::Relaxed);
-        let second = again_after(busy, &mut again);
+        let second = again_after(busy, TOO_MANY_WAIT, &mut again);
         let held = HOLD_UNTIL.swap(0, Ordering::Relaxed);
-        let other = again_after(reqwest::StatusCode::OK, &mut true);
+        let other = again_after(reqwest::StatusCode::OK, TOO_MANY_WAIT, &mut true);
         let after_other = HOLD_UNTIL.load(Ordering::Relaxed);
         HOLD_UNTIL.store(was, Ordering::Relaxed);
         assert!(first && !second, "the first asked once more, the second not");
@@ -850,7 +860,7 @@ mod tests {
     fn a_discogs_429_holds_everyone_and_a_kept_none_asks_nothing() {
         let _one = crate::app::switches::TEST_STATE.blocking_lock();
         let was = HOLD_UNTIL.load(Ordering::Relaxed);
-        too_many();
+        too_many(TOO_MANY_WAIT);
         let held = HOLD_UNTIL.load(Ordering::Relaxed);
         HOLD_UNTIL.store(was, Ordering::Relaxed);
         assert!(held >= now_ms() + 59_000, "held a minute for every caller");

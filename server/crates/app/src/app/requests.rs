@@ -573,29 +573,8 @@ pub const WAITS_FOR_RELEASE: &str = "Waits for its release:";
 /// What a request says once its album arrived and Lidarr was told to stop looking for it (X1: the first arrival stops the other).
 pub const STOPPED_ON_ARRIVAL: &str = "Lidarr told to stop: it arrived";
 
-/// The day a release date names ("2026", "2026-12", "2026-12-04"), at its start, epoch seconds (UTC). Pure.
-pub fn release_day(s: &str) -> Option<i64> {
-    let mut parts = s.trim().split('-');
-    let y: i64 = parts.next()?.parse().ok()?;
-    let m: i64 = match parts.next() {
-        Some(p) => p.parse().ok()?,
-        None => 1,
-    };
-    let d: i64 = match parts.next() {
-        Some(p) => p.parse().ok()?,
-        None => 1,
-    };
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    // Days from 1970-01-01 (days_from_civil).
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some((era * 146_097 + doe - 719_468) * 86_400)
-}
+/// The day a release date names: moved down for the turn's HTTP dates (`requests_turn`).
+pub use cratarr_gate::app::requests_turn::release_day;
 
 /// When each fetcher was last found out of reach and has stayed so (X1: a dead fetcher raises a Health item), by its name.
 static DOWN: std::sync::Mutex<std::collections::BTreeMap<&'static str, i64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());

@@ -786,11 +786,13 @@ async fn mb_page(http: &reqwest::Client, path: &str, query: &[(&str, &str)], off
     url.query_pairs_mut().extend_pairs(query).append_pair("fmt", "json").append_pair("limit", "100").append_pair("offset", &offset.to_string());
     let mut again = true;
     loop {
-        let r = http.get(url.clone()).asked().await?;
-        if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE && std::mem::take(&mut again) {
-            tokio::time::sleep(MB_BUSY_PAUSE).await;
-            continue;
-        }
+        let r = match http.get(url.clone()).asked().await {
+            Err(e) if e.is::<super::turn::Paused>() && std::mem::take(&mut again) => {
+                tokio::time::sleep(MB_BUSY_PAUSE).await;
+                continue;
+            }
+            r => r?,
+        };
         return Ok(r.error_for_status()?.json().await?);
     }
 }

@@ -126,12 +126,15 @@ type Group = (Option<u32>, Option<String>, Vec<String>);
 async fn ask(http: &reqwest::Client, url: &str) -> Result<Option<serde_json::Value>> {
     let mut again = true;
     loop {
-        let r = http.get(url).asked().await?;
-        match r.status() {
-            reqwest::StatusCode::SERVICE_UNAVAILABLE if std::mem::take(&mut again) => {
+        let r = match http.get(url).asked().await {
+            // Busy (its 503, the pause its turn holds for): once more, in its turn.
+            Err(e) if e.is::<super::turn::Paused>() && std::mem::take(&mut again) => {
                 tokio::time::sleep(BUSY).await;
                 continue;
             }
+            r => r?,
+        };
+        match r.status() {
             reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::BAD_REQUEST => return Ok(None),
             _ => return Ok(Some(r.error_for_status()?.json().await?)),
         }

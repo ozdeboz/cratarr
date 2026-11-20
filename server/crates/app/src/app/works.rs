@@ -338,12 +338,15 @@ enum Answer {
 async fn ask(http: &reqwest::Client, url: &str) -> Result<Answer> {
     let mut again = true;
     loop {
-        let r = http.get(url).asked().await?;
-        match r.status() {
-            reqwest::StatusCode::SERVICE_UNAVAILABLE if std::mem::take(&mut again) => {
+        let r = match http.get(url).asked().await {
+            // Busy (its 503, the pause its turn holds for): once more, in its turn.
+            Err(e) if e.is::<super::turn::Paused>() && std::mem::take(&mut again) => {
                 tokio::time::sleep(BUSY).await;
                 continue;
             }
+            r => r?,
+        };
+        match r.status() {
             reqwest::StatusCode::NOT_FOUND => return Ok(Answer::None),
             reqwest::StatusCode::BAD_REQUEST => return Ok(Answer::Refused),
             _ => return Ok(Answer::Found(r.error_for_status()?.json().await?)),

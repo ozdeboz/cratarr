@@ -96,6 +96,25 @@ impl std::fmt::Display for Gone {
 
 impl std::error::Error for Gone {}
 
+/// What a user of Soulseek did, as slskd tells it (TN.1): offline, would not send, or failed while slskd itself was well. Held
+/// against that user. Reads as what slskd said.
+#[derive(Debug)]
+pub struct Declined(String);
+
+impl std::fmt::Display for Declined {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Declined {}
+
+/// Whether slskd could not be asked now (TN): away, or busy (`Busy`: a read's 429, its lane's operations asking again). Nothing a
+/// user did, so nothing to hold against one.
+pub fn not_now(e: &anyhow::Error) -> bool {
+    e.is::<Away>() || e.is::<Busy>()
+}
+
 /// Whether an answer is slskd's own trouble, whoever was asked for: its key refused, or a proxy saying it is not up. A 429 is
 /// slskd busy (`Busy`), asked again.
 fn its_own(status: reqwest::StatusCode) -> bool {
@@ -399,7 +418,7 @@ impl Slskd {
     /// What slskd saying no comes to. A 500 is how it says both "that user failed" and "I am not on Soulseek": there it is
     /// asked which, as a slskd just back and not signed in yet would otherwise fail every user in a moment.
     async fn turned_down(&self, status: reqwest::StatusCode, said: String) -> anyhow::Error {
-        if its_own(status) || self.off_soulseek().await { Away(said).into() } else { anyhow::anyhow!(said) }
+        if its_own(status) || self.off_soulseek().await { Away(said).into() } else { Declined(said).into() }
     }
 
     /// Whether slskd says it is not signed in to Soulseek, or does not answer. Its word as far as it goes: any other shape
@@ -407,7 +426,7 @@ impl Slskd {
     async fn off_soulseek(&self) -> bool {
         match self.get::<serde_json::Value>("application").await {
             Ok(v) => v["server"]["isLoggedIn"] == false,
-            Err(e) => e.is::<Away>(),
+            Err(e) => not_now(&e),
         }
     }
 
@@ -441,7 +460,7 @@ impl Slskd {
         };
         let status = r.status();
         if status.as_u16() == 404 {
-            bail!("{user} is offline");
+            return Err(Declined(format!("{user} is offline")).into());
         }
         if !status.is_success() {
             let said = format!("slskd would not fetch it: {status} {}", r.text().await.unwrap_or_default());
@@ -449,7 +468,7 @@ impl Slskd {
         }
         let e: Enqueued = r.json().await.context("slskd's answer could not be read")?;
         if let Some(f) = e.failures.first() {
-            bail!("slskd would not fetch it: {}", f.message);
+            return Err(Declined(format!("slskd would not fetch it: {}", f.message)).into());
         }
         if e.batch.is_none() {
             bail!("slskd did not take the fetch");
@@ -466,7 +485,7 @@ impl Slskd {
         let r = self.operate(|| self.http.post(self.at("transfers/downloads/batches")).json(&body), still).await?;
         let status = r.status();
         if status.as_u16() == 404 {
-            bail!("{user} is offline");
+            return Err(Declined(format!("{user} is offline")).into());
         }
         if !status.is_success() {
             let said = format!("slskd would not fetch them: {status} {}", r.text().await.unwrap_or_default());
@@ -474,7 +493,7 @@ impl Slskd {
         }
         let e: Enqueued = r.json().await.map_err(|e| Lost(format!("slskd's answer could not be read: {:#}", anyhow::Error::new(e))))?;
         if let Some(f) = e.failures.first() {
-            bail!("{user} would not send them: {}", f.message);
+            return Err(Declined(format!("{user} would not send them: {}", f.message)).into());
         }
         if e.batch.is_none() {
             bail!("slskd did not take the fetch");

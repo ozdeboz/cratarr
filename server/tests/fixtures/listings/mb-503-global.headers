@@ -1,0 +1,14 @@
+HTTP/1.1 503 Service Temporarily Unavailable
+Server: openresty
+Date: Tue, 17 Nov 2026 20:41:17 GMT
+Content-Type: application/json
+Transfer-Encoding: chunked
+Connection: keep-alive
+Keep-Alive: timeout=15
+Retry-After: 1
+X-RateLimit-Zone: global
+X-RateLimit-Who: global
+X-MB-Rate-Limiter: lua
+Access-Control-Allow-Origin: *
+X-MB-Gateway: rex
+

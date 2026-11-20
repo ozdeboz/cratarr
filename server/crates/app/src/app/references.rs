@@ -684,17 +684,8 @@ pub(crate) fn page_read_of(cat: &Arc<Catalogue>, record: i64) -> Option<bool> {
     page_reads().get(&(Arc::as_ptr(cat) as usize, record)).map(|(_, s)| matches!(s, PageReadState::Reading(_)))
 }
 
-/// A source switched off: no answer about any record, and none against it (R23).
-#[derive(Debug)]
-pub struct SwitchedOff(pub &'static str);
-
-impl std::fmt::Display for SwitchedOff {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} is switched off", self.0)
-    }
-}
-
-impl std::error::Error for SwitchedOff {}
+/// A source switched off: moved down for the turn's class (`references_turn`).
+pub use cratarr_gate::app::references_turn::SwitchedOff;
 
 /// A reference's list, read from its source (C51a, `tracklist`'s reader): a MusicBrainz release's own; a release group's, one
 /// of its releases (the first official one with tracks, else the first with tracks, as 0.16's Soulseek chose); a Discogs
@@ -833,11 +824,11 @@ where
 /// How many failed questions a record's list is asked again after, before the record is let go of to Health's item.
 const LIST_TRIES: i64 = 3;
 
-/// Whether an error is MusicBrainz out of reach, not an answer about one release: no answer at all, busy or down (a 5xx), any
-/// other refusal than "no such release" (its rate limit's 429, a 401 or 403 from it or a proxy: R15, R23), or switched off.
+/// Whether an error is MusicBrainz out of reach, not an answer about one release, as the failure class has it (TN.13): away (no
+/// answer at all, down, a 401 or 403 from it or a proxy, any other refusal than "no such release": R15, R23) or paused (its 429 or
+/// 503, its turn holding past a question's patience), or switched off.
 fn out_of_reach(e: &anyhow::Error) -> bool {
-    let busy = |s: reqwest::StatusCode| s.is_server_error() || (s.is_client_error() && !no_such_status(s));
-    e.downcast_ref::<reqwest::Error>().is_some_and(|r| r.is_connect() || r.is_timeout() || r.status().is_some_and(busy)) || !super::switches::is_on(super::switches::MUSICBRAINZ)
+    matches!(super::turn::class(e), super::turn::Failure::Away(_) | super::turn::Failure::Paused { .. }) || !super::switches::is_on(super::switches::MUSICBRAINZ)
 }
 
 /// Whether MusicBrainz answered that it will not give this release: 404, no such release, or 400, an id it refuses (R23, N13).
@@ -1526,6 +1517,50 @@ mod tests {
             assert_eq!(left, waits, "{status}: both still wait");
         }
         assert!(cat.unreferenced(true).unwrap().is_empty(), "none on Health's item");
+    }
+
+    /// TN.13 (OQ-T1 (a)): MusicBrainz held a minute (its 503 saying `Retry-After: 60`), 43 records waiting for their lists, none tried
+    /// yet (production's shape). The lists pass, a background asker, is refused at its first question at once, and stops there: every
+    /// `tries` still 0, no record let go to Health's item, nothing counted (the class: a pause is out of reach). After the deadline it
+    /// goes on and reads them all.
+    #[tokio::test(start_paused = true)]
+    async fn a_paused_musicbrainz_counts_no_try_against_a_list() {
+        use super::super::turn::{Failure, MUSICBRAINZ, Turn, class};
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let mut waits: Vec<i64> = (0..43).map(|n| waiting(&cat, &format!("Record {n}"), &format!("r{n}"))).collect();
+        waits.sort();
+        let tries = |cat: &Catalogue| -> (i64, i64) { cat.db_for_tests().query_row("SELECT COUNT(*), COALESCE(SUM(tries), 0) FROM lists_to_read", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap() };
+        let turn = Arc::new(Turn::new(MUSICBRAINZ));
+        turn.heard(true, Some(std::time::Duration::from_secs(60)));
+        let until = turn.paused_until().unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let refused = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read = |_release: String| {
+            let (turn, asked, refused) = (turn.clone(), asked.clone(), refused.clone());
+            async move {
+                // As `lists_pass` asks: behind a page's, within the background asker's patience.
+                if let Err(p) = turn.take_within(true, super::super::musicbrainz::PATIENCE).await {
+                    refused.lock().unwrap().push(tokio::time::Instant::now());
+                    return Err(anyhow::Error::from(p));
+                }
+                asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Some(list(&[("Signal", Some(180_000))])))
+            }
+        };
+        let before = tokio::time::Instant::now();
+        assert_eq!(read_lists(&cat, files_none(), read, 100).await.unwrap(), 0, "stopped at its first question");
+        assert_eq!(tokio::time::Instant::now() - before, std::time::Duration::ZERO, "told at once, never held");
+        assert_eq!(refused.lock().unwrap().len(), 1, "one question, refused");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0, "nothing asked while held");
+        assert_eq!(tries(&cat), (43, 0), "every record still waits, every try still 0");
+        assert!(cat.unreferenced(true).unwrap().is_empty(), "none let go to Health's item for a pause");
+        let e = anyhow::Error::from(turn.paused());
+        assert!(matches!(class(&e), Failure::Paused { until: u } if u == until) && out_of_reach(&e), "a pause is out of reach");
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        assert_eq!(read_lists(&cat, files_none(), read, 100).await.unwrap(), 43, "after the deadline it goes on");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 43);
+        assert_eq!(tries(&cat), (0, 0));
     }
 
     /// R23 (N13): a 401 or 403 from MusicBrainz, or a proxy in front of it, is out of reach, not "no such release": no record waiting

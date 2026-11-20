@@ -1174,7 +1174,12 @@ fn library() -> Result<PathBuf> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let dir = served.data_dir.clone().context("Cratarr's data folder is needed")?;
     let saved = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())?.context("Nothing is set up yet")?;
-    library_in(&saved).context("No Incoming library takes Soulseek's records: choose one in its settings")
+    taking(&saved)
+}
+
+/// `library_in`, or why none: no Incoming library takes Soulseek's records, which only an administrator can change (TN.1: Stuck).
+pub(crate) fn taking(saved: &crate::settings::Saved) -> Result<PathBuf> {
+    library_in(saved).ok_or_else(|| super::turn::Stuck("No Incoming library takes Soulseek's records: choose one in its settings".into()).into())
 }
 
 /// `library` in these settings.
@@ -1732,7 +1737,7 @@ where
                 heard.extend(a);
             }
             // slskd away says nothing of the record: no miss, or a week's wait would meet it when slskd came back.
-            Err(e) if e.is::<Away>() || e.is::<crate::slskd::Busy>() => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
+            Err(e) if crate::slskd::not_now(&e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
             Err(e) => why = Some(format!("{e:#}")),
         }
     }

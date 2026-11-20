@@ -66,6 +66,8 @@ pub fn label(name: &str) -> &'static str {
         "wikimedia" => "Wikimedia",
         "spotify" => "Spotify",
         "acoustid" => "AcoustID",
+        "slskd" => "slskd",
+        "github" => "GitHub",
         _ => "A connection",
     }
 }
@@ -333,62 +335,6 @@ pub async fn read_capped(mut resp: reqwest::Response, cap: usize) -> anyhow::Res
     Ok(out)
 }
 
-/// The instant a hold ends, before which no question goes (Y8): set at once, never behind the questions waiting for their turn's
-/// lock, and honoured by each of those in its turn, so a hold holds the questions already waiting too, not only the next.
-#[derive(Default)]
-pub struct NotBefore(std::sync::Mutex<Option<tokio::time::Instant>>);
-
-impl NotBefore {
-    pub const fn new() -> Self {
-        Self(std::sync::Mutex::new(None))
-    }
-
-    /// No question before `at`; a later instant set already stays.
-    pub fn hold(&self, at: tokio::time::Instant) {
-        let mut held = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        if held.is_none_or(|h| h < at) {
-            *held = Some(at);
-        }
-    }
-
-    /// The instant, where one was set.
-    pub fn get(&self) -> Option<tokio::time::Instant> {
-        *self.0.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
-    /// Waits out a turn's own instant (`next`) and the hold's, looked at again on waking: a hold set meanwhile holds on.
-    pub async fn wait(&self, next: Option<tokio::time::Instant>) {
-        while let Some(at) = next.max(self.get()).filter(|at| *at > tokio::time::Instant::now()) {
-            tokio::time::sleep_until(at).await;
-        }
-    }
-}
-
-/// One turn for a service's questions, whoever asks (O6: Last.fm, AcoustID): `apart` between two, none while it is held.
-pub struct Pacer {
-    apart: std::time::Duration,
-    next: tokio::sync::Mutex<Option<tokio::time::Instant>>,
-    held: NotBefore,
-}
-
-impl Pacer {
-    pub const fn new(apart: std::time::Duration) -> Self {
-        Self { apart, next: tokio::sync::Mutex::const_new(None), held: NotBefore::new() }
-    }
-
-    /// Waits for a question's turn, and takes it: a hold set while it waited in line holds it too (Y8).
-    pub async fn turn(&self) {
-        let mut next = self.next.lock().await;
-        self.held.wait(*next).await;
-        *next = Some(tokio::time::Instant::now() + self.apart);
-    }
-
-    /// No question for `wait`, whoever asks, those already waiting for their turn too (Y8): set at once, not behind them.
-    pub async fn hold(&self, wait: std::time::Duration) {
-        self.held.hold(tokio::time::Instant::now() + wait);
-    }
-}
-
 /// A request sent, its answer noted for its connection (by its host).
 pub trait Sent {
     fn sent(self) -> impl std::future::Future<Output = reqwest::Result<reqwest::Response>> + Send;
@@ -581,49 +527,6 @@ mod tests {
         assert!(read_image(ask("/page").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("not an image"));
         assert!(read_image(ask("/big").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("cut there"));
         assert_eq!(read_image(ask("/small").await.unwrap(), 100_000).await.unwrap().len(), 1_000);
-    }
-
-    /// O6: one pacer a service: every asker's questions `apart` apart, and none while it is held, whoever asks.
-    #[tokio::test(start_paused = true)]
-    async fn a_pacer_spaces_every_askers_questions_and_holds_them_all() {
-        let gap = std::time::Duration::from_millis(250);
-        let p = std::sync::Arc::new(Pacer::new(gap));
-        let askers: Vec<_> = (0..5)
-            .map(|_| {
-                let p = p.clone();
-                crate::run::spawn(async move {
-                    p.turn().await;
-                    tokio::time::Instant::now()
-                })
-            })
-            .collect();
-        let mut at = Vec::new();
-        for a in askers {
-            at.push(a.await.unwrap());
-        }
-        at.sort();
-        assert!(at.windows(2).all(|w| w[1] - w[0] >= gap), "{at:?}");
-        p.hold(std::time::Duration::from_secs(60)).await;
-        let before = tokio::time::Instant::now();
-        p.turn().await;
-        assert!(tokio::time::Instant::now() - before >= std::time::Duration::from_secs(59), "held for everyone");
-    }
-
-    /// Y8: a pacer's hold holds the askers already waiting for their turn too, not only the next to come.
-    #[tokio::test(start_paused = true)]
-    async fn a_pacer_hold_holds_the_askers_already_waiting() {
-        async fn went(p: &Pacer, start: tokio::time::Instant) -> std::time::Duration {
-            p.turn().await;
-            tokio::time::Instant::now() - start
-        }
-        let (p, start) = (Pacer::new(std::time::Duration::from_millis(250)), tokio::time::Instant::now());
-        p.turn().await;
-        let held = async {
-            tokio::task::yield_now().await;
-            p.hold(std::time::Duration::from_secs(60)).await;
-        };
-        let (a, b, ()) = tokio::join!(went(&p, start), went(&p, start), held);
-        assert!(a.min(b) >= std::time::Duration::from_secs(60), "{a:?} {b:?}");
     }
 
     #[tokio::test]

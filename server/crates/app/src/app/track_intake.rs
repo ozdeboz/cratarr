@@ -359,7 +359,7 @@ async fn fetch(id: &str) {
     with_item(id, |i| i.state = State::Fetching);
     let fid = match super::track_fetch::fetch(&sid, candidate).await {
         Ok(f) => f,
-        Err(e) if e.is::<crate::slskd::Away>() => return with_item(id, |i| on_no_verdict(i, format!("{e:#}"))),
+        Err(e) if crate::slskd::not_now(&e) => return with_item(id, |i| on_no_verdict(i, format!("{e:#}"))),
         // The user refused it or is offline: the next candidate.
         Err(e) => {
             return with_item(id, |i| {

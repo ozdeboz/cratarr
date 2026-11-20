@@ -15,6 +15,7 @@ use rusty_chromaprint::{Configuration, FingerprintCompressor, Fingerprinter};
 use serde::Deserialize;
 
 use crate::analysis::flaws::{Findings, Flaws, Sold};
+use crate::app::turn::Turn;
 
 /// How much of the sound the fingerprint hears (fpcalc's own length).
 const HEARD_SECS: u64 = 120;
@@ -103,32 +104,114 @@ struct Answer {
     error: Option<Problem>,
 }
 
-#[derive(Deserialize)]
-struct Problem {
+/// AcoustID's own error answer (`status: error`): its code and its words (TN.1). Reads as "AcoustID: " and its words.
+#[derive(Debug, Deserialize)]
+pub struct Problem {
+    #[serde(default)]
+    pub code: u32,
+    #[serde(default)]
     message: String,
 }
 
-/// AcoustID's one pacer (O6): its limit is three questions a second, whoever asks (the gate, every account's hearing).
-static TURN: crate::app::reach::Pacer = crate::app::reach::Pacer::new(Duration::from_millis(350));
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AcoustID: {}", self.message)
+    }
+}
 
-/// What AcoustID knows of this fingerprint: asked in its turn, with Cratarr's User-Agent, its answer noted for Health (O6).
+impl std::error::Error for Problem {}
+
+/// AcoustID's codes the failure class reads (its web service's list): a fingerprint it refused, a duration it refused, its rate limit.
+pub const BAD_PRINT: u32 = 3;
+pub const BAD_DURATION: u32 = 8;
+pub const LIMIT: u32 = 14;
+
+/// AcoustID's one turn (O6, TN): its limit is three questions a second, whoever asks (the gate, every account's hearing); its limit
+/// answer holds them all.
+static TURN: Turn = Turn::new(crate::app::turn::ACOUSTID);
+/// Where AcoustID's lookup is asked.
+const LOOKUP: &str = "https://api.acoustid.org/v2/lookup";
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    // The test's fake AcoustID on this thread (`FakeAcoustid`): its lookup's address, and a turn of its own, so its limit holds no
+    // other test.
+    static FAKE: std::cell::RefCell<Option<(String, std::sync::Arc<Turn>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: this thread's lookups go to a fake AcoustID at `at` (its lookup's address, plain http) in a turn of its own, until this
+/// is dropped (as `discover::FakeMusicBrainz` is MusicBrainz's).
+#[cfg(any(test, feature = "test-support"))]
+pub struct FakeAcoustid;
+
+#[cfg(any(test, feature = "test-support"))]
+impl FakeAcoustid {
+    pub fn at(at: String) -> Self {
+        FAKE.with(|f| *f.borrow_mut() = Some((at, std::sync::Arc::new(Turn::new(crate::app::turn::ACOUSTID)))));
+        FakeAcoustid
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for FakeAcoustid {
+    fn drop(&mut self) {
+        FAKE.with(|f| *f.borrow_mut() = None);
+    }
+}
+
+/// What AcoustID knows of this fingerprint: asked in its turn, with Cratarr's User-Agent, its answer noted for Health (O6). Its limit
+/// answer is the pause it asks for (TN.1), its error answer a `Problem`.
 pub async fn lookup(key: &str, print: &Print) -> Result<Vec<Found>> {
-    use crate::app::reach::Sent as _;
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some((at, turn)) = FAKE.with(|f| f.borrow().clone()) {
+        let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).user_agent(crate::app::reach::USER_AGENT).build()?;
+        return lookup_in(&turn, |form| posted(http, at, form), key, print).await;
+    }
     let http = crate::app::reach::client(crate::app::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?;
-    TURN.turn().await;
+    lookup_in(&TURN, |form| posted(http, LOOKUP.to_string(), form), key, print).await
+}
+
+/// AcoustID's answer as it came: its status, its headers and its body.
+pub struct Heard {
+    pub status: reqwest::StatusCode,
+    pub headers: reqwest::header::HeaderMap,
+    pub body: String,
+}
+
+/// A lookup's form posted to `at` through `http`.
+pub async fn posted(http: reqwest::Client, at: String, form: Vec<(&'static str, String)>) -> Result<Heard> {
+    use crate::app::reach::Sent as _;
+    let r = http.post(at).form(&form).sent().await.context("AcoustID could not be reached")?;
+    let (status, headers) = (r.status(), r.headers().clone());
+    let body = r.text().await.context("AcoustID's answer could not be read")?;
+    Ok(Heard { status, headers, body })
+}
+
+/// `lookup`, in `turn`, its form sent by `send` (the tests' stand in for AcoustID). Its limit (a 429, or its code 14 whatever the
+/// status) holds the turn for its Retry-After or its default (TN.2), and is the pause; any other answer ends a run.
+pub async fn lookup_in<S, F>(turn: &Turn, send: S, key: &str, print: &Print) -> Result<Vec<Found>>
+where
+    S: FnOnce(Vec<(&'static str, String)>) -> F,
+    F: std::future::Future<Output = Result<Heard>>,
+{
+    turn.turn().await;
     let duration = (print.duration_secs.round() as u64).to_string();
-    let form = [("client", key), ("meta", "recordingids"), ("duration", duration.as_str()), ("fingerprint", print.fingerprint.as_str())];
-    let answer: Answer = http
-        .post("https://api.acoustid.org/v2/lookup")
-        .form(&form)
-        .sent()
-        .await
-        .context("AcoustID could not be reached")?
-        .json()
-        .await
-        .context("AcoustID's answer could not be read")?;
+    let form = vec![("client", key.to_string()), ("meta", "recordingids".to_string()), ("duration", duration), ("fingerprint", print.fingerprint.clone())];
+    let heard = send(form).await?;
+    let answer: Option<Answer> = serde_json::from_str(&heard.body).ok();
+    let code = answer.as_ref().and_then(|a| a.error.as_ref()).map(|p| p.code);
+    if heard.status == reqwest::StatusCode::TOO_MANY_REQUESTS || code == Some(LIMIT) {
+        return Err(turn.limited(crate::app::turn::retry_after(&heard.headers, crate::app::moment::now_secs())).into());
+    }
+    turn.heard(false, None);
+    let Some(answer) = answer else {
+        if !heard.status.is_success() {
+            return Err(crate::app::turn::Refused::new("acoustid", heard.status, format!("AcoustID answered {}", heard.status)).into());
+        }
+        bail!("AcoustID's answer could not be read");
+    };
     if answer.status != "ok" {
-        bail!("AcoustID: {}", answer.error.map_or(answer.status, |p| p.message));
+        return Err(answer.error.unwrap_or(Problem { code: 0, message: answer.status }).into());
     }
     Ok(answer.results)
 }
@@ -158,6 +241,66 @@ mod tests {
         assert_eq!(names(&[found(0.99, &["other"])], rec), None, "another recording");
         assert_eq!(names(&[found(0.91, &[rec]), found(0.95, &[&rec.to_uppercase()])], rec), Some(0.95), "the surest");
         assert_eq!(names(&[], rec), None);
+    }
+
+    fn a_print() -> Print {
+        Print { fingerprint: "AQAAT0mUaEkSRZEGAA".into(), duration_secs: 241.0, damaged: 0, flaws: Default::default() }
+    }
+
+    /// TN.1: AcoustID over its limit (its code 14, whatever the HTTP status; the body a stand-in until a real one is seen) is a pause
+    /// until its Retry-After, else its default, and holds its turn: never AcoustID away, nor the file's. Its key goes in the form
+    /// alone, and only the lookup is asked.
+    #[tokio::test]
+    async fn acoustid_over_its_limit_is_a_pause() {
+        use crate::app::turn::{Failure, Pinned, class, fakes};
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let pinned = Pinned::now();
+        let t0 = pinned.0;
+        let limit = r#"{"status":"error","error":{"code":14,"message":"rate limit exceeded"}}"#;
+        for (status, said, until) in [(429, None, t0 + 60), (200, None, t0 + 60), (429, Some("120"), t0 + 120), (400, Some("30"), t0 + 30)] {
+            let violations = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let wrong = violations.clone();
+            let code = axum::http::StatusCode::from_u16(status).unwrap();
+            let answer = move |uri: axum::http::Uri, body: String| {
+                let form: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
+                let field = |k: &str| form.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+                if uri.path() != "/v2/lookup" || uri.query().is_some() || field("client").as_deref() != Some("key") || field("meta").as_deref() != Some("recordingids") {
+                    wrong.lock().unwrap().push(format!("asked {uri} with {body}"));
+                }
+                let mut r = axum::response::IntoResponse::into_response((code, limit));
+                if let Some(said) = said {
+                    r.headers_mut().insert(axum::http::header::RETRY_AFTER, said.parse().unwrap());
+                }
+                std::future::ready(r)
+            };
+            let _fake = FakeAcoustid::at(format!("{}/v2/lookup", fakes::serve(axum::Router::new().fallback(answer)).await));
+            let e = lookup("key", &a_print()).await.unwrap_err();
+            assert_eq!(class(&e), Failure::Paused { until }, "{status} {said:?}: {e:#}");
+            assert!(!e.is::<Problem>(), "never its own error answer");
+            let held = FAKE.with(|f| f.borrow().as_ref().map(|(_, turn)| turn.paused_until()));
+            assert_eq!(held, Some(Some(until)), "its turn held until then");
+            assert!(violations.lock().unwrap().is_empty(), "{:?}", violations.lock().unwrap());
+        }
+    }
+
+    /// O6 (a pin): AcoustID's turn spaces every asker's lookups a third of a second apart, the gate's and a card's alike.
+    #[tokio::test(start_paused = true)]
+    async fn acoustid_is_asked_a_third_of_a_second_apart() {
+        let turn = Turn::new(crate::app::turn::ACOUSTID);
+        let at = std::sync::Mutex::new(Vec::new());
+        let print = a_print();
+        let send = |_: Vec<(&'static str, String)>| {
+            at.lock().unwrap().push(tokio::time::Instant::now());
+            let ok = Heard { status: reqwest::StatusCode::OK, headers: Default::default(), body: r#"{"status":"ok","results":[]}"#.into() };
+            std::future::ready(Ok(ok))
+        };
+        let ask = || lookup_in(&turn, send, "key", &print);
+        let (a, b, c, d, e) = tokio::join!(ask(), ask(), ask(), ask(), ask());
+        assert!([a, b, c, d, e].iter().all(Result::is_ok));
+        let mut at = at.into_inner().unwrap();
+        at.sort();
+        assert_eq!(at.len(), 5);
+        assert!(at.windows(2).all(|w| w[1] - w[0] >= Duration::from_millis(350)), "{at:?}");
     }
 
     #[test]

@@ -434,7 +434,7 @@ async fn fetch_through(slskd: &Slskd, folder: PathBuf, staging: PathBuf, wanted:
         let staged = match got {
             Ok(p) => p,
             Err(e) => {
-                set(&|f| (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), e.is::<crate::slskd::Away>()));
+                set(&|f| (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), crate::slskd::not_now(&e)));
                 return;
             }
         };
@@ -666,19 +666,9 @@ async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid:
     crate::acoustid::lookup(&key, &print).await
 }
 
-/// The gate stopped short of a verdict: AcoustID could not be asked (away, over its limit, its key gone or never set).
-/// That says nothing of the file, so it is no refusal: what fetched the file on its own must not treat it as one
-/// (`soulseek::check`, `track_intake::fetch`). Reads as the failure it carries.
-#[derive(Debug)]
-pub struct NotAsked(pub(super) String);
-
-impl std::fmt::Display for NotAsked {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for NotAsked {}
+/// The gate stopped short of a verdict, and what it found wrong with a file itself: moved down for the turn's class
+/// (`track_fetch_turn`).
+pub use cratarr_gate::app::track_fetch_turn::{NotAsked, Unfit};
 
 /// [`gate`], asking `lookup` what AcoustID knows of the file (the tests' stands in for AcoustID).
 async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
@@ -714,16 +704,21 @@ where
     if !found.iter().any(|f| !f.recordings.is_empty()) {
         return Ok(1.0);
     }
-    crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
+    known_as(&found, &track.recording)
+}
+
+/// The score at which AcoustID knows a file as `recording`; another recording refuses it.
+pub(crate) fn known_as(found: &[crate::acoustid::Found], recording: &str) -> Result<f32> {
+    crate::acoustid::names(found, recording).ok_or_else(|| Unfit("AcoustID does not know this file as that recording".into()).into())
 }
 
 /// Why single-track fetch's gate refuses a file before AcoustID is asked, and so the bulk queue's (OQ-SK5: both add into an album
 /// in Music with no review, the bulk queue by itself): a fault (`refused_for_soulseek`), or a note its sound was heard to have
 /// (clicks, a pop at the very end, clipping).
-fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result<()> {
+pub(crate) fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result<()> {
     refused_for_soulseek(print, length_ms)?;
     if let Some(why) = print.flaws.notes() {
-        bail!("{why}");
+        return Err(Unfit(why).into());
     }
     Ok(())
 }
@@ -733,16 +728,16 @@ fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result
 /// its arrival is reviewed in Incoming, whose card shows them.
 fn refused_for_soulseek(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result<()> {
     if print.damaged > 0 {
-        bail!("{} frames would not decode", print.damaged);
+        return Err(Unfit(format!("{} frames would not decode", print.damaged)).into());
     }
     if let Some(want) = length_ms {
         let off = (print.duration_secs * 1000.0).round() as i64 - want;
         if off.abs() > crate::slskd::LENGTH_SLACK_MS {
-            bail!("It is {:.0} s {} than the recording", off.abs() as f64 / 1000.0, if off > 0 { "longer" } else { "shorter" });
+            return Err(Unfit(format!("It is {:.0} s {} than the recording", off.abs() as f64 / 1000.0, if off > 0 { "longer" } else { "shorter" })).into());
         }
     }
     if let Some(why) = print.flaws.fault() {
-        bail!("{why}");
+        return Err(Unfit(why).into());
     }
     Ok(())
 }

@@ -29,9 +29,9 @@ use super::reach::Sent as _;
 const API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Last.fm's largest page of recent tracks (and of loved ones).
 const PAGE: usize = 200;
-/// Last.fm's one pacer (O6): every question, Discover's (`discover::fm`), the import's and scrobbling's alike, at most four a second;
-/// Last.fm asks for no more than about five.
-pub static FM: super::reach::Pacer = super::reach::Pacer::new(Duration::from_millis(250));
+/// Last.fm's one turn (O6, TN): every question, Discover's (`discover::fm`), the import's and scrobbling's alike, at most four a
+/// second; Last.fm asks for no more than about five.
+pub static FM: super::turn::Turn = super::turn::Turn::new(super::turn::LASTFM);
 /// Last.fm's error for its rate limit: no question for a minute after it (O6).
 const RATE_LIMITED: i64 = 29;
 
@@ -42,7 +42,7 @@ pub fn said_limit(body: &serde_json::Value) -> bool {
 
 /// Last.fm said its rate limit: no question for a minute, whoever asks (O6).
 pub async fn limited() {
-    FM.hold(Duration::from_secs(60)).await;
+    FM.limited(None);
     tracing::warn!(target: "lastfm", "Last.fm said its rate limit: no question for a minute");
 }
 /// Of the loved tracks with no album from the scrobbles and not in the library, at most this many are asked of

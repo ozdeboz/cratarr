@@ -107,6 +107,9 @@ pub mod device_index;
 pub use cratarr_gate::app::musicbrainz;
 pub use cratarr_gate::app::switches;
 pub use cratarr_gate::app::reach;
+pub use cratarr_gate::app::turn;
+#[cfg(test)]
+mod turn_tests;
 pub mod tracks;
 pub mod visuals;
 

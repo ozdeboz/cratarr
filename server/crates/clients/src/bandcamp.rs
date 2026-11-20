@@ -27,11 +27,11 @@ const PAGE_MOST: usize = 8 << 20;
 const SEARCH_MOST: usize = 1 << 20;
 /// At most one page of Bandcamp's read in this long, server-wide (Discover's look, previews, a track's details): the
 /// owner asked, 2026-10-25, whether Cratarr is polite to it. A stream played is not paced: it is a listener's.
-const PACE: Duration = Duration::from_secs(1);
+const PACE: Duration = crate::app::turn::BANDCAMP.apart;
 /// How long Bandcamp is left alone after it says "too many" (429) or "unavailable" (503) without saying how long.
-const BACK_OFF: Duration = Duration::from_secs(60);
+const BACK_OFF: Duration = crate::app::turn::BANDCAMP.first;
 /// How long Bandcamp is left alone after its bot check (O4): a day, nothing done to get past it.
-pub const CHECK_HOLD_SECS: i64 = 86_400;
+pub const CHECK_HOLD_SECS: i64 = crate::app::turn::BANDCAMP.longest.as_secs() as i64;
 /// Until when it is left alone so (epoch s; 0: it is not).
 pub static HELD_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 /// Where that is kept across a restart (Y8): the user data's server choices, epoch seconds.
@@ -240,11 +240,7 @@ impl Bandcamp {
         let resp = resp.context("cannot reach Bandcamp")?;
         let status = resp.status();
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            let wait = resp
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok())
-                .map_or(BACK_OFF, |secs| Duration::from_secs(secs.min(15 * 60)));
+            let wait = back_off(resp.headers(), crate::app::moment::now_secs());
             *next = Instant::now() + wait;
             tracing::warn!("Bandcamp answered {status}: left alone for {}s", wait.as_secs());
         }
@@ -253,7 +249,7 @@ impl Bandcamp {
 
     async fn text(&self, url: &str) -> Result<String> {
         let resp = self.send(self.http.get(url)).await?;
-        let status = resp.status();
+        let (status, headers) = (resp.status(), resp.headers().clone());
         let body = String::from_utf8_lossy(&crate::app::reach::read_capped(resp, PAGE_MOST).await?).into_owned();
         // Its bot check in place of the page, whatever the status: not read, nothing is done to get past it, and Bandcamp is left
         // alone for a day (O4).
@@ -262,7 +258,7 @@ impl Bandcamp {
             return Err(NotRead.into());
         }
         if !status.is_success() {
-            bail!("Bandcamp answered {status}");
+            return Err(refusal(status, &headers, crate::app::moment::now_secs()));
         }
         Ok(body)
     }
@@ -376,7 +372,7 @@ impl Bandcamp {
     async fn answered(&self, req: reqwest::RequestBuilder) -> Result<String> {
         let resp = self.send(req).await?;
         if !resp.status().is_success() {
-            bail!("Bandcamp answered {}", resp.status());
+            return Err(refusal(resp.status(), resp.headers(), crate::app::moment::now_secs()));
         }
         let body = String::from_utf8_lossy(&crate::app::reach::read_capped(resp, SEARCH_MOST).await?).into_owned();
         if is_check(&body) || serde_json::from_str::<serde_json::Value>(&body).is_err() {
@@ -623,6 +619,21 @@ pub fn named_by_page(read: Option<&Album>, artist: &str, title: &str) -> Named {
         }
         None => label_release(artist, title, None),
     }
+}
+
+/// How long Bandcamp is left alone after its 429 or 503: its Retry-After where it says (a quarter hour at most), else `BACK_OFF`.
+fn back_off(headers: &reqwest::header::HeaderMap, now: i64) -> Duration {
+    crate::app::turn::retry_after(headers, now).unwrap_or(BACK_OFF)
+}
+
+/// What Bandcamp's answer of `status` comes to (TN.1): its 429 and 503 the pause they ask for, until its back-off is out; any other
+/// refusal by its status, in its words ("Bandcamp answered 404 Not Found"). Pure.
+pub fn refusal(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap, now: i64) -> anyhow::Error {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        let until = now + back_off(headers, now).as_secs() as i64;
+        return crate::app::turn::Paused { source: crate::app::turn::BANDCAMP.name, until }.into();
+    }
+    crate::app::turn::Refused::new(crate::app::turn::BANDCAMP.name, status, format!("Bandcamp answered {status}")).into()
 }
 
 /// Bandcamp answered with its bot check (a "Client Challenge" page) in place of the page asked for: the page is not read, and
