@@ -959,7 +959,7 @@ mod undo_tests {
         // A Music folder of its own, with the playlist folder 0.15 kept its playlists in (decision 0014).
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let db = served.as_ref().map(|s| s.userdata.clone()).unwrap_or_else(|| Arc::new(crate::userdata::UserData::open(None).unwrap()));
-        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
+        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db, None).await.unwrap();
         let journal = Arc::new(Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
@@ -1123,7 +1123,7 @@ mod undo_tests {
         std::fs::create_dir_all(&d).unwrap();
         let dir = d.to_string_lossy().into_owned();
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
-        let lib = Library::new(Some(dir.clone()), Some(dir), Vec::new(), Default::default(), None, db).await.unwrap();
+        let lib = Library::new(Some(dir.clone()), Some(dir), Vec::new(), Default::default(), None, db, None).await.unwrap();
         let journal = Arc::new(Journal::open(None).unwrap());
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), crate::sync_state::SyncState::open(None).unwrap(), journal.clone()));
         let moved = crate::moved::Moved { ids: [("tr-5".to_string(), "tr-1".to_string())].into(), ..Default::default() };

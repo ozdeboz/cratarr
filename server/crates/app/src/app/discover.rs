@@ -3384,7 +3384,7 @@ mod missing_tests {
         let _one = TEST_STATE.lock().await;
         let d = std::env::temp_dir().join(format!("cratarr-f2-joined-{}", std::process::id()));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
-        let lib = crate::app::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap())).await.unwrap();
+        let lib = crate::app::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap()), None).await.unwrap();
         let cat = lib.catalogue();
         let at = Arc::as_ptr(&cat) as usize;
         readings().lock().unwrap().retain(|(c, ..), _| *c != at);

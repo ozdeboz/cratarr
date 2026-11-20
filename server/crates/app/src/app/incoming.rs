@@ -2209,7 +2209,7 @@ mod tests {
     pub(super) async fn on_disk(music: &std::path::Path, inc: &std::path::Path) -> IncomingService {
         std::fs::create_dir_all(music.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
-        let lib = Library::new(None, Some(music.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
+        let lib = Library::new(None, Some(music.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db, None).await.unwrap();
         lib.catalogue().set_folders(vec![music.to_path_buf(), inc.to_path_buf()]).unwrap();
         let shelves = Arc::new(Shelves::new(lib.clone(), None));
         IncomingService::new(lib, crate::ports::disk(), Arc::new(Journal::open(None).unwrap()), None, crate::trash::DEFAULT_KEEP_DAYS, None, shelves)

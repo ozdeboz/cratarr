@@ -61,6 +61,8 @@ mod every_copy;
 mod backup_list_tests;
 #[cfg(test)]
 mod file_words_tests;
+#[cfg(test)]
+mod library_tests;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
@@ -217,7 +219,7 @@ impl App {
             Some(s) => s.userdata.clone(),
             None => Arc::new(crate::userdata::UserData::open(None)?),
         };
-        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming, playlists_db).await?;
+        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming, playlists_db, Some(step_017::run)).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
         let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);
