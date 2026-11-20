@@ -130,3 +130,28 @@ test('page to page: no transition; nor a breadcrumb\'s page, a hand-over, reduce
   const page = app.slice(app.indexOf('<div class="page"'), app.indexOf('>', app.indexOf('<div class="page"')));
   assert.doesNotMatch(page, /transition:|in:|out:/);
 });
+
+test("the device's Back on a tablet, the panel two deep: Back, Back, then the page, then none (BACK's second part)", async () => {
+  const { backDoes, overThePage } = await import('../../src/lib/deviceBack.ts');
+  setBeside(true);
+  closePlaylist();
+  visit('#/library');
+  /** The visit's step (App's `navAt`): the Library is one on from Home. */
+  let navAt = 1;
+  const deviceBack = () => {
+    const does = backDoes({ sheet: false, over: overThePage(g.history && (g.history as { state: unknown }).state), navAt, searchAll: false, page: pageHere() });
+    if (does === 'history') history.back();
+    return does;
+  };
+  viewPlaylist('album:cratarr/al-1');
+  viewOver('artist:cratarr/ar-2');
+  assert.equal(deviceBack(), 'history');
+  assert.equal(panel.viewed, 'album:cratarr/al-1', 'Back: the panel one step back');
+  assert.equal(deviceBack(), 'history');
+  assert.equal(panel.viewed, null, 'Back: the panel closed');
+  assert.equal(pageHere(), 'library');
+  assert.equal(deviceBack(), 'history');
+  assert.equal(pageHere(), 'home', 'then the page');
+  navAt = 0;
+  assert.equal(deviceBack(), 'none', 'Home at the visit\'s first step: the app to the background');
+});

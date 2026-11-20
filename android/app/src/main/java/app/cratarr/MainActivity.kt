@@ -89,6 +89,9 @@ class MainActivity : AppCompatActivity() {
 
     /** The page that said hello: where the player's reports go. */
     private var page: JavaScriptReplyProxy? = null
+    /** The device's Back as asked of the page (BACK), and the wait for its answer. */
+    private val back = DeviceBack()
+    private val backWait = Handler(Looper.getMainLooper())
     /** The keyboard's height over the page, as last told to it (page pixels; 0 while it is down). */
     private var keyboardOver = 0
 
@@ -243,9 +246,12 @@ class MainActivity : AppCompatActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    val view = webView
-                    // Out of the page's history the app goes to the background, not away: the music plays on.
-                    if (view != null && view.canGoBack()) view.goBack() else moveTaskToBack(true)
+                    // The page's own Back, the one it shows (DeviceBack): asked, and told whether it had one. No page to ask (not
+                    // loaded, or not Cratarr's), or no answer in its time: the WebView's history, as before.
+                    val p = page ?: return backByHistory()
+                    val id = back.ask()
+                    p.postMessage(JSONObject().put("type", "back").put("id", id).toString())
+                    backWait.postDelayed({ if (back.timedOut(id)) backByHistory() }, DeviceBack.WAIT_MS)
                 }
             },
         )
@@ -384,6 +390,12 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    /** The device's Back by the WebView's own history; out of it the app goes to the background, not away: the music plays on. */
+    private fun backByHistory() {
+        val view = webView
+        if (view != null && view.canGoBack()) view.goBack() else moveTaskToBack(true)
+    }
+
     /** A new WebView on [url]: on first start, after the address changed, and after the page's renderer died. */
     private fun show(url: String) {
         dialog?.dismiss()
@@ -468,7 +480,8 @@ class MainActivity : AppCompatActivity() {
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
      *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file), `snippet` (a
-     *  track's snippet, 0.12), `index-look` and `index-again` (the library on this device). */
+     *  track's snippet, 0.12), `index-look` and `index-again` (the library on this device), `back` (its answer to the device's Back:
+     *  whether it had one; none, and the app goes to the background). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -477,6 +490,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         when (message.optString("type")) {
+            "back" -> if (back.answered(message.optInt("id"), message.optBoolean("done")) == DeviceBack.Answer.NONE) moveTaskToBack(true)
             "hello" -> {
                 page = reply
                 // A new page asks for the sound itself when its visuals open.
@@ -1043,6 +1057,47 @@ class MainActivity : AppCompatActivity() {
         const val EXTRA_SETTINGS = "cratarr.SETTINGS"
         /** The first page waits this long at most for the address that answers (the local one answers in 1.5 s). */
         const val FIRST_LOOK_MS = 2_000L
+    }
+}
+
+/**
+ * The device's Back (BACK; the owner, 2026-11-20: "sometimes using the phone back feature, it closes the app instead of following the
+ * back button that is clearly present"). The WebView's history alone said nothing of the page's own Back: a visit opened on a page
+ * (the Settings shortcut at a cold start) showed Back to Home, and the device's Back sent the app away. Now the page is asked
+ * (`{type: "back", id}`) and runs exactly the Back it shows (lib/deviceBack), answering whether it had one (`done`); none, and the app
+ * goes to the background. Each Back is asked by its number, so a late answer to an earlier one is never taken for this one's.
+ * Unanswered within [WAIT_MS], the WebView's history as before: the bridge answers in milliseconds, so a page silent for a second is
+ * not loaded or stuck, while a shorter wait could let a busy tablet's page and the history both go back for one press.
+ */
+internal class DeviceBack {
+    enum class Answer { WENT, NONE }
+
+    private var asked = 0
+    private var waiting = 0
+
+    /** A Back pressed: the number the page is asked by. */
+    fun ask(): Int {
+        asked += 1
+        waiting = asked
+        return asked
+    }
+
+    /** The page's answer: what it did (`done`: it went back), or null where no Back waits for it (a late answer, or another's). */
+    fun answered(id: Int, done: Boolean): Answer? {
+        if (id == 0 || id != waiting) return null
+        waiting = 0
+        return if (done) Answer.WENT else Answer.NONE
+    }
+
+    /** Its time over: true where the page has not answered, and the app goes by its history instead. */
+    fun timedOut(id: Int): Boolean {
+        if (id != waiting) return false
+        waiting = 0
+        return true
+    }
+
+    companion object {
+        const val WAIT_MS = 1_000L
     }
 }
 

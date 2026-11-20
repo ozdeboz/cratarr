@@ -24,7 +24,8 @@
   import { health, problems } from './lib/healthReport.svelte';
   import { partsShown, SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { settingsBasic, settingsListed } from './lib/settings/basic.svelte';
-  import { appInfo, askDownloads, downloads, inApp } from './lib/app.svelte';
+  import { appInfo, askDownloads, downloads, inApp, onApp, toApp } from './lib/app.svelte';
+  import { backDoes, overThePage } from './lib/deviceBack';
   import { keyboard } from './lib/keyboard.svelte';
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
@@ -584,9 +585,14 @@
   // the one the app opened with.
   let navAt = $state(0);
   let lastNav = -1;
+  /** Home has just taken the visit's first step's place (`backToHome`): it is the first step, with no Back of its own. */
+  let homeInPlace = false;
   function stamp() {
     const st = history.state ?? {};
-    if (typeof st.nav !== 'number') history.replaceState({ ...st, nav: lastNav + 1 }, '');
+    if (homeInPlace) {
+      homeInPlace = false;
+      history.replaceState({ ...st, nav: 0 }, '');
+    } else if (typeof st.nav !== 'number') history.replaceState({ ...st, nav: lastNav + 1 }, '');
     navAt = history.state.nav;
     lastNav = navAt;
   }
@@ -602,6 +608,32 @@
   // Back is always there (the owner, 2026-10-23): a step back in this visit, else Home; only Home itself, opened first,
   // has none. On a phone the row always shows.
   const backHome = $derived(navAt === 0 && page !== 'home');
+  /** Back from the visit's first step, not Home: Home in that step's place (BACK), so Home is then the first step itself, with no
+   *  Back, and the device's Back leaves the app from there, as nothing more is behind it. Before, Home was a step on, its Back went
+   *  to the page left, and a cold start on a shortcut's page never ended. */
+  function backToHome() {
+    homeInPlace = true;
+    location.replace(keepViewed(HOME.id));
+  }
+  /** The page's Back as it shows (NavigationControls), or none. */
+  const pageBack = $derived(navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : backToHome()) : null);
+  // The device's Back (the app asks; BACK's second part, lib/deviceBack): exactly the page's own, a sheet first (as Esc closes it,
+  // lib/MenuSheet), then what is a step over the page and the page's history, then Home; told back whether there was one, so the
+  // app goes to the background only where the page shows no Back.
+  function deviceBack(): boolean {
+    const does = backDoes({
+      sheet: !!document.querySelector('.sheet[aria-modal="true"]'),
+      over: overThePage(history.state),
+      navAt,
+      searchAll: !!globalSearch.all,
+      page,
+    });
+    if (does === 'sheet') document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    else if (does === 'history') history.back();
+    else if (does === 'home') backToHome();
+    return does !== 'none';
+  }
+  if (inApp) onApp('back', (m) => toApp({ type: 'back', id: m.id, done: deviceBack() }));
   /** The page has the row (its room at its top kept for it). */
   const pageHasRow = $derived(
     phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover',
@@ -1283,7 +1315,7 @@
          Library's and Discover's picker; or the panel's left part where it handed its glass. -->
     <NavigationControls
       left={handed?.left ?? null}
-      back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.id))) : null}
+      back={pageBack}
       name={panelPage && phone ? panelPage.label : null}
       picker={page === 'library' ? 'library' : page === 'discover' ? 'discover' : null}
       bind:el={leadEl}
