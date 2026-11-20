@@ -282,7 +282,7 @@ mod tests {
             std::fs::create_dir_all(at).unwrap();
             for n in 1..=3 {
                 let w = at.join(format!(".{n}.wav"));
-                super::super::wav(&w, tone + n as u32, 1).unwrap();
+                crate::fixtures_base::wav(&w, tone + n as u32, 1).unwrap();
                 crate::convert::to_cd_flac(&w, &at.join(r.file(n))).unwrap();
                 std::fs::remove_file(&w).unwrap();
             }

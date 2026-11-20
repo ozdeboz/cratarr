@@ -5485,7 +5485,7 @@ mod tests {
     fn fx01(name: &str) -> (Arc<crate::catalogue::Catalogue>, Vec<Item>, PathBuf) {
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
-        crate::fixtures::data_0_16(&d).unwrap();
+        crate::catalogue::records::data_0_16(&d).unwrap();
         let cat = Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![PathBuf::from("/music")]).unwrap());
         let ud = crate::userdata::UserData::open(Some(&d.join("userdata.sqlite"))).unwrap();
         super::super::step_017::run(&cat, &ud, &[], &crate::catalogue::Rules::default()).unwrap();

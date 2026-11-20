@@ -6,6 +6,7 @@ pub mod analysis;
 pub mod app;
 pub mod export;
 pub mod fixtures;
+pub mod fixtures_base;
 pub mod folders;
 pub mod opus_copies;
 pub mod opus_copy;

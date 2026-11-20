@@ -640,10 +640,10 @@ mod tests {
     #[test]
     fn day_one_forgets_no_artist_of_the_library() {
         let d = data_dir("day-one");
-        crate::fixtures::data_0_16(&d).unwrap();
-        let cat = Arc::new(Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music"), std::path::PathBuf::from(crate::fixtures::BOB_OWN)]).unwrap());
-        crate::fixtures::tag_0_16_shapes(&cat);
-        let own = cat.folders().id_of(std::path::Path::new(crate::fixtures::BOB_OWN)).unwrap();
+        crate::catalogue::records::data_0_16(&d).unwrap();
+        let cat = Arc::new(Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music"), std::path::PathBuf::from(crate::fixtures_base::BOB_OWN)]).unwrap());
+        crate::fixtures_base::tag_0_16_shapes(&cat);
+        let own = cat.folders().id_of(std::path::Path::new(crate::fixtures_base::BOB_OWN)).unwrap();
         let kinds = vec![(0, crate::settings::LibraryKind::Main), (own, crate::settings::LibraryKind::Own)];
         let [guest, nobody] = ["Ferro Lane", "Nobody"].map(|n| cat.artist_for(n).unwrap());
         born_a_month_before(&cat);

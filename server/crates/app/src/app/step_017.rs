@@ -430,7 +430,7 @@ mod tests {
         fn new(name: &str) -> Self {
             let d = std::env::temp_dir().join(format!("cratarr-step-017-{name}-{}", std::process::id()));
             std::fs::remove_dir_all(&d).ok();
-            crate::fixtures::data_0_16(&d).unwrap();
+            crate::catalogue::records::data_0_16(&d).unwrap();
             Self(d)
         }
 
@@ -504,14 +504,14 @@ mod tests {
         /// in bob's own music.
         fn tagged(name: &str) -> Self {
             let data = Self::new(name);
-            crate::fixtures::tag_0_16_shapes(&data.open_both().0);
+            crate::fixtures_base::tag_0_16_shapes(&data.open_both().0);
             data
         }
 
         /// The catalogue opened with Music and bob's own music in use, the user data, and each library's kind as the app says.
         fn open_both(&self) -> (Catalogue, UserData, Vec<(i64, LibraryKind)>) {
-            let cat = Catalogue::open(Some(&self.0.join("catalogue.sqlite")), vec![PathBuf::from("/music"), PathBuf::from(crate::fixtures::BOB_OWN)]).unwrap();
-            let own = cat.folders().id_of(std::path::Path::new(crate::fixtures::BOB_OWN)).unwrap();
+            let cat = Catalogue::open(Some(&self.0.join("catalogue.sqlite")), vec![PathBuf::from("/music"), PathBuf::from(crate::fixtures_base::BOB_OWN)]).unwrap();
+            let own = cat.folders().id_of(std::path::Path::new(crate::fixtures_base::BOB_OWN)).unwrap();
             (cat, UserData::open(Some(&self.0.join("userdata.sqlite"))).unwrap(), vec![(0, LibraryKind::Main), (own, LibraryKind::Own)])
         }
 
@@ -1993,11 +1993,11 @@ mod tests {
     fn the_two_copies_join_reads_main_and_incoming_alone() {
         use crate::serve::ids;
         let data = Data::new("two-copies-one-rule");
-        let roots = ["/music", crate::fixtures::BOB_OWN, "/incoming"];
+        let roots = ["/music", crate::fixtures_base::BOB_OWN, "/incoming"];
         let (own, incoming) = {
             let (cat, _) = data.open_with(&roots);
             let id = |root: &str| cat.folders().id_of(std::path::Path::new(root)).unwrap();
-            (id(crate::fixtures::BOB_OWN), id("/incoming"))
+            (id(crate::fixtures_base::BOB_OWN), id("/incoming"))
         };
         let kinds = [(0, LibraryKind::Main), (own, LibraryKind::Own), (incoming, LibraryKind::Incoming)];
         let album = |record: i64, folder: i64, title: &str, names: [&str; 3]| -> String {
