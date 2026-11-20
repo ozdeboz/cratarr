@@ -6,7 +6,7 @@
   // 2026-11-02: the large one in a crate's panel, "we're using smaller kinds these days in smaller panels").
   import { untrack } from 'svelte';
   import MarkLoader from './MarkLoader.svelte';
-  import { LOADER_SMALL, loaderSizeIn } from './loader';
+  import { LOADER_SMALL, loaderFit, loaderSizeIn } from './loader';
   import { holdUntil } from './holdPlace.svelte';
   import { waitingFor } from './waiting.svelte';
 
@@ -68,9 +68,10 @@
       const { top, bottom, at } = seen();
       // The middle of its own room as seen: from its top (or what can be seen's, if it starts above) to the bottom of what
       // can be seen, as much room above the mark as below (the owner, 2026-11-19: "still not vertically center aligned": the
-      // window's middle put a loader that starts below it at its very top).
-      const middle = Math.max((Math.max(top, at) + bottom) / 2, at + mark / 2);
-      const next = { height: Math.round(Math.max(bottom - at, mark * 2)), top: Math.round(middle - at - mark / 2) };
+      // window's middle put a loader that starts below it at its very top). The line under the mark counted in its height
+      // (lib/loader's loaderFit: the review of 1.2, low 12), its 16 px above it and its own height as it is now.
+      const line = el.querySelector('.under');
+      const next = loaderFit({ top, bottom, at, mark, under: line ? 16 + line.getBoundingClientRect().height : 0 });
       const was = untrack(() => fit);
       if (next.height !== was?.height || next.top !== was?.top) fit = next;
     };
