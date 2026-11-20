@@ -27,6 +27,8 @@
 //!   excluded everywhere ([`excluded_artists`]). How a library makes its ids is the caller's.
 //! - **A record's tracklist paired with a copy's files** ([`assign`], PAIR01): the best one-to-one pairing, for Soulseek's
 //!   folders and the holding's copies alike.
+//! - **What a record is to a viewer** ([`holding`], the one had rule): Had, Partly, Arrived, Elsewhere, Retired or not had,
+//!   from its copies' facts, so the device's "whole" is the server's.
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +37,7 @@ pub mod brake;
 pub mod crates;
 pub mod excluded_artists;
 pub mod fresh;
+pub mod holding;
 pub mod ids;
 pub mod index;
 pub mod matcher;

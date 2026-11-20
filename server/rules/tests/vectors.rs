@@ -4,8 +4,8 @@
 //! them over its own index, so those two are what the page's and the app's builds answer to (0101's point 27).
 //!
 //! Written again from the cases below with `CRATARR_RULES_WRITE=1 cargo test -p cratarr-rules -- --ignored write`: only
-//! when a rule changes on purpose (then every other build must change with it). The pairing's cases (`assign.json`) are
-//! the scenarios' rows, each answer its Then, written by hand and never by `write`.
+//! when a rule changes on purpose (then every other build must change with it). The pairing's and the holding's cases
+//! (`assign.json`, `holding.json`) are the scenarios' rows, each answer its Then, written by hand and never by `write`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -13,6 +13,7 @@ use std::sync::Arc;
 use cratarr_rules::assign::{Fit, Side, assign, fit};
 use cratarr_rules::crates::{self, Alike, Avoid, Condition, Facts, Favourites, LikeMode, Target, Trait, Use, Value, View, World, credited_names};
 use cratarr_rules::excluded_artists;
+use cratarr_rules::holding::{CopyFacts, Holding, On, holding};
 use cratarr_rules::ids::song;
 use cratarr_rules::index::own::{Kept, List, Own};
 use cratarr_rules::index::{self, Artist, Library, Rows};
@@ -1199,5 +1200,30 @@ fn the_device_pairs_as_the_server() {
         let files: Vec<Side> = c.files.iter().map(side).collect();
         let verdict = |t: usize, f: usize| if c.tracks[t].title == c.files[f].title { fit(c.tracks[t].length_ms, c.files[f].length_ms) } else { Fit::No };
         assert_eq!(assign(&tracks, &files, verdict), c.pairs, "{}", c.about);
+    }
+}
+
+// --- The holding (SCENARIOS-DC1 HD1, HD12): the one had rule, the same answer from the server's build and the device's ---
+
+const HOLDING: &str = include_str!("vectors/holding.json");
+
+#[derive(Debug, Deserialize)]
+struct HoldingCase {
+    about: String,
+    copies: Vec<CopyFacts>,
+    shortest: Option<u16>,
+    viewer: String,
+    without: Vec<i64>,
+    holding: Holding,
+}
+
+/// HD12's rules half: the device's index is built from `holding()` and the device answers by the same rules, so every row of
+/// the vectors says one holding on both (the app's half, `the_index_is_built_from_holding_and_resolve`, comes with the wiring).
+#[test]
+fn the_device_and_the_server_say_one_holding() {
+    let cases: Vec<HoldingCase> = serde_json::from_str(HOLDING).unwrap();
+    assert!(cases.len() >= 10, "HD1's ten rows at least");
+    for c in &cases {
+        assert_eq!(holding(&c.copies, c.shortest, &c.viewer, &On::without(&c.without)), c.holding, "{}", c.about);
     }
 }
