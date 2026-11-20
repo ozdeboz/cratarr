@@ -594,8 +594,8 @@ fn titled_as(file: &str, list: &str) -> bool {
         return false;
     }
     match list.split_once(" - ") {
-        Some((_, title)) => crate::app::import::loose(file) == crate::app::import::loose(list) || super::renumber::same_title(file, title.trim()),
-        None => super::renumber::same_title(file, list),
+        Some((_, title)) => crate::app::import::loose(file) == crate::app::import::loose(list) || super::renumber_base::same_title(file, title.trim()),
+        None => super::renumber_base::same_title(file, list),
     }
 }
 

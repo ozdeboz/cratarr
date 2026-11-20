@@ -108,7 +108,7 @@ fn score(files: &[(String, String, i64)], r: &Release) -> Option<Match> {
             .tracks
             .iter()
             .enumerate()
-            .filter(|(i, t)| !used.contains(i) && super::renumber::same_title(title, &t.0))
+            .filter(|(i, t)| !used.contains(i) && super::renumber_base::same_title(title, &t.0))
             .min_by_key(|(_, t)| t.1.map_or(i64::MAX, |l| (l - secs).abs()))?;
         used.insert(best.0);
         let off = best.1.1.map_or(i64::MAX, |l| (l - secs).abs());
@@ -220,7 +220,7 @@ type Found = (Match, Vec<RefTrack>, bool);
 /// artist finds (certain before likely, the first found among equals).
 async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Found>> {
     let a = album.to_string();
-    let (tracks, release, artist, name) = crate::run::spawn_blocking(move || super::renumber::tracks_of(&a)).await??;
+    let (tracks, release, artist, name) = crate::run::spawn_blocking(move || super::renumber_base::tracks_of(&a)).await??;
     let files: Vec<(String, String, i64)> = tracks.iter().map(|t| (t.file.clone(), t.title.clone(), i64::from(t.secs))).collect();
     if let Some(r) = release {
         let read = lookup(http, &r).await?;
@@ -344,7 +344,7 @@ pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, 
 /// The files a matched file's fields go to. A match names the files of the copy it was made on, and copies name their files
 /// as they like, so what links them is the track: every file of it among `written`. A file on a track of its own there goes
 /// by its name, as nothing else says what it is.
-fn files_of_match(record: &[super::renumber::Track], written: &[super::renumber::Track], file: &str) -> Vec<std::path::PathBuf> {
+fn files_of_match(record: &[super::renumber_base::Track], written: &[super::renumber_base::Track], file: &str) -> Vec<std::path::PathBuf> {
     let track = record.iter().find(|t| t.file == file).map(|t| t.id.as_str());
     let same: Vec<std::path::PathBuf> = written.iter().filter(|t| Some(t.id.as_str()) == track).map(|t| t.path.clone()).collect();
     if same.is_empty() { written.iter().find(|t| t.file == file).map(|t| t.path.clone()).into_iter().collect() } else { same }
@@ -352,8 +352,8 @@ fn files_of_match(record: &[super::renumber::Track], written: &[super::renumber:
 
 /// A match's fix of one album, where `finding` has one. Blocking.
 pub(super) fn fix_of(served: &crate::serve::Serve, finding: &str, album: &str, m: &Match, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
-    let record = super::renumber::files_in(served, album, None)?;
-    let written = if at.is_some() { super::renumber::files_in(served, album, at)? } else { record.clone() };
+    let record = super::renumber_base::files_in(served, album, None)?;
+    let written = if at.is_some() { super::renumber_base::files_in(served, album, at)? } else { record.clone() };
     let certainty = if m.certain { "certain" } else { "likely" };
     Ok(Some(match finding {
         "library:album-artist" if !m.artist.is_empty() => Fix {

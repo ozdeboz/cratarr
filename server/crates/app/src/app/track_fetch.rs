@@ -97,12 +97,12 @@ pub(crate) fn slskd_on() -> Result<()> {
 // ---- 1. The release
 
 /// Each file at the release's track of its title with the closest length (within `PLACE_SECS`), each track once.
-fn place(view: &mut ReleaseView, files: &[super::renumber::Track]) {
+fn place(view: &mut ReleaseView, files: &[super::renumber_base::Track]) {
     for f in files {
         let best = view
             .tracks
             .iter_mut()
-            .filter(|t| t.have.is_none() && super::renumber::same_title(&f.title, &t.title))
+            .filter(|t| t.have.is_none() && super::renumber_base::same_title(&f.title, &t.title))
             .filter(|t| t.length_ms.is_none_or(|l| (l / 1000 - i64::from(f.secs)).abs() <= PLACE_SECS))
             .min_by_key(|t| t.length_ms.map_or(i64::MAX, |l| (l / 1000 - i64::from(f.secs)).abs()));
         if let Some(t) = best {
@@ -136,7 +136,7 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
 pub async fn release(album: &str) -> Result<ReleaseView> {
     let s = served()?;
     let a = album.to_string();
-    let (id, files) = crate::run::spawn_blocking(move || -> Result<_> { Ok((release_id_of(&s, &a)?, super::renumber::tracks_of(&a)?.0)) }).await??;
+    let (id, files) = crate::run::spawn_blocking(move || -> Result<_> { Ok((release_id_of(&s, &a)?, super::renumber_base::tracks_of(&a)?.0)) }).await??;
     let id = id.context("This album has no MusicBrainz release yet")?;
     let http = super::discover::http()?;
     let v: Value = http
@@ -1010,7 +1010,7 @@ async fn add_on(app: Arc<dyn RequestsHost>, fetch: &str) -> Result<super::file_r
     let status = app.made(Box::new(move || {
         let (_, artist, title) = s.library.album_names(&wanted.album)?.context("No such album in Cratarr's own library")?;
         let replaced = match &wanted.replace {
-            Some(id) => super::renumber::tracks_of(&wanted.album)?.0.into_iter().find(|t| &t.id == id).map(|t| t.title),
+            Some(id) => super::renumber_base::tracks_of(&wanted.album)?.0.into_iter().find(|t| &t.id == id).map(|t| t.title),
             None => None,
         };
         let (dest, undo) = place_track(&s, &wanted, &staged)?;
@@ -1048,7 +1048,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let copy = s.library.row_copy(&wanted.album)?.context("No such album in Cratarr's own library")?;
     let (folder, dir) = (copy.folder, copy.dir);
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
-    let (tracks, ..) = super::renumber::tracks_of(&wanted.album)?;
+    let (tracks, ..) = super::renumber_base::tracks_of(&wanted.album)?;
     let t = &wanted.track;
     let replaced = wanted.replace.as_ref().map(|id| tracks.iter().find(|x| &x.id == id).context("The track to replace is gone")).transpose()?;
     // The neighbour: the closest track on its disc, else any other.
@@ -1440,7 +1440,7 @@ mod tests {
         });
         let mut view = release_of(&v);
         assert_eq!((view.year, view.artist.as_str(), view.tracks.len()), (Some(2023), "Arushi Jain", 2));
-        let files = vec![super::super::renumber::Track { id: "f1".into(), path: PathBuf::from("/m/a/01 Euphoria.flac"), place: (0, "a/01 Euphoria.flac".into()), file: "01 Euphoria.flac".into(), title: "Euphoria".into(), secs: 301, disc: Some(1), track: Some(1) }];
+        let files = vec![super::super::renumber_base::Track { id: "f1".into(), path: PathBuf::from("/m/a/01 Euphoria.flac"), place: (0, "a/01 Euphoria.flac".into()), file: "01 Euphoria.flac".into(), title: "Euphoria".into(), secs: 301, disc: Some(1), track: Some(1) }];
         place(&mut view, &files);
         assert_eq!(view.tracks[0].have.as_ref().map(|h| h.id.as_str()), Some("f1"));
         assert!(view.tracks[1].have.is_none(), "Bloom is missing");

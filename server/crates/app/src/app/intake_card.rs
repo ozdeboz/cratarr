@@ -105,15 +105,15 @@ struct Track {
     no: Option<u32>,
 }
 
-impl std::convert::From<super::renumber::Track> for Track {
-    fn from(t: super::renumber::Track) -> Self {
+impl std::convert::From<super::renumber_base::Track> for Track {
+    fn from(t: super::renumber_base::Track) -> Self {
         Track { id: t.id, file: t.file, title: t.title, ms: i64::from(t.secs) * 1000, disc: t.disc, no: t.track, path: t.path, place: t.place }
     }
 }
 
 /// The tracks a card is about: its copy's, at (catalogue folder, folder in it), whichever copy of the record plays.
 fn tracks_of(album: &str, at: Option<&(i64, String)>) -> Result<(Vec<Track>, String, String)> {
-    let (tracks, _, artist, title) = super::renumber::tracks_in(album, at)?;
+    let (tracks, _, artist, title) = super::renumber_base::tracks_in(album, at)?;
     Ok((tracks.into_iter().map(Track::from).collect(), artist, title))
 }
 
@@ -568,7 +568,7 @@ mod tests {
         cat.tag_for_tests(0, "Kept/1.flac", &[("album", "Album"), ("title", "One, by its tag"), ("tracknumber", "2/9"), ("discnumber", "1")]);
         cat.tag_for_tests(0, "Kept/2.flac", &[("album", "Album"), ("title", "Two, by its tag"), ("tracknumber", "1/9"), ("discnumber", "1")]);
         lib.db().execute("DELETE FROM songs WHERE rel LIKE 'Kept/%'", []).unwrap();
-        let tracks: Vec<Track> = super::super::renumber::copy_tracks(&lib, &cat, &album, 0, "Kept").unwrap().into_iter().map(Track::from).collect();
+        let tracks: Vec<Track> = super::super::renumber_base::copy_tracks(&lib, &cat, &album, 0, "Kept").unwrap().into_iter().map(Track::from).collect();
         assert_eq!(tracks.iter().map(|t| (t.place.1.as_str(), t.title.as_str(), t.no)).collect::<Vec<_>>(), [("Kept/2.flac", "Two, by its tag", Some(1)), ("Kept/1.flac", "One, by its tag", Some(2))]);
         assert_eq!(tracks[0].path, root.join("Kept/2.flac"));
         std::fs::remove_dir_all(&root).ok();
