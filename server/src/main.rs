@@ -268,7 +268,10 @@ async fn main() -> Result<()> {
             served.userdata.set_migration_part("libraries", &report).context("cannot keep the migration report")?;
             tracing::info!("settings: the libraries' roles are 0.16's list now (decision 0101)");
         }
-        if let Some(report) = tag_rules_report {
+        // Kept once: a file an older Cratarr wrote again is read the same way, but the step's report is the upgrade's.
+        if let Some(report) = tag_rules_report
+            && !served.userdata.migration_report().context("cannot read the migration report")?.contains_key("tag_rules")
+        {
             served.userdata.set_migration_part("tag_rules", &report).context("cannot keep the migration report")?;
             tracing::info!("settings: each library has tag rules of its own now, a copy of the install's (OQ-GEN-22)");
         }
