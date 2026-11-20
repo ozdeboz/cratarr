@@ -13,6 +13,7 @@ use cratarr_rules::{ByHand, Lane};
 use super::ToggleError;
 use super::playon::{Command, QueueTrack};
 use super::radio::{Autoplay, AutoplayMode, LANE_AUTOPLAY, LANE_RADIO, RADIO_COUNT, RADIO_MAX, RadioBy, Within, from_old};
+pub use super::queue_base::{PlayedOn, Repeat};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Queue {
@@ -64,28 +65,8 @@ pub struct Queue {
     pub played_on: Vec<PlayedOn>,
 }
 
-/// Where a queue was heard: on which player, through what (its app's audio output: `bluetooth`, `speaker`, `wired`,
-/// `usb`, `hdmi`, `remote`, `other`; none where the player does not say) and the device's name where it has one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct PlayedOn {
-    pub player: String,
-    #[serde(rename = "type", default)]
-    pub kind: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-}
-
 /// How many places a queue remembers it was heard.
 const PLAYED_ON: usize = 4;
-
-impl PlayedOn {
-    /// Whether `text` names it: in its device's name or its player's, whatever the case.
-    pub fn named(&self, text: &str) -> bool {
-        let t = text.to_lowercase();
-        self.name.as_deref().is_some_and(|n| n.to_lowercase().contains(&t)) || self.player.to_lowercase().contains(&t)
-    }
-}
 
 fn is_zero(n: &u64) -> bool {
     *n == 0
@@ -98,18 +79,6 @@ fn now_secs() -> u64 {
 /// The entries of the album or playlist that plays (not those added by hand, nor Radio's or Autoplay's).
 fn own_entries(tracks: &[QueueTrack]) -> impl Iterator<Item = &str> {
     tracks.iter().filter(|t| t.lane.is_none() && !t.entry.is_empty()).map(|t| t.entry.as_str())
-}
-
-/// Off: the queue ends. One: the playing track starts again. All: after the last track the album or playlist starts
-/// again (what was added by hand plays once).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "lowercase")]
-pub enum Repeat {
-    #[default]
-    Off,
-    One,
-    All,
 }
 
 /// An entry id no queue has had before: a version 4 UUID.
