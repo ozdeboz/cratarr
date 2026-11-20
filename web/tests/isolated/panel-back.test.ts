@@ -135,6 +135,8 @@ test("the device's Back on a tablet, the panel two deep: Back, Back, then the pa
   const { backDoes, overThePage } = await import('../../src/lib/deviceBack.ts');
   setBeside(true);
   closePlaylist();
+  // From Home: the test before left the Library shown (its breadcrumb's page), so the step before must be said.
+  visit('#/home');
   visit('#/library');
   /** The visit's step (App's `navAt`): the Library is one on from Home. */
   let navAt = 1;

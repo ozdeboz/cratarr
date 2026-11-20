@@ -54,5 +54,6 @@ test('held asks do not count: once a loop stops, the next ask goes out when what
 
 test('every JSON request goes through the guard', () => {
   const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  assert.match(api, /async function fetchJson<T>\(path: string, init\?: RequestInit\): Promise<T> \{\s*if \(loopHeld\(path, init\)\) throw/);
+  // Its first statement, whatever else it takes after the path and init (RC01 added `background`).
+  assert.match(api, /async function fetchJson<T>\(path: string, init\?: RequestInit[^)]*\): Promise<T> \{\s*if \(loopHeld\(path, init\)\) throw/);
 });
