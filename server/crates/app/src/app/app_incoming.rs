@@ -17,4 +17,8 @@ impl IncomingHost for App {
     fn journal(&self) -> &Arc<crate::journal::Journal> {
         &self.journal
     }
+
+    fn served(&self) -> &Option<Arc<crate::serve::Serve>> {
+        &self.served
+    }
 }

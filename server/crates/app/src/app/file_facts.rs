@@ -18,6 +18,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use super::file_runs::{self, FilesState, Proposal, flat};
+use super::incoming_host::IncomingHost;
 use crate::journal::{FileWrite, RunRecord};
 
 pub use super::file_facts_base::{CHOICE, is_on, set_on};
@@ -212,17 +213,22 @@ pub async fn plan(albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
 
 /// The ticked records written (an administrator's apply on the review sheet), each set aside where it is no longer what
 /// the sheet showed (its stamp): a run on the one path.
-pub async fn apply(app: &Arc<super::App>, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
+pub async fn apply<H: IncomingHost>(app: &Arc<H>, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
+    apply_on(app.clone(), albums, stamps).await
+}
+
+/// `apply`, on its host.
+async fn apply_on(app: Arc<dyn IncomingHost>, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
-    anyhow::ensure!(!file_runs::busy(&app.journal, KIND), "Already writing");
+    anyhow::ensure!(!file_runs::busy(app.journal(), KIND), "Already writing");
     let p = crate::run::spawn_blocking(move || -> Result<Proposal> {
         anyhow::ensure!(is_on(&served), "Writing into files is switched off");
         Ok(file_runs::ticked(proposal(&served, Some(&albums))?, &albums, stamps.as_ref()))
     })
     .await??;
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Nothing differs");
-    Ok(file_runs::start(app, p))
+    Ok(file_runs::start_on(app, p))
 }
 
 /// Cratarr's own records said with their files' state: from a run where one touched them, else "differs" where they

@@ -11,4 +11,6 @@ pub trait IncomingHost: Send + Sync + 'static {
     fn incoming(&self) -> &Arc<super::incoming::IncomingService>;
     /// What happened to albums, the runs on the one path among it (`App::journal`).
     fn journal(&self) -> &Arc<crate::journal::Journal>;
+    /// Cratarr's own library, when open (`App::served`).
+    fn served(&self) -> &Option<Arc<crate::serve::Serve>>;
 }

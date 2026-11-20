@@ -327,7 +327,12 @@ fn uploaded(data: &[u8]) -> Result<()> {
 
 /// The cover the administrator chose (`url`) or uploaded (`data`) as a run on the one path (decision 0092's writers'
 /// map, 0.14: the choice is the yes; Undo is the run's).
-pub async fn run(app: &std::sync::Arc<super::App>, album: &str, url: Option<&str>, data: Option<Vec<u8>>) -> Result<super::file_runs::Status> {
+pub async fn run<H: super::incoming_host::IncomingHost>(app: &std::sync::Arc<H>, album: &str, url: Option<&str>, data: Option<Vec<u8>>) -> Result<super::file_runs::Status> {
+    run_on(app.clone(), album, url, data).await
+}
+
+/// `run`, on its host.
+async fn run_on(app: std::sync::Arc<dyn super::incoming_host::IncomingHost>, album: &str, url: Option<&str>, data: Option<Vec<u8>>) -> Result<super::file_runs::Status> {
     let (data, from) = match (url, data) {
         (Some(u), _) => (fetch(u).await?, "chosen"),
         (None, Some(d)) => {
@@ -339,7 +344,7 @@ pub async fn run(app: &std::sync::Arc<super::App>, album: &str, url: Option<&str
     let a = album.to_string();
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let p = crate::run::spawn_blocking(move || proposal(&served, &a, &data, from)).await??;
-    Ok(super::file_runs::start(app, p))
+    Ok(super::file_runs::start_on(app, p))
 }
 
 /// A picture as a run: one file of the run a copy, each said as it stands now. Blocking.
