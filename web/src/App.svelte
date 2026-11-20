@@ -85,7 +85,7 @@
   import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
   import { longpress } from './lib/longpress';
   import { followAddress, setBeside } from './lib/panel.svelte';
-  import { placeBack } from './lib/placeBack';
+  import { placeBack, type Restore } from './lib/placeBack';
   import RadioSheet from './lib/RadioSheet.svelte';
   import ReviewSheet from './lib/ReviewSheet.svelte';
   import { radioSheet } from './lib/radioAsk.svelte';
@@ -500,10 +500,13 @@
   // Where a page was scrolled to, kept with its step of the history: back there brings it back; any other way there
   // (its link, Home's button) starts at its top (the owner, 2026-10-25).
   let popped = false;
+  /** A place coming back: while it runs its tries' scrolls are not the page's place (the review of 1.2, low 13). */
+  let restoring: Restore | null = null;
   $effect(() => {
     let t = 0;
     const keep = () => {
       clearTimeout(t);
+      if (restoring?.running()) return;
       t = window.setTimeout(() => history.replaceState({ ...(history.state ?? {}), scroll: Math.round(scrollY) }, ''), 150);
     };
     const pop = () => (popped = true);
@@ -523,11 +526,10 @@
     if (!y) return void window.scrollTo(0, 0);
     // Its content comes in a moment: tried again until it is long enough (four seconds at most: Home's sections load), by the
     // one function every panel's place uses too (lib/placeBack, F25.4); the hand stops it.
-    let cancel = () => {};
     const f = requestAnimationFrame(
-      () => (cancel = placeBack({ scrollTo: (to) => window.scrollTo(0, to), at: () => scrollY, long: () => document.documentElement.scrollHeight, target: window }, y)),
+      () => (restoring = placeBack({ scrollTo: (to) => window.scrollTo(0, to), at: () => scrollY, long: () => document.documentElement.scrollHeight, target: window }, y)),
     );
-    return () => (cancelAnimationFrame(f), cancel());
+    return () => (cancelAnimationFrame(f), restoring?.(), (restoring = null));
   });
   // What the panel opened beside the page, by a link or from a list of the page's own, is brought into sight in the
   // page's list, which marks it (lib/reveal; the owner, 2026-10-30); in sight already, nothing moves.
