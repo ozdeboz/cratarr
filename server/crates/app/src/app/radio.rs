@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use super::ToggleError;
 #[cfg(test)]
 use super::play::Rng;
+use super::playing_host::PlayingHost;
 use super::playon::QueueTrack;
 use crate::similarity::{Signal, Track, Weights, unique};
 
@@ -269,11 +270,16 @@ fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool),
 }
 
 /// The next radio tracks for a player (decision 0036).
-pub async fn next(app: &Arc<super::App>, req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
+pub async fn next<H: PlayingHost>(app: &Arc<H>, req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
+    next_with(&**app, req).await
+}
+
+/// `next`, on its host (Play On's Start radio asks it so).
+pub async fn next_with(app: &dyn PlayingHost, req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
     let (index, recent) = ready().await?;
     let (req, account, bandcamp) = as_asked(req)?;
     let within = match &req.within {
-        Some(w) => Some(index.find(&super::play::own_songs(app, &w.collection(), account.as_deref()).await?)),
+        Some(w) => Some(index.find(&super::play::own_songs_with(app, &w.collection(), account.as_deref()).await?)),
         None => None,
     };
     if within.as_ref().is_some_and(Vec::is_empty) {
@@ -393,10 +399,10 @@ async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: V
 
 /// The index with the account's taste on its songs (decision 0094): how each fits it (for Your taste only), and how
 /// like each is to what the account skips (none while its skipped source is off: `PlaylistService::skipped_fits`).
-async fn with_taste(app: &Arc<super::App>, index: Arc<Index>, account: Option<&str>, taste: bool) -> Result<Arc<Index>, ToggleError> {
+async fn with_taste(app: &dyn PlayingHost, index: Arc<Index>, account: Option<&str>, taste: bool) -> Result<Arc<Index>, ToggleError> {
     let Some(user) = account else { return Ok(index) };
-    let fits = if taste { app.playlists.taste_fits(user, &[]).await? } else { HashMap::new() };
-    let skipped = app.playlists.skipped_fits(user, &[]).await?;
+    let fits = if taste { app.playlists().taste_fits(user, &[]).await? } else { HashMap::new() };
+    let skipped = app.playlists().skipped_fits(user, &[]).await?;
     if fits.is_empty() && skipped.is_empty() {
         return Ok(index);
     }

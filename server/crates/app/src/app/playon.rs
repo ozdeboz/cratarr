@@ -1563,7 +1563,7 @@ pub struct PlayOn {
     /// Cratarr is stopping: the connections that end now end for that.
     stopping: AtomicBool,
     /// The app, for what a play names (app::play: one way to choose for every play); set once it is made.
-    app: std::sync::OnceLock<std::sync::Weak<super::App>>,
+    app: std::sync::OnceLock<std::sync::Weak<dyn super::playing_host::PlayingHost>>,
     /// Queue requests (decision 0079), kept in memory for two hours.
     pub requests: super::queue_requests::Requests,
     /// New requests waiting to be told to their leaders as one notice, by leader (decision 0079).
@@ -1717,8 +1717,9 @@ impl PlayOn {
     }
 
     /// The app it is part of, once made: what a play names is chosen through app::play.
-    pub fn set_app(&self, app: &Arc<super::App>) {
-        let _ = self.app.set(Arc::downgrade(app));
+    pub fn set_app<H: super::playing_host::PlayingHost>(&self, app: &Arc<H>) {
+        let app: std::sync::Weak<dyn super::playing_host::PlayingHost> = Arc::<H>::downgrade(app);
+        let _ = self.app.set(app);
     }
 
     /// Cratarr's address on the local network, as players there reach it (a Kodi streams from it).
@@ -2766,7 +2767,7 @@ impl PlayOn {
             tracing::info!(target: "playon", player = from, to, requests, "queue requests moved");
         }
         if let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) {
-            app.visuals.moved(from, to);
+            app.visuals().moved(from, to);
         }
         // The music is on its way there; this one stopping is no reason to fail the handover. One that cannot be told
         // (offline) is stopped here as the stop would have left it, and stopped itself once it is back.
@@ -2856,7 +2857,7 @@ impl PlayOn {
         let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
         let start = if how == How::Shuffle { None } else { start };
         let owner = self.owner_of(name);
-        let c = match super::play::choose(&app, None, &what, how, start, most.unwrap_or(QUEUE_MOST), owner.as_deref()).await {
+        let c = match super::play::choose_with(&*app, None, &what, how, start, most.unwrap_or(QUEUE_MOST), owner.as_deref()).await {
             Ok(c) => c,
             Err(ToggleError::CannotPlay(_)) => return Ok(Some((Vec::new(), 0))),
             Err(e) => return Err(e),
@@ -2902,7 +2903,7 @@ impl PlayOn {
             account: self.account_of(name),
         };
         let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
-        let first = super::radio::next(&app, ask).await?;
+        let first = super::radio::next_with(&*app, ask).await?;
         if first.is_empty() {
             return Err(ToggleError::Refused("Nothing like it was found.".into()));
         }

@@ -22,6 +22,10 @@ impl PlayingHost for App {
         &self.play_on
     }
 
+    fn visuals(&self) -> &Arc<super::visuals::GroupVisuals> {
+        &self.visuals
+    }
+
     fn served(&self) -> &Option<Arc<crate::serve::Serve>> {
         &self.served
     }

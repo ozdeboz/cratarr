@@ -141,8 +141,8 @@ async fn picks_of(app: &Arc<App>, account: &str, crates: &[String], seed: u64, t
         Ok((req, _, _)) => req.ask,
         Err(e) => return vec![format!("{account}\tradio\trefused: {e:?}")],
     };
-    let plain = with_taste(app, index.clone(), Some(account), false).await.unwrap();
-    let tasted = with_taste(app, index, Some(account), true).await.unwrap();
+    let plain = with_taste(&**app, index.clone(), Some(account), false).await.unwrap();
+    let tasted = with_taste(&**app, index, Some(account), true).await.unwrap();
     let asking = Asking { account, plain: &plain, tasted: &tasted, recent: &recent, asked, seed };
     let mut out = Vec::new();
     let step = (plain.songs.len() / tracks.max(1)).max(1);
@@ -367,8 +367,8 @@ async fn list_against(app: &Arc<App>, device: &mut Device, account: &str, now: i
 async fn picks_against(app: &Arc<App>, device: &mut Device, account: &str, seed: u64, now: i64) -> (usize, Vec<String>) {
     let (index, recent) = ready().await.unwrap();
     let asked = as_asked(NextRequest::default()).unwrap().0.ask;
-    let plain = with_taste(app, index.clone(), Some(account), false).await.unwrap();
-    let tasted = with_taste(app, index, Some(account), true).await.unwrap();
+    let plain = with_taste(&**app, index.clone(), Some(account), false).await.unwrap();
+    let tasted = with_taste(&**app, index, Some(account), true).await.unwrap();
     let (mut picked, mut out) = (0, Vec::new());
     let mut against = |inside: Option<(&str, &[usize])>, seed_tracks: &[String], track: &str| {
         for (mode, by) in ASKS {

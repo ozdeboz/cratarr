@@ -18,6 +18,8 @@ pub trait PlayingHost: Send + Sync + 'static {
     fn playing(&self) -> &super::playing::PlayingService;
     /// Cratarr's players (`App::play_on`).
     fn play_on(&self) -> &Arc<super::playon::PlayOn>;
+    /// The visuals each sync group shares (`App::visuals`).
+    fn visuals(&self) -> &Arc<super::visuals::GroupVisuals>;
     /// Cratarr's own library, when open (`App::served`).
     fn served(&self) -> &Option<Arc<crate::serve::Serve>>;
     /// Where an album that left Incoming is now: its id in its new library; none where it did not move there
