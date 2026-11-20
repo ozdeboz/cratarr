@@ -54,6 +54,7 @@ const LATE: i64 = 3 * DAY;
 const REREAD_MONTH: i64 = 30 * DAY;
 
 pub use super::retention_base::{ARTIST_NO_LONGER_KNOWN, NO_LONGER_KNOWN, unknown_album, unknown_artist};
+use super::retention_protected::{protected_here, stores_name};
 
 /// Whether the pass is due at `now`: never run, last run a day ago or more, or noted more than a day ahead of now (U9: a clock that
 /// ran ahead, put right since, would hold every pass off till it caught up).
@@ -83,10 +84,8 @@ fn forgetting_waits(cat: &Catalogue, now: i64) -> bool {
 /// anything the user data names it in (`UserData::records_named`: a heart, plays, a rating, words, tags) and the stores in the
 /// data folder `data` (`stores_name`). Blocking.
 pub(crate) fn protected(ud: &UserData, data: Option<&std::path::Path>) -> Result<BTreeSet<i64>> {
-    let mut kept: BTreeSet<i64> = ud.request_records()?.into_iter().filter_map(|(_, record)| record).collect();
+    let mut kept = protected_here(ud, data)?;
     kept.extend(super::soulseek::item_records());
-    kept.extend(ud.records_named()?);
-    kept.extend(stores_name(data, |text| crate::serve::ids::records_named(text).collect())?);
     Ok(kept)
 }
 
@@ -136,21 +135,6 @@ fn credited_aside(served: &Serve) -> Result<BTreeSet<i64>> {
         }
     }
     Ok(kept)
-}
-
-/// What the stores in the data folder `data` name (`library::id_stores`: every account's crates, their seeds and conditions; the
-/// queues), each read by `read`. A store not made yet names nothing; one that cannot be read may name anything, so nothing is
-/// forgotten this time. Blocking.
-fn stores_name(data: Option<&std::path::Path>, read: fn(&str) -> Vec<i64>) -> Result<BTreeSet<i64>> {
-    let mut named = BTreeSet::new();
-    for store in data.map(super::library::id_stores).unwrap_or_default() {
-        match std::fs::read_to_string(&store) {
-            Ok(text) => named.extend(read(&text)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(anyhow::Error::from(e).context(format!("{} cannot be read", store.display()))),
-        }
-    }
-    Ok(named)
 }
 
 /// What the day's re-read came to (RT01c), by (artist, source): the lists read, and those it could not read (failed, switched

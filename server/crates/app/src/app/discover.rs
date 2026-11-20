@@ -2382,7 +2382,7 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
         let listings: Vec<crate::catalogue::records::Listing> = listings.into_iter().map(|l| crate::catalogue::records::Listing { artist: name.clone(), ..l }).collect();
         // A1.1: of Discogs' list, the records of their own alone (`Catalogue::discogs_own`); what it no longer keeps lets go of its credit.
         let listings = if known.source == "discogs" {
-            let kept = crate::serve::instance().map(|s| super::retention::protected(&s.userdata, s.data_dir.as_deref())).transpose()?.unwrap_or_default();
+            let kept = crate::serve::instance().map(|s| super::retention_protected::protected_of(&s)).transpose()?.unwrap_or_default();
             cat.discogs_own(id, listings, super::moment::now_secs(), &kept)?
         } else {
             listings
@@ -2920,7 +2920,7 @@ pub fn suggestion(serve: &crate::serve::Serve, account: &str, key: &str) -> Resu
     if let Some(s) = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)) {
         return Ok(Some(s));
     }
-    Ok(super::around::suggestions(serve, account)?.into_iter().find(|s| s.key == key))
+    Ok(super::around_records::suggestions(serve, account)?.into_iter().find(|s| s.key == key))
 }
 
 fn answer(serve: &crate::serve::Serve, account: &str, key: &str, answer: &str) -> Result<String> {

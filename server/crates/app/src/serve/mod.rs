@@ -23,6 +23,7 @@ pub use cratarr_gate::serve::listener;
 pub mod opus_copy_crc;
 pub mod playlists;
 pub mod playlists_row;
+pub mod protected;
 pub use cratarr_gate::serve::proxy;
 pub mod queues;
 pub mod queues_sessions;
@@ -139,6 +140,8 @@ pub struct Serve {
     requesters: std::sync::Mutex<requests_kept::KeptRequesters>,
     /// What the crates' facts take from the app, once the app is made (`set_facts_from`).
     facts_from: std::sync::OnceLock<Arc<dyn services::FactsFrom>>,
+    /// What keeps a record not had, as the app knows it, once the app is made (`set_protected`).
+    protected: std::sync::OnceLock<Arc<dyn protected::Protected>>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -215,6 +218,7 @@ impl Serve {
             device: Default::default(),
             requesters: Default::default(),
             facts_from: Default::default(),
+            protected: Default::default(),
         }))
     }
 
@@ -420,6 +424,16 @@ impl Serve {
     /// What the crates' facts take from the app (`services::FactsFrom`), set as the app is made: until then they have none of it.
     pub fn set_facts_from(&self, from: Arc<dyn services::FactsFrom>) {
         let _ = self.facts_from.set(from);
+    }
+
+    /// What keeps a record not had, as the app knows it (`protected::Protected`), set as the app is made.
+    pub fn set_protected(&self, protected: Arc<dyn protected::Protected>) {
+        let _ = self.protected.set(protected);
+    }
+
+    /// The app's word on what keeps a record not had, once it is made.
+    pub fn protected(&self) -> Option<&Arc<dyn protected::Protected>> {
+        self.protected.get()
     }
 
     /// Tests elsewhere: the covers' stamps as a build's end leaves them.
