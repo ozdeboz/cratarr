@@ -460,18 +460,17 @@ name = "cratarr-app"
 version = "0.17.0"
 dependencies = [
  "anyhow",
- "cratarr-incoming",
+ "cratarr-health",
  "cratarr-rules",
+ "cratarr-search",
  "flate2",
  "image",
  "ipnet",
- "libc",
  "lofty",
  "rusqlite",
  "serde",
  "serde_json",
  "tokio",
- "tower",
  "tracing",
  "ts-rs",
  "zip",
@@ -552,6 +551,18 @@ dependencies = [
  "lofty",
  "sha2",
  "tracing",
+]
+
+[[package]]
+name = "cratarr-health"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "cratarr-incoming",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -694,6 +705,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratarr-search"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "cratarr-incoming",
+ "cratarr-rules",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cratarr-served"
 version = "0.17.0"
 dependencies = [
@@ -731,6 +755,7 @@ dependencies = [
  "cratarr-clients",
  "cratarr-core",
  "cratarr-gate",
+ "cratarr-health",
  "cratarr-incoming",
  "cratarr-listening",
  "cratarr-media",
@@ -738,6 +763,7 @@ dependencies = [
  "cratarr-records",
  "cratarr-requests",
  "cratarr-rules",
+ "cratarr-search",
  "cratarr-served",
  "cratarr-store",
  "flate2",

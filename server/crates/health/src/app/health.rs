@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use super::features_host::FeaturesHost;
+use super::health_host::HealthHost;
 pub use super::health_base::{SHORT_SLACK_MS, clock, name_of, short_cause};
 pub use super::health_findings::{Finding, Item, Level, Open};
 use super::health_findings::{ITEMS, finding, n, thousands};
@@ -325,7 +325,7 @@ fn standing<'a>(sources: impl Iterator<Item = (&'a str, &'a [super::albums::Libr
 /// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. Each a warning:
 /// it retries by itself (the owner, 2026-11-04, "broken or blind"; MusicBrainz was critical until then, as the
 /// background pass and Find more music stop while it fails).
-pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
+pub fn check_connections(at: i64) -> Vec<Finding> {
     let tz = super::moment::tz(super::moment::told(at).as_ref());
     let clock = |t: i64| {
         let s = (t + tz).rem_euclid(86_400);
@@ -432,7 +432,7 @@ pub fn track_ids(lost: bool) -> Option<Finding> {
 
 /// A record's files' own problems, of every copy, each by its kind: a file wrong in one copy is that record's, whichever
 /// plays. Blocking.
-pub(super) fn files_wrong(served: &crate::serve::Serve, id: &str) -> anyhow::Result<Vec<(String, Item)>> {
+pub fn files_wrong(served: &crate::serve::Serve, id: &str) -> anyhow::Result<Vec<(String, Item)>> {
     let (tracks, files) = (served.library.album_tracks(id)?, served.library.files_of_record(id)?);
     let folders: std::collections::BTreeSet<i64> = files.iter().map(|f| f.1).collect();
     let mut out = Vec::new();
@@ -455,9 +455,9 @@ pub(super) fn files_wrong(served: &crate::serve::Serve, id: &str) -> anyhow::Res
     Ok(out)
 }
 
-/// Health's checks on the app that hosts them (`FeaturesHost`): the app answers its report and a record's by them
+/// Health's checks on the app that hosts them (`HealthHost`): the app answers its report and a record's by them
 /// (`App::health_report`, `App::record_health`).
-pub struct Checks<'a>(pub &'a dyn FeaturesHost);
+pub struct Checks<'a>(pub &'a dyn HealthHost);
 
 impl Checks<'_> {
     /// Every domain's findings now (decision 0063), worst first, the most recent first among equals.

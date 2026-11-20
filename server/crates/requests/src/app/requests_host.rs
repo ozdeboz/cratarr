@@ -1,8 +1,8 @@
 //! What the requests' functions read of the app (App's wiring, the app split's phase 1): what they use of the services it holds,
 //! and what they ask of functions that still take the app (Lidarr as Discover reads it, the house's copy, a fetched track's run, the
 //! requests' marks, the records waiting in Incoming). The app implements it (`app_requests`); a function takes `app: &Arc<H>` with `H: RequestsHost`, so
-//! its callers pass the app as before, and requests never names `App`. The features' host takes it as a supertrait, so none of its
-//! methods is named as one of that host's.
+//! its callers pass the app as before, and requests never names `App`. Health's and search's hosts take it as a supertrait, so none
+//! of its methods is named as one of theirs.
 
 use std::future::Future;
 use std::pin::Pin;

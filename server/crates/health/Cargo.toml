@@ -1,0 +1,27 @@
+[package]
+name = "cratarr-health"
+description = "Cratarr's Health: every domain's check in one report, and a record's own"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-incoming/test-support"]
+
+[dependencies]
+cratarr-incoming.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+cratarr-incoming = { workspace = true, features = ["test-support"] }
+libc.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

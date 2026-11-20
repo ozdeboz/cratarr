@@ -1,16 +1,16 @@
-//! What search's and Health's functions read of the app (App's wiring, the app split's phase 1): the services they use, as the
-//! app holds them, and what they ask of functions that still take the app (the Library's lists; the requests' marks and
-//! the intake card's waiting records through the requests' host, its supertrait). The app implements it (`app_features`); a
-//! function takes `app: &Arc<H>` with `H: FeaturesHost`, so its callers pass the app as before, and features never names `App`.
+//! What Health's checks read of the app (App's wiring, the app split's phases 1 and 2): the services they use, as the app
+//! holds them, and what they ask of functions that still take the app (the Library's lists; the requests' marks and the
+//! intake card's waiting records through the requests' host, its supertrait). The app implements it (`app_health`); Health's
+//! checks take it as `&dyn HealthHost` (`health::Checks`), and Health never names `App`.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// A future a host hands back, as features await it (inside the HTTP handlers: `Send`).
+/// A future a host hands back, as Health awaits it (inside the HTTP handlers: `Send`).
 pub type Asked<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-pub trait FeaturesHost: super::requests_host::RequestsHost + Send + Sync + 'static {
+pub trait HealthHost: super::requests_host::RequestsHost + Send + Sync + 'static {
     /// Cratarr's own library, when open (`App::served`).
     fn served(&self) -> &Option<Arc<crate::serve::Serve>>;
     /// The servers in use, the folders behind their libraries, the catalogue (`App::library`).

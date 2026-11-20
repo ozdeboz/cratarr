@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use super::features_host::FeaturesHost;
+use super::search_host::SearchHost;
 use crate::search::{closeness, words};
 
 pub use super::search_base::{Item, Matched};
@@ -164,12 +164,12 @@ fn word_hits<'a>(index: &'a [(&'static str, String, usize)], kind: &str, w: &[St
 /// The library's genres with the other names they go by (0.12: one matcher, genre aliases; `GET /api/genres/aliases`,
 /// what the page's matcher is given as each genre's `aliases`), those with none left out: the genres the library reads
 /// from its files and those its words name (`words::search_index`, the genre crates' and search's), as written there.
-pub async fn genre_aliases<H: FeaturesHost>(app: &Arc<H>) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+pub async fn genre_aliases<H: SearchHost>(app: &Arc<H>) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
     genre_aliases_on(&**app).await
 }
 
 /// `genre_aliases`, on its host.
-async fn genre_aliases_on(app: &dyn FeaturesHost) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+async fn genre_aliases_on(app: &dyn SearchHost) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
     let Some(served) = app.served().clone() else { return Ok(BTreeMap::new()) };
     let cat = app.library().catalogue();
     crate::run::spawn_blocking(move || -> anyhow::Result<BTreeMap<String, Vec<String>>> {
@@ -551,7 +551,7 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
 /// Every missing album of the library's artists: the same for every account. Made once; then the last answer comes at once and,
 /// older than `MISSING_KEEP`, is made again behind it, one making at a time (the owner, 2026-11-19, F45: a search waited 8.7 s
 /// while this list of every missing record was made again inside it).
-async fn all_missing(app: &dyn FeaturesHost) -> anyhow::Result<Arc<Vec<crate::app::discover::Missing>>> {
+async fn all_missing(app: &dyn SearchHost) -> anyhow::Result<Arc<Vec<crate::app::discover::Missing>>> {
     type Kept = Option<(Instant, Arc<Vec<crate::app::discover::Missing>>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
     static MAKING: AtomicBool = AtomicBool::new(false);
@@ -610,7 +610,7 @@ async fn all_missing(app: &dyn FeaturesHost) -> anyhow::Result<Arc<Vec<crate::ap
 /// The asking account's crates with their tracks. Made once per account and libraries switched off; then the last answer comes at
 /// once and, older than `CRATES_KEEP`, is made again behind it as that account, one making at a time (F45: making every crate
 /// inside a search is not cheap).
-async fn crate_members(app: &dyn FeaturesHost, without: &[String]) -> anyhow::Result<Members> {
+async fn crate_members(app: &dyn SearchHost, without: &[String]) -> anyhow::Result<Members> {
     type Key = (Option<String>, Vec<String>);
     static KEPT: OnceLock<Mutex<HashMap<Key, (Instant, Members)>>> = OnceLock::new();
     static MAKING: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
@@ -704,12 +704,12 @@ impl Laps {
 /// Answers a query for the asking account (its playlists and crates): every kind asked for (`kinds`, all when empty).
 /// `without`: the libraries switched off (`source/library` keys): a word's albums and a crate's tracks are counted, and
 /// found, in those switched on, as what they open shows them (the owner, 2026-11-02).
-pub async fn search<H: FeaturesHost>(app: &Arc<H>, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
+pub async fn search<H: SearchHost>(app: &Arc<H>, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
     search_on(&**app, q, kinds, limit, offset, without).await
 }
 
 /// `search`, on its host.
-async fn search_on(app: &dyn FeaturesHost, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
+async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
     let mut laps = Laps::new();
     let w = words(q);
     let mut answer = Answer { q: q.to_string(), ..Answer::default() };

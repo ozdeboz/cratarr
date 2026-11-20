@@ -24,7 +24,6 @@ pub mod file_runs;
 pub mod incomplete;
 // Bulk intake of missing tracks (0.13, decision 0080 amended).
 pub mod track_intake;
-pub mod features_host;
 #[cfg(test)]
 mod u1_tests_incoming;
 pub mod covers;
