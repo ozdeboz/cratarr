@@ -289,7 +289,7 @@ impl Slskd {
         let r = self.http.get(self.at(path)).header("X-API-Key", &self.key).send().await.map_err(unreached)?;
         let status = r.status();
         if status.as_u16() == 429 {
-            return Err(Busy(format!("slskd answered {status}")).into());
+            return Err(Busy("slskd is busy".into()).into());
         }
         if its_own(status) {
             return Err(Away(format!("slskd answered {status}")).into());
@@ -373,12 +373,27 @@ impl Slskd {
     }
 
     /// Whether the search is over; its answers are read only after (they are not all there before).
+    /// slskd busy (a 429 from a proxy before it): not yet (the review of part 2, M2).
     pub async fn searched(&self, id: &str) -> Result<bool> {
-        Ok(self.get::<Search>(&format!("searches/{id}")).await?.is_complete)
+        match self.get::<Search>(&format!("searches/{id}")).await {
+            Ok(s) => Ok(s.is_complete),
+            Err(e) if e.is::<Busy>() => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
+    /// A search's answers. slskd busy: read again (`busy_wait`), for two minutes at most (M2).
     pub async fn answers(&self, id: &str) -> Result<Vec<Answer>> {
-        self.get(&format!("searches/{id}/responses")).await
+        let (began, mut tries) = (self.clock.ms(), 0);
+        loop {
+            match self.get(&format!("searches/{id}/responses")).await {
+                Err(e) if e.is::<Busy>() && self.clock.ms() < began + 120_000 => {
+                    tries += 1;
+                    self.clock.sleep(busy_wait(tries, None)).await;
+                }
+                other => return other,
+            }
+        }
     }
 
     /// What slskd saying no comes to. A 500 is how it says both "that user failed" and "I am not on Soulseek": there it is
@@ -654,6 +669,7 @@ pub(crate) mod scripted {
         hold: Option<f64>,
         offline: BTreeSet<String>,
         read_busy: u32,
+        responses_busy: u32,
         in_flight: u32,
         ops: Vec<Op>,
         reads: Vec<(String, bool)>,
@@ -735,6 +751,10 @@ pub(crate) mod scripted {
                 s.offline.insert(user.to_string());
             })
         }
+        /// From now, a batch asked of `user` answered 404: the user is offline.
+        pub fn then_offline(&self, user: &str) {
+            self.s.lock().unwrap().offline.insert(user.to_string());
+        }
         /// From now, the next `n` operations answered 429 (no violation).
         pub fn then_busy(&self, n: u32) {
             self.s.lock().unwrap().busy = n;
@@ -742,6 +762,10 @@ pub(crate) mod scripted {
         /// The next `n` reads answered 429 (a proxy in front of slskd).
         pub fn read_busy(self, n: u32) -> Self {
             self.with(|s| s.read_busy = n)
+        }
+        /// The next `n` reads of a search's answers answered 429.
+        pub fn responses_busy(self, n: u32) -> Self {
+            self.with(|s| s.responses_busy = n)
         }
         /// A search's answers.
         pub fn answers(self, answers: Vec<serde_json::Value>) -> Self {
@@ -1032,6 +1056,13 @@ pub(crate) mod scripted {
     async fn responses(Held(me): Held<Scripted>, Part(id): Part<String>) -> Response {
         if let Some(r) = read(&me, format!("searches/{id}/responses")) {
             return r;
+        }
+        {
+            let mut s = me.s.lock().unwrap();
+            if s.responses_busy > 0 {
+                s.responses_busy -= 1;
+                return (StatusCode::TOO_MANY_REQUESTS, ONE_AT_A_TIME).into_response();
+            }
         }
         axum::Json(serde_json::Value::Array(me.s.lock().unwrap().answers.clone())).into_response()
     }

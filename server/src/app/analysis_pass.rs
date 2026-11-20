@@ -296,7 +296,7 @@ async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): 
 }
 
 /// The one decode at a time (see the top). A turn moves into the blocking work and ends with it.
-static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+pub(crate) static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
 /// Winding's own turns (Tape rewind, a wind, decision 0074), apart from [`HEAVY`]: a wind decodes a few seconds of a
 /// file at a time (a few MB), so it never waits behind a whole file's decode, which takes about half a gigabyte for a

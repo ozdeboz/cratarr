@@ -223,6 +223,18 @@ pub struct Item {
     /// comes through ends the row.
     #[serde(default)]
     pub place_failures: u32,
+    /// When its download ended (epoch ms, SK1.3): checks go in that order; 0, not known (a stop, 0.16's), first.
+    #[serde(default)]
+    pub ended_at: i64,
+    /// Batches slskd forgot in a row (a restart, OQ-C3 (a)): the first fetched again with no one blamed, the second fails its user.
+    #[serde(default)]
+    pub forgotten: u32,
+    /// Picked by Cratarr itself, its folder certain (SK3): no administrator's tick.
+    #[serde(default)]
+    pub auto: bool,
+    /// When its folders were found (epoch s, SK3.4): a free slot counts within the hour; 0, not known (0.16's).
+    #[serde(default)]
+    pub found_at: i64,
 }
 
 /// A folder set aside: whose, where it is kept, and why each of its files failed.
@@ -658,27 +670,6 @@ pub fn space_again() {
     }
 }
 
-/// Whether the disk floor holds a fetch of `request`'s now (AL03.2): its asker a user, and the server short of space. An
-/// administrator's, or one whose asker is not known, goes on.
-async fn below_floor(request: i64) -> bool {
-    let Some(serve) = crate::serve::instance() else { return false };
-    tokio::task::spawn_blocking(move || {
-        let asker = serve.userdata.request(request).ok().flatten().map(|r| r.user);
-        asker.is_some_and(|a| serve.users.get(&a).is_some_and(|u| !u.admin)) && super::room::short_on(&serve, &super::room::TheDisks)
-    })
-    .await
-    .unwrap_or(false)
-}
-
-/// Whether its fetch is at work: one held at its check is not, until it is due.
-fn fetched(i: &Item, now: i64) -> bool {
-    match i.state {
-        State::Fetching => true,
-        State::Checking => i.due <= now,
-        _ => false,
-    }
-}
-
 // ---- The service
 
 /// What the page shows: every record, the running worker's state.
@@ -980,6 +971,10 @@ pub fn list_for_tests(id: &str, record: i64) {
         placing: None,
         placed_at: 0,
         place_failures: 0,
+        ended_at: 0,
+        forgotten: 0,
+        auto: false,
+        found_at: 0,
     };
     kept(|k| k.items.push(i));
 }
@@ -1019,7 +1014,8 @@ pub fn picked_for_tests(id: &str, record: i64, user: &str) {
 /// Tests elsewhere: a picked item's batch asked for, as the downloads' worker does.
 #[cfg(test)]
 pub async fn start_for_tests(id: &str, slskd: &Slskd, folder: &Path) -> bool {
-    start_one(id, slskd, folder).await
+    start_downloads(&|i: &Item| i.id == id, slskd, folder, &Look::roomy()).await;
+    item(id).is_some_and(|i| i.state == State::Fetching)
 }
 
 /// Tests elsewhere: item `id` as the list holds it.
@@ -1036,21 +1032,24 @@ pub fn failed_for_tests(id: &str, user: &str) {
     });
 }
 
-/// A record taken off the list (not while it is fetched): its Request is not taken in again. What it fetched goes with
-/// it: nothing else looks in a batch's folder.
+/// A record taken off the list: its Request is not taken in again, and nobody is blamed. One under way stops (OQ-SK2 (a), the owner:
+/// "Out of the list" also stops a transfer under way): its transfers dropped in slskd, what it fetched or checked removed, and any
+/// record waiting for its user goes.
 pub async fn drop_item(app: &Arc<super::App>, id: &str) -> View {
-    if let Some(batch) = dropped(id, now())
-        && let Ok((_, folder)) = super::track_fetch::slskd_ready().await
+    if let Some(it) = dropped(id)
+        && let Ok((slskd, folder)) = super::track_fetch::slskd_ready().await
     {
-        std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(batch)).ok();
+        cancel_fetch(&slskd, &folder, &it).await;
+        wake_starts();
+        room_again();
     }
     view(app)
 }
 
-/// The record off the list, unless it is fetched; its batch, where it has one.
-fn dropped(id: &str, now: i64) -> Option<String> {
+/// The record off the list, as it was, for its fetch to be stopped (OQ-SK2 (a)).
+fn dropped(id: &str) -> Option<Item> {
     kept(|k| {
-        let at = k.items.iter().position(|i| i.id == id && !fetched(i, now))?;
+        let at = k.items.iter().position(|i| i.id == id)?;
         let i = k.items.remove(at);
         // By its record (X2); one with no record yet by its request, made its record when it has one.
         if i.record.record != 0 {
@@ -1058,8 +1057,7 @@ fn dropped(id: &str, now: i64) -> Option<String> {
         } else {
             k.dropped.push(i.record.request);
         }
-        // Its checked files too (X4): their folder is a batch's.
-        i.batch.or(i.checked)
+        Some(i)
     })
 }
 
@@ -1094,6 +1092,7 @@ static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// The searcher woken (a Request approved: taken in now, not at the next round).
 pub fn wake() {
     WAKE.notify_waiters();
+    wake_starts();
 }
 
 /// Whether Soulseek fetches here: slskd set up and switched on (Settings › Server), as single-track intake's.
@@ -1101,7 +1100,8 @@ pub async fn connected() -> bool {
     super::track_fetch::slskd_ready().await.is_ok()
 }
 
-/// The workers started, once: one searches (one search at a time), one fetches (one record at a time).
+/// The workers started, once: one searches (one search at a time); one starts downloads, every picked record at once (never two of
+/// one user), each followed by its own follower; one checks and places them, one at a time (SK1).
 pub fn start(app: &Arc<super::App>) {
     static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let Some(served) = crate::serve::instance() else { return };
@@ -1143,14 +1143,8 @@ pub fn start(app: &Arc<super::App>) {
     tokio::spawn(async move {
         // Hidden folders placings left (Y12): swept once, before this start's first fetch, so none of its own is taken.
         sweep_at_start().await;
-        loop {
-            match next_fetch() {
-                Some(id) => fetch(&id).await,
-                None => {
-                    let _ = tokio::time::timeout(Duration::from_secs(60), WAKE.notified()).await;
-                }
-            }
-        }
+        tokio::spawn(checks());
+        downloads().await;
     });
 }
 
@@ -1446,6 +1440,10 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             placing: None,
             placed_at: 0,
             place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
         });
         // Its first search as the order has it (X1, `first_search`).
         if let Some(i) = k.items.last_mut() {
@@ -1502,14 +1500,9 @@ fn next_to_search(k: &Kept, t: i64) -> Option<String> {
     k.items.iter().filter(|i| matches!(i.state, State::Waiting | State::Stuck) && i.due <= t).min_by_key(|i| (i.due, i.id.clone())).map(|i| i.id.clone())
 }
 
-/// The next record to fetch: one whose fetch a restart left under way first, then the approved; one held waits for its
-/// time.
-fn next_fetch() -> Option<String> {
-    let t = now();
-    kept(|k| next_of(&k.items, t))
-}
-
-/// [`next_fetch`]'s choice: pure.
+/// The next item a worker takes up at `now`, as the tests read it: a follower or the checks one whose fetch a restart left under way,
+/// then the downloads an approved one; one held waits for its time. Pure.
+#[cfg(test)]
 fn next_of(items: &[Item], now: i64) -> Option<String> {
     let due = || items.iter().filter(|i| i.due <= now);
     due()
@@ -1629,7 +1622,7 @@ where
                 heard.extend(a);
             }
             // slskd away says nothing of the record: no miss, or a week's wait would meet it when slskd came back.
-            Err(e) if e.is::<Away>() => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
+            Err(e) if e.is::<Away>() || e.is::<crate::slskd::Busy>() => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
             Err(e) => why = Some(format!("{e:#}")),
         }
     }
@@ -1669,52 +1662,233 @@ async fn answers(slskd: &Slskd, q: &str) -> Result<Vec<Answer>> {
     a
 }
 
-/// One approved record fetched (or a fetch a restart left followed again), gated and placed; a failed user's next
-/// folder after it.
-async fn fetch(id: &str) {
-    let (slskd, folder) = match super::track_fetch::slskd_ready().await {
-        Ok(s) => s,
-        // Waits for slskd: tried again in a while.
-        Err(e) => return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN)),
-    };
-    fetch_from(id, &slskd, &folder, |file, track| async move { super::track_fetch::gate_track(&file, &track).await }).await;
+// ---- Downloads at once, checks one at a time (0.17's round 1.3, SK1)
+
+/// What a look of the downloads' worker reads beside the list (SK1, SK3): the time, whether the server is below its disk floor and
+/// whose requests that holds (a user's, AL03.2), the free space of a folder's disk, and the library records are placed in. Read anew
+/// at each look (`Look::read`); the tests' stand-ins (`Look::roomy`).
+#[derive(Clone)]
+pub(crate) struct Look {
+    pub now: i64,
+    /// The server below its disk floor.
+    pub short: bool,
+    /// The requests whose asker is a user, not an administrator: the floor holds theirs.
+    pub users: std::collections::HashSet<i64>,
+    pub library: Option<PathBuf>,
+    free: Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>,
 }
 
-/// A picked record's batch asked for (SK2): below the disk floor a user's waits (AL03.2), a disk short of room for its files holds
-/// it (X4); else its batch's id is kept on the item before it is sent (SK2.3), and the batch sent through slskd's lane, the list
-/// looked at inside it just before each try (an item gone from the list, or no longer picked, sends nothing). An answer lost is read
-/// back by that id: slskd has it, it is under way; slskd does not know it, it is sent again under that id, once. An id kept and
-/// never answered (a stop between) is read back first. slskd busy never reaches the item. Whether it is under way now (Fetching,
-/// its batch kept).
-async fn start_one(id: &str, slskd: &Slskd, folder: &Path) -> bool {
+impl Look {
+    /// The disks as they are, nothing held by the floor (as a test of today's fetcher read them).
+    pub(crate) fn of_disks() -> Self {
+        Self { now: now(), short: false, users: Default::default(), library: library().ok(), free: Arc::new(crate::folders::free) }
+    }
+
+    /// The look of the server now: its disks, the floor as `room` reads it, each item's asker.
+    async fn read() -> Self {
+        let mut look = Self::of_disks();
+        let Some(serve) = crate::serve::instance() else { return look };
+        let requests: Vec<i64> = kept(|k| k.items.iter().map(|i| i.record.request).collect());
+        let read = tokio::task::spawn_blocking(move || {
+            let short = super::room::short_on(&serve, &super::room::TheDisks);
+            let users = requests.into_iter().filter(|r| serve.userdata.request(*r).ok().flatten().is_some_and(|q| serve.users.get(&q.user).is_some_and(|u| !u.admin))).collect();
+            (short, users)
+        })
+        .await;
+        if let Ok((short, users)) = read {
+            (look.short, look.users) = (short, users);
+        }
+        look
+    }
+
+    pub(crate) fn free(&self, dir: &Path) -> Option<u64> {
+        (self.free)(dir)
+    }
+}
+
+#[cfg(test)]
+impl Look {
+    /// Room on every disk, the floor far below, nothing held: the tests' stand-in.
+    pub(crate) fn roomy() -> Self {
+        Self { now: now(), short: false, users: Default::default(), library: None, free: Arc::new(|_| Some(u64::MAX / 4)) }
+    }
+    /// Every disk `bytes` free.
+    pub(crate) fn free_bytes(mut self, bytes: u64) -> Self {
+        self.free = Arc::new(move |_| Some(bytes));
+        self
+    }
+    /// Below the disk floor, these requests a user's.
+    pub(crate) fn below_floor(mut self, users: &[i64]) -> Self {
+        (self.short, self.users) = (true, users.iter().copied().collect());
+        self
+    }
+}
+
+/// Which items a worker's look takes: every one on the server; a test's own (its ids).
+pub(crate) type Within<'a> = &'a (dyn Fn(&Item) -> bool + Sync);
+
+/// Every item of the list.
+fn every(_: &Item) -> bool {
+    true
+}
+
+/// Where a check's records go (the tests' own folders stand in): the Incoming library they are placed in, and the data folder their
+/// set-asides are kept in.
+pub(crate) struct Places {
+    pub library: std::result::Result<PathBuf, String>,
+    pub data: Option<PathBuf>,
+}
+
+impl Places {
+    fn of_server() -> Self {
+        Self { library: library().map_err(|e| format!("{e:#}")), data: crate::serve::instance().and_then(|s| s.data_dir.clone()) }
+    }
+}
+
+/// The user an item's chosen folder is of.
+fn chosen_user(i: &Item) -> Option<&str> {
+    i.chosen.and_then(|c| i.folders.get(c)).map(|f| f.user.as_str())
+}
+
+/// Whether an item's batch is asked for or downloading (SK1.2): its user's turn is taken until every transfer of it is done.
+fn downloading(i: &Item) -> bool {
+    (i.state == State::Approved && i.batch.is_some()) || i.state == State::Fetching
+}
+
+/// Whether an item's files are on their way or on this server's disks (SK1.4): its batch asked for or downloading, waiting for its
+/// check or being checked, or being placed.
+fn under_way_here(i: &Item) -> bool {
+    downloading(i) || (i.state == State::Checking && (i.batch.is_some() || i.checked.is_some())) || i.placing.is_some()
+}
+
+/// The bytes of an item's chosen folder.
+fn bytes_of(i: &Item) -> u64 {
+    i.chosen.and_then(|c| i.folders.get(c)).map_or(0, |f| f.files.iter().map(|o| o.size.max(0) as u64).sum())
+}
+
+/// What a start held for too little free space says, before its numbers (SK1.4): taken up again when a placing frees some.
+const NO_ROOM: &str = "Too little free space for its files";
+
+/// The next picked item of `within` a look starts (SK1): due, in the list's order, `tried` passed over, its user's turn free (never
+/// two records of one user at once, SK1.2). One the floor holds (a user's, below it: AL03.2) or the free space holds (every record
+/// under way weighed with it, SK1.4) is held on the way, saying so, blaming no one. Its batch's id kept on it before it is sent
+/// (SK2.3), and whether that id is new (else kept from before, never answered: read back first). Pure but for the new id.
+fn next_start(k: &mut Kept, within: Within, folder: &Path, look: &Look, tried: &std::collections::HashSet<String>) -> Option<Start> {
+    let mine: Vec<usize> = (0..k.items.len()).filter(|&n| within(&k.items[n])).collect();
+    let busy: Vec<String> = mine.iter().map(|&n| &k.items[n]).filter(|i| downloading(i)).filter_map(|i| chosen_user(i).map(str::to_string)).collect();
+    let weighed: u64 = mine.iter().map(|&n| &k.items[n]).filter(|i| under_way_here(i)).map(bytes_of).sum();
+    for n in mine {
+        let i = &mut k.items[n];
+        if i.state != State::Approved || i.due > look.now || tried.contains(&i.id) {
+            continue;
+        }
+        let Some(user) = chosen_user(i).map(str::to_string) else {
+            (i.state, i.chosen, i.due, i.batch) = (State::Waiting, None, 0, None);
+            continue;
+        };
+        // An id kept and never answered holds its user's turn itself.
+        let kept_id = i.batch.is_some();
+        if !kept_id && busy.contains(&user) {
+            continue;
+        }
+        // One step for the floor and the room, for a new id and for a kept one sent again (the review of part 2, M1).
+        let own = bytes_of(i);
+        let held = if look.short && look.users.contains(&i.record.request) {
+            Some((SHORT_OF_SPACE.to_string(), FLOOR_AGAIN))
+        } else {
+            let want = own.saturating_add(weighed - if kept_id { own } else { 0 }).saturating_add(ROOM_SPARE);
+            let dirs: Vec<PathBuf> = std::iter::once(folder.to_path_buf()).chain(look.library.clone()).collect();
+            dirs.iter().filter_map(|d| look.free(d)).find(|free| *free < want).map(|free| (format!("{NO_ROOM}: {} MB needed, {} MB free", want / 1_000_000, free / 1_000_000), SLSKD_AGAIN))
+        };
+        if kept_id {
+            return Some(Start { id: i.id.clone(), fresh: false, held });
+        }
+        if let Some((why, wait)) = held {
+            hold(i, why, wait);
+            continue;
+        }
+        i.batch = Some(crate::slskd::new_batch());
+        return Some(Start { id: i.id.clone(), fresh: true, held: None });
+    }
+    None
+}
+
+/// A start `next_start` chose: its item, whether its batch's id is new (else kept from before, never answered: read back first), and
+/// what holds it where that kept id must be sent again (the floor, the room: M1).
+struct Start {
+    id: String,
+    fresh: bool,
+    held: Option<(String, i64)>,
+}
+
+/// One look of the downloads' worker (SK1): every picked record of `within` that may start, in the list's order, its batch asked
+/// for, one after another through slskd's lane: they wait for each other only, never for a download or a check. No cap of Cratarr's
+/// own: slskd's limits are the only brake (the owner's "No limit").
+pub(crate) async fn start_downloads(within: Within<'_>, slskd: &Slskd, folder: &Path, look: &Look) {
+    let mut tried = std::collections::HashSet::new();
+    while let Some(Start { id, fresh, held }) = kept(|k| next_start(k, within, folder, look, &tried)) {
+        tried.insert(id.clone());
+        start_one(&id, slskd, folder, fresh, held).await;
+    }
+}
+
+/// Free space found again (SK1.4): the starts held for it go at the next look, once a placing ended or a fetch let its files go. Their
+/// words stay till then: the look starts them, or holds them again saying so.
+fn room_again() {
+    let n = kept(|k| {
+        let held: Vec<&mut Item> = k.items.iter_mut().filter(|i| i.state == State::Approved && i.due > 0 && i.why.as_deref().is_some_and(|w| w.starts_with(NO_ROOM))).collect();
+        let n = held.len();
+        for i in held {
+            i.due = 0;
+        }
+        n
+    });
+    if n > 0 {
+        wake_starts();
+    }
+}
+
+/// A picked record's batch asked for (SK2): its id kept on the item before (`next_start`), the batch sent through slskd's lane, the
+/// list looked at inside it just before each try (an item gone from the list, or no longer picked, sends nothing). An answer lost
+/// is read back by that id: slskd has it, it is under way; slskd does not know it, it is sent again under that id, once. An id kept
+/// and never answered (`fresh` false: a stop between) is read back first. slskd busy never reaches the item. Whether it is under
+/// way now (Fetching, its batch kept).
+async fn start_one(id: &str, slskd: &Slskd, folder: &Path, fresh: bool, held: Option<(String, i64)>) -> bool {
     let Some(it) = item(id).filter(|i| i.state == State::Approved) else { return false };
+    let Some(batch) = it.batch.clone() else { return false };
     let Some(f) = it.chosen.and_then(|c| it.folders.get(c)).cloned() else {
-        with_item(id, |i| (i.state, i.chosen, i.due) = (State::Waiting, None, 0));
+        with_item(id, |i| (i.state, i.chosen, i.due, i.batch) = (State::Waiting, None, 0, None));
         return false;
     };
-    let (batch, mut again) = match it.batch.clone() {
-        Some(batch) => match slskd.transfers(&batch).await {
-            Ok(_) => return taken(id, &batch),
-            Err(e) if e.is::<crate::slskd::NotKnown>() => (batch, false),
+    let mut again = fresh;
+    if !fresh {
+        match slskd.transfers(&batch).await {
+            Ok(_) => return taken(id, slskd, folder, &f.user, &batch).await,
+            // Not known: sent again only where a new one would be (M1).
+            Err(e) if e.is::<crate::slskd::NotKnown>() => {
+                if let Some((why, wait)) = held {
+                    with_item(id, |i| {
+                        i.batch = None;
+                        hold(i, why, wait);
+                    });
+                    return false;
+                }
+            }
             // slskd away: read back when due; busy: at the next look.
             Err(e) if e.is::<Away>() => {
                 with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN));
                 return false;
             }
             Err(_) => return false,
-        },
-        None => match ready_to_ask(id, &it, &f, folder).await {
-            Some(batch) => (batch, true),
-            None => return false,
-        },
-    };
+        }
+    }
     loop {
         let still = || kept(|k| k.items.iter().any(|i| i.id == id && i.state == State::Approved && i.batch.as_deref() == Some(batch.as_str())));
         match slskd.fetch_many(&batch, &f.user, &f.files, still).await {
-            Ok(()) => return taken(id, &batch),
+            Ok(()) => return taken(id, slskd, folder, &f.user, &batch).await,
             Err(e) if e.is::<crate::slskd::Gone>() => return false,
             Err(e) if e.is::<crate::slskd::Lost>() => match slskd.transfers(&batch).await {
-                Ok(_) => return taken(id, &batch),
+                Ok(_) => return taken(id, slskd, folder, &f.user, &batch).await,
                 Err(r) if r.is::<crate::slskd::NotKnown>() && again => again = false,
                 Err(r) => {
                     // Not known after its second sending: a new id next time. Not read: its id kept, read back when due.
@@ -1740,46 +1914,95 @@ async fn start_one(id: &str, slskd: &Slskd, folder: &Path) -> bool {
                 with_item(id, |i| {
                     on_failed(i, &f.user, format!("{e:#}"));
                 });
+                wake_starts();
                 return false;
             }
         }
     }
 }
 
-/// A picked item's batch taken by slskd: under way, followed from now.
-fn taken(id: &str, batch: &str) -> bool {
-    with_item(id, |i| (i.state, i.batch, i.percent, i.why) = (State::Fetching, Some(batch.to_string()), 0.0, None));
-    true
+/// A picked item's batch taken by slskd: under way, followed from now. Its item gone from the list while slskd took it (SK1.6, the
+/// review of part 2's note), the batch is let go at once, never left running unfollowed. Whether it is under way.
+async fn taken(id: &str, slskd: &Slskd, folder: &Path, user: &str, batch: &str) -> bool {
+    let on = kept(|k| {
+        let i = k.items.iter_mut().find(|i| i.id == id && i.state == State::Approved && i.batch.as_deref() == Some(batch))?;
+        (i.state, i.percent, i.why) = (State::Fetching, 0.0, None);
+        Some(())
+    });
+    if on.is_none() {
+        tracing::info!(target: "soulseek", batch, "a batch taken as its item left the list: let go");
+        let_go(slskd, folder, user, batch).await;
+        wake_starts();
+    }
+    on.is_some()
 }
 
-/// Whether a picked item may be asked for now (the floor, the room for its files): its new batch's id, kept on it, where it may.
-async fn ready_to_ask(id: &str, it: &Item, f: &Folder, folder: &Path) -> Option<String> {
-    // Below the disk floor (AL03.2, OQ-F1): a user's fetch begins no transfer, held saying so, and goes once there is space; an
-    // administrator's goes on, and one under way finishes.
-    if below_floor(it.record.request).await {
-        with_item(id, |i| hold(i, SHORT_OF_SPACE.into(), FLOOR_AGAIN));
-        return None;
-    }
-    // Room for its files on slskd's disk and the library's before a fetch begins (X4): a disk full is no user's failure.
-    let need: u64 = f.files.iter().map(|o| o.size.max(0) as u64).sum();
-    let dirs: Vec<PathBuf> = std::iter::once(folder.to_path_buf()).chain(library().ok()).collect();
-    if let Some(why) = short_of_room(need, &dirs) {
-        with_item(id, |i| hold(i, why, SLSKD_AGAIN));
-        return None;
-    }
-    // Its id kept before it is sent (SK2.3): an answer lost is read back by it, never sent under another.
-    let batch = crate::slskd::new_batch();
-    with_item(id, |i| i.batch = Some(batch.clone()));
-    Some(batch)
+/// The downloads followed now, by their items' ids: one follower each.
+static FOLLOWED: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
+
+/// The downloads due to be followed that no follower follows yet, marked followed (`downloads`).
+fn to_follow(items: &[Item], now: i64) -> Vec<String> {
+    let mut followed = FOLLOWED.lock().unwrap_or_else(|e| e.into_inner());
+    items.iter().filter(|i| i.state == State::Fetching && i.batch.is_some() && i.due <= now).filter(|i| followed.insert(i.id.clone())).map(|i| i.id.clone()).collect()
 }
 
-/// [`fetch`], through this slskd and its completed-downloads folder, each file gated by `gate` (the tests' stands in).
-async fn fetch_from<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, gate: G)
+/// The downloads' worker (SK1): at each look every picked record that may start is asked for, and every download gets its own
+/// follower; woken when a record is picked, a user's turn frees or room comes back, and once a minute. slskd not ready: what would
+/// start or be followed now is held, saying why.
+async fn downloads() {
+    loop {
+        match super::track_fetch::slskd_ready().await {
+            Ok((slskd, folder)) => {
+                let look = Look::read().await;
+                start_downloads(&every, &slskd, &folder, &look).await;
+                for id in kept(|k| to_follow(&k.items, now())) {
+                    let (slskd, folder) = (slskd.clone(), folder.clone());
+                    tokio::spawn(async move {
+                        follow_one(&id, &slskd, &folder).await;
+                        FOLLOWED.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                    });
+                }
+            }
+            Err(e) => {
+                let (why, t) = (format!("{e:#}"), now());
+                kept(|k| {
+                    for i in k.items.iter_mut().filter(|i| i.due <= t && matches!(i.state, State::Approved | State::Fetching)) {
+                        hold(i, why.clone(), SLSKD_AGAIN);
+                    }
+                });
+            }
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(60), STARTS.notified()).await;
+    }
+}
+
+/// The checks' worker (SK1.3): one record at a time, in the order its download ended, checked and then placed; woken when a download
+/// ends, and once a minute.
+async fn checks() {
+    loop {
+        if let Ok((slskd, folder)) = super::track_fetch::slskd_ready().await {
+            let places = Places::of_server();
+            let gate = |file: PathBuf, track: ReleaseTrack| async move { super::track_fetch::gate_track(&file, &track).await };
+            for _ in 0..1_000 {
+                if !check_next(&every, &slskd, &folder, &places, &gate).await {
+                    break;
+                }
+            }
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(60), CHECKS.notified()).await;
+    }
+}
+
+/// One record checked and placed (SK1.3): a placing a stop cut after its rename taken as placed (Y10); checked files whose placing
+/// failed placed again from them (X4); else its downloaded files gated one at a time, each on the one decode turn (`HEAVY`, the light
+/// rule), then placed. A file that fails sets its folder aside and fails its user, the next folder after. One whose item left the list
+/// meanwhile (SK1.6) is checked no further, and placed and set aside nowhere.
+async fn check_one<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, places: &Places, gate: &G)
 where
     G: Fn(PathBuf, ReleaseTrack) -> Fut,
     Fut: std::future::Future<Output = Result<f32>>,
 {
-    let Some(it) = item(id) else { return };
+    let Some(it) = item(id).filter(|i| i.state == State::Checking) else { return };
     // A placing a stop cut after its rename (Y10): its album is in place, so it is taken as placed, never placed again; what it came
     // from goes after.
     if let Some(to) = it.placing.as_deref().filter(|to| renamed(Path::new(to), &it.record)) {
@@ -1789,7 +2012,7 @@ where
         for b in it.batch.iter().chain(&it.checked) {
             std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(b)).ok();
         }
-        return;
+        return room_again();
     }
     // One noted but cut before its rename (V4): no placing is under way now, so the round may take it off again until it is placed
     // anew, noted then in the list's last look.
@@ -1803,73 +2026,35 @@ where
         if files.is_empty() {
             return with_item(id, |i| (i.state, i.checked, i.due, i.why) = (State::Approved, None, 0, Some("Its checked files were gone: fetched again".into())));
         }
-        return place_from(id, &it, &dir, &files).await;
+        return place_from(id, &it, &dir, &files, places).await;
     }
     let Some(f) = it.chosen.and_then(|c| it.folders.get(c)).cloned() else {
         return with_item(id, |i| (i.state, i.chosen, i.due) = (State::Waiting, None, 0));
     };
-    if it.state == State::Approved && !start_one(id, slskd, folder).await {
-        return;
-    }
-    let Some(it) = item(id) else { return };
     let Some(batch) = it.batch.clone() else { return };
-    // At its check its files are in (one held, or one a restart cut): slskd's list decides nothing, and may have let them
-    // go, which `follow` would hold against the user.
-    let ts = if it.state == State::Checking {
-        slskd.transfers(&batch).await.unwrap_or_default()
-    } else {
-        match follow(slskd, id, &batch).await {
-            Ok(t) => t,
-            // Its batch stays: slskd may well finish it, and it is followed again rather than left to run with no one to
-            // clean its folder.
-            Err(e) if e.is::<Away>() => {
-                tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "held for slskd");
-                return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN));
-            }
-            Err(e) => {
-                for t in slskd.transfers(&batch).await.unwrap_or_default() {
-                    slskd.drop_transfer(&f.user, &t.id).await;
-                }
-                // What came of it goes with it (X4): nothing else looks in a batch's folder.
-                std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(&batch)).ok();
-                // Cratarr's own side (X4, V5, U1: slskd's disk full or read-only, its folder refused it or gone): no user failed; the
-                // same folder fetched again later.
-                if e.is::<Local>() {
-                    tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "a fetch failed on Cratarr's side; held");
-                    return with_item(id, |i| {
-                        (i.state, i.batch, i.percent) = (State::Approved, None, 0.0);
-                        // Three in a row (Y9): held a day, not asked of its user every five minutes all day; Health says why.
-                        i.local_failures += 1;
-                        let wait = if i.local_failures >= LOCAL_AT_MOST { LOCAL_HOLD } else { SLSKD_AGAIN };
-                        hold(i, format!("{e:#}"), wait);
-                    });
-                }
-                tracing::info!(target: "soulseek", user = %f.user, reason = %format!("{e:#}"), "a user failed; the next folder");
-                return with_item(id, |i| {
-                    on_failed(i, &f.user, format!("{e:#}"));
-                });
-            }
-        }
-    };
-    // Its files in: a row of failures on Cratarr's side ends (Y9).
-    with_item(id, |i| (i.state, i.percent, i.local_failures) = (State::Checking, 100.0, 0));
     let dir = folder.join(crate::slskd::FOLDER).join(&batch);
     let release: Vec<ReleaseTrack> =
         judged_by(&it, &f).iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect();
-    let checked = match check(&dir, &f, &release, &gate).await {
-        Ok(verdict) => verdict,
+    let still = || kept(|k| k.items.iter().any(|i| i.id == id && i.batch.as_deref() == Some(batch.as_str())));
+    let checked = match check_while(&dir, &f, &release, gate, &still).await {
+        Ok(Some(verdict)) => verdict,
+        Ok(None) => {
+            std::fs::remove_dir_all(&dir).ok();
+            return tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "not checked further: it left the list");
+        }
         Err(why) => {
             tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %why, "held at its check");
             return with_item(id, |i| hold(i, why, CHECK_AGAIN));
         }
     };
-    for t in ts {
+    // At its check its files are in: slskd's list decides nothing, and its transfers are let go.
+    for t in slskd.transfers(&batch).await.unwrap_or_default() {
         slskd.drop_transfer(&f.user, &t.id).await;
     }
     match checked {
-        Ok(files) => place_from(id, &it, &dir, &files).await,
+        Ok(files) => place_from(id, &it, &dir, &files, places).await,
         Err(why) => {
-            let aside = set_aside(&dir, id, &f.user, &why);
+            let aside = set_aside(&dir, id, &f.user, &why, places.data.as_deref());
             // Gone either way (X4): set aside, or where it could not be, removed.
             std::fs::remove_dir_all(&dir).ok();
             with_item(id, |i| {
@@ -1879,70 +2064,204 @@ where
                 let n = why.len();
                 on_failed(i, &f.user, format!("{n} of its files failed the check; set aside"));
             });
+            wake_starts();
+            room_again();
         }
     }
 }
 
-/// Follows a batch until every transfer is done; refused, failed, queued too long or too slow is an error (its user
-/// failed). A read of slskd that fails is tried again, `READS` times in a row.
-async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd::Transfer>> {
-    let started = std::time::Instant::now();
-    let mut failed_reads = 0;
-    loop {
-        let ts = match slskd.transfers(batch).await {
-            Ok(t) if !t.is_empty() => {
-                failed_reads = 0;
-                t
-            }
-            // slskd busy (a proxy before it): read again, and no failed read (SK2.2 (d)).
-            Err(e) if e.is::<crate::slskd::Busy>() => {
-                tokio::time::sleep(READ_AGAIN).await;
-                continue;
-            }
-            other => {
-                failed_reads += 1;
-                if failed_reads >= READS {
-                    return Err(other.map_or_else(|e| e.context("slskd could not be read"), |_| anyhow::anyhow!("slskd could not be read: no transfers")));
+/// Between two reads of a download's transfers.
+const FOLLOW_EVERY: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 3_000 });
+
+/// What one read of a download's follower came to (`follow_step`).
+enum Followed {
+    /// Still going: read again.
+    Going,
+    /// The read failed, saying why (counted against `READS`).
+    Unread(anyhow::Error),
+    /// Its follower ends: the download ended, failed, was held, or its item left the list or the download.
+    Over,
+}
+
+/// Whether item `id` is still downloading batch `batch` (SK1.6: a follower whose item left stops at its next read).
+fn still_fetching(id: &str, batch: &str) -> bool {
+    kept(|k| k.items.iter().any(|i| i.id == id && i.state == State::Fetching && i.batch.as_deref() == Some(batch)))
+}
+
+/// A download's transfers dropped in slskd (through its lane) and what came of them removed: its user failed it, or slskd did.
+async fn let_go(slskd: &Slskd, folder: &Path, user: &str, batch: &str) {
+    for t in slskd.transfers(batch).await.unwrap_or_default() {
+        slskd.drop_transfer(user, &t.id).await;
+    }
+    std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(batch)).ok();
+}
+
+/// One read of a download (SK1): its percent kept, its own transfers' alone; every transfer done, it goes to its check, when it
+/// ended kept (`ended_at`), its user's turn free. A user's failure (refused, offline, an error, queued too long, too slow) fails that
+/// user for this record alone, the next folder after (`on_failed`); Cratarr's own side (slskd could not store a file) blames no one
+/// and holds (Y9); slskd shut down, or a batch it forgot (a restart, OQ-C3 (a)) is fetched again from the same folder once, no one
+/// blamed; forgotten twice in a row, the user is failed as ever. slskd busy (a 429) is read again, and no failed read.
+async fn follow_step(id: &str, slskd: &Slskd, folder: &Path, since: std::time::Instant) -> Followed {
+    let Some(it) = item(id).filter(|i| i.state == State::Fetching) else { return Followed::Over };
+    let (Some(batch), Some(user)) = (it.batch.clone(), chosen_user(&it).map(str::to_string)) else { return Followed::Over };
+    let record = format!("{} - {}", it.record.artist, it.record.album);
+    let read = slskd.transfers(&batch).await;
+    if !still_fetching(id, &batch) {
+        return Followed::Over;
+    }
+    let ts = match read {
+        Ok(ts) if !ts.is_empty() => ts,
+        Err(e) if e.is::<crate::slskd::Busy>() => return Followed::Going,
+        Err(e) if e.is::<crate::slskd::NotKnown>() => {
+            std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(&batch)).ok();
+            let again = it.forgotten == 0;
+            tracing::warn!(target: "soulseek", record = %record, again, "slskd does not know its batch (a restart)");
+            with_item(id, |i| {
+                if again {
+                    (i.state, i.batch, i.percent, i.why, i.due) = (State::Approved, None, 0.0, None, 0);
+                    i.forgotten += 1;
+                    i.local_failures += 1;
+                } else {
+                    i.forgotten = 0;
+                    on_failed(i, &user, format!("slskd could not be read: {e:#}"));
                 }
-                tokio::time::sleep(READ_AGAIN).await;
-                continue;
+            });
+            wake_starts();
+            return Followed::Over;
+        }
+        Ok(_) => return Followed::Unread(anyhow::anyhow!("slskd could not be read: no transfers")),
+        Err(e) => return Followed::Unread(e.context("slskd could not be read")),
+    };
+    if let Some(bad) = ts.iter().find(|t| t.done() && !t.succeeded()) {
+        let said = bad.exception.clone().unwrap_or_default();
+        let file = crate::slskd::base_name(&bad.filename).to_string();
+        let_go(slskd, folder, &user, &batch).await;
+        if local_failure(bad) {
+            tracing::warn!(target: "soulseek", record = %record, reason = %said, "a fetch failed on Cratarr's side; held");
+            with_item(id, |i| {
+                (i.state, i.batch, i.percent) = (State::Approved, None, 0.0);
+                // Three in a row (Y9): held a day, not asked of its user every five minutes all day; Health says why.
+                i.local_failures += 1;
+                let wait = if i.local_failures >= LOCAL_AT_MOST { LOCAL_HOLD } else { SLSKD_AGAIN };
+                hold(i, format!("slskd could not store {file}: {said}"), wait);
+            });
+        } else if said.contains("Application shut down") {
+            // slskd itself stopped (a restart, what the NAS saw on 2026-10-17): no user's doing; the same folder fetched again.
+            tracing::warn!(target: "soulseek", record = %record, "slskd shut down under a fetch: fetched again");
+            with_item(id, |i| {
+                (i.state, i.batch, i.percent, i.why, i.due) = (State::Approved, None, 0.0, None, 0);
+                i.local_failures += 1;
+            });
+        } else {
+            tracing::info!(target: "soulseek", user = %user, reason = %said, "a user failed; the next folder");
+            with_item(id, |i| {
+                on_failed(i, &user, format!("{file} was not sent{}", if said.is_empty() { String::new() } else { format!(": {said}") }));
+            });
+        }
+        wake_starts();
+        return Followed::Over;
+    }
+    if ts.iter().all(|t| t.done()) {
+        // Its files in: a row of failures on Cratarr's side ends (Y9), and its user's turn is free.
+        let ended = now_ms();
+        with_item(id, |i| (i.state, i.percent, i.local_failures, i.forgotten, i.ended_at, i.why) = (State::Checking, 100.0, 0, 0, ended, None));
+        wake_starts();
+        CHECKS.notify_one();
+        return Followed::Over;
+    }
+    let percent = ts.iter().map(|t| t.percent_complete).sum::<f64>() / ts.len() as f64;
+    let gave_up = if percent <= 0.0 && since.elapsed() > QUEUED_FOR {
+        Some(format!("It stayed in the user's queue over {} minutes", QUEUED_FOR.as_secs() / 60))
+    } else if since.elapsed() > FETCH_AT_MOST {
+        Some(format!("It took over {} hours", FETCH_AT_MOST.as_secs() / 3600))
+    } else {
+        None
+    };
+    if let Some(why) = gave_up {
+        let_go(slskd, folder, &user, &batch).await;
+        with_item(id, |i| {
+            on_failed(i, &user, why);
+        });
+        wake_starts();
+        return Followed::Over;
+    }
+    with_item(id, |i| i.percent = (percent * 10.0).round() / 10.0);
+    Followed::Going
+}
+
+/// A download followed until it ends (SK1): one read every `FOLLOW_EVERY`; `READS` failed reads in a row and slskd away hold it,
+/// its batch kept (slskd may well finish it), followed again when due; failed otherwise ("no transfers"), its user's.
+async fn follow_one(id: &str, slskd: &Slskd, folder: &Path) {
+    let since = std::time::Instant::now();
+    let mut unread = 0;
+    loop {
+        match follow_step(id, slskd, folder, since).await {
+            Followed::Over => return,
+            Followed::Going => {
+                unread = 0;
+                tokio::time::sleep(FOLLOW_EVERY).await;
             }
-        };
-        if let Some(bad) = ts.iter().find(|t| t.done() && !t.succeeded()) {
-            let said = bad.exception.as_deref().unwrap_or_default();
-            // Cratarr's own side, not the user's (X4, Y9): slskd could not store it.
-            if local_failure(bad) {
-                return Err(Local(format!("slskd could not store {}: {said}", crate::slskd::base_name(&bad.filename))).into());
+            Followed::Unread(e) => {
+                unread += 1;
+                if unread < READS {
+                    tokio::time::sleep(READ_AGAIN).await;
+                    continue;
+                }
+                let Some(it) = item(id).filter(|i| i.state == State::Fetching) else { return };
+                let (Some(batch), Some(user)) = (it.batch.clone(), chosen_user(&it).map(str::to_string)) else { return };
+                if e.is::<Away>() {
+                    tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "held for slskd");
+                    return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN));
+                }
+                let_go(slskd, folder, &user, &batch).await;
+                with_item(id, |i| {
+                    on_failed(i, &user, format!("{e:#}"));
+                });
+                wake_starts();
+                return;
             }
-            bail!("{} was not sent{}", crate::slskd::base_name(&bad.filename), bad.exception.as_ref().map(|e| format!(": {e}")).unwrap_or_default());
         }
-        if ts.iter().all(|t| t.done()) {
-            return Ok(ts);
-        }
-        let percent = ts.iter().map(|t| t.percent_complete).sum::<f64>() / ts.len() as f64;
-        if percent <= 0.0 && started.elapsed() > QUEUED_FOR {
-            bail!("It stayed in the user's queue over {} minutes", QUEUED_FOR.as_secs() / 60);
-        }
-        if started.elapsed() > FETCH_AT_MOST {
-            bail!("It took over {} hours", FETCH_AT_MOST.as_secs() / 3600);
-        }
-        with_item(id, |i| i.percent = (percent * 10.0).round() / 10.0);
-        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 }
 
-/// A fetch that failed on Cratarr's own side (X4, V5, U1): slskd could not store a file (its disk full or read-only, its folder refused
-/// it or gone). No user's failure.
-#[derive(Debug)]
-struct Local(String);
+/// The checks' worker woken: a download ended.
+static CHECKS: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// The downloads' worker woken: a record picked, a user's turn free, room again. Kept till it looks, unlike `WAKE`.
+static STARTS: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-impl std::fmt::Display for Local {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+/// The downloads' worker woken for its next look.
+fn wake_starts() {
+    STARTS.notify_one();
 }
 
-impl std::error::Error for Local {}
+/// Milliseconds since the epoch: when a download ended (`ended_at`).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+/// The next record of `within` to check at `now` (SK1.3): one downloaded (or a check or a placing a stop cut, or checked files whose
+/// placing failed), due, in the order its download ended, one whose end is not known (a stop, 0.16's) first; ended together, the
+/// list's order. Pure.
+fn next_check(items: &[Item], within: Within, now: i64) -> Option<String> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| within(i) && i.state == State::Checking && i.due <= now && (i.batch.is_some() || i.checked.is_some() || i.placing.is_some()))
+        .min_by_key(|(n, i)| (i.ended_at, *n))
+        .map(|(_, i)| i.id.clone())
+}
+
+/// One look of the checks' worker (SK1.3): the next downloaded record of `within` checked, then placed; whether there was one. One
+/// at a time, whatever downloads meanwhile; the next check begins once this one's placing ended.
+pub(crate) async fn check_next<G, Fut>(within: Within<'_>, slskd: &Slskd, folder: &Path, places: &Places, gate: &G) -> bool
+where
+    G: Fn(PathBuf, ReleaseTrack) -> Fut,
+    Fut: std::future::Future<Output = Result<f32>>,
+{
+    let Some(id) = kept(|k| next_check(&k.items, within, now())) else { return false };
+    check_one(&id, slskd, folder, places, gate).await;
+    true
+}
 
 /// .NET's exception types that are slskd's own disk's alone (Y9), as a transfer's exception may begin with one
 /// ("System.UnauthorizedAccessException: …"): access to slskd's own folder denied, and a part of its path or a file of it not found
@@ -1984,22 +2303,14 @@ fn local_failure(t: &crate::slskd::Transfer) -> bool {
     LOCAL_KINDS.contains(&kind) || LOCAL_SAYS.iter().any(|w| words.starts_with(&w.to_lowercase()))
 }
 
-/// Why a fetch of `need` bytes would not fit (X4): one of `dirs` (slskd's folder, the library) with less free than it and
-/// `ROOM_SPARE`. Where its free space cannot be read, nothing is said.
-fn short_of_room(need: u64, dirs: &[PathBuf]) -> Option<String> {
-    dirs.iter().find_map(|d| {
-        let free = crate::folders::free(d)?;
-        let want = need.saturating_add(ROOM_SPARE);
-        (free < want).then(|| format!("Too little free space for its files: {} MB needed, {} MB free", want / 1_000_000, free / 1_000_000))
-    })
-}
-
 /// What the check of a fetched folder found: its files in the release's order, or why each that failed did (by its name).
 type Verdict = std::result::Result<Vec<PathBuf>, BTreeMap<String, String>>;
 
-/// Every file of the fetched folder gated against its track (by `gate`): the verdict, or, where AcoustID could not be
-/// asked and no file has failed so far, none: what it said, as nothing is known yet.
-async fn check<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G) -> std::result::Result<Verdict, String>
+/// Every file of the fetched folder gated against its track (by `gate`), one at a time, each on the one decode turn (`HEAVY`, taken
+/// for the file and let go after: the light rule): the verdict, or, where AcoustID could not be asked and no file has failed so far,
+/// none: what it said, as nothing is known yet. `still` is asked before each file and after the last: where it says no (its item
+/// left the list, SK1.6), the check ends there, with no verdict (`None`).
+async fn check_while<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G, still: &(dyn Fn() -> bool + Sync)) -> std::result::Result<Option<Verdict>, String>
 where
     G: Fn(PathBuf, ReleaseTrack) -> Fut,
     Fut: std::future::Future<Output = Result<f32>>,
@@ -2012,6 +2323,9 @@ where
     let mut out = Vec::new();
     let mut why = BTreeMap::new();
     for (offered, track) in f.files.iter().zip(release) {
+        if !still() {
+            return Ok(None);
+        }
         let name = crate::slskd::base_name(&offered.filename).to_string();
         // One disc's file in its disc folder (X3): two discs may name a file alike.
         let disc = disc_of(&offered.filename);
@@ -2020,7 +2334,10 @@ where
             why.insert(name, "It is not in slskd's folder".into());
             continue;
         };
-        match gate(path.clone(), track.clone()).await {
+        let turn = super::analysis_pass::HEAVY.acquire().await.expect("the turn is never closed");
+        let heard = gate(path.clone(), track.clone()).await;
+        drop(turn);
+        match heard {
             Ok(_) => out.push(path),
             // None after it is asked about: AcoustID would not answer them either, and each would be decoded whole to find
             // out. A file failed already settles the folder.
@@ -2031,7 +2348,20 @@ where
             }
         }
     }
-    Ok(if why.is_empty() { Ok(out) } else { Err(why) })
+    if !still() {
+        return Ok(None);
+    }
+    Ok(Some(if why.is_empty() { Ok(out) } else { Err(why) }))
+}
+
+/// [`check_while`] of a folder whose item stays.
+#[cfg(test)]
+async fn check<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G) -> std::result::Result<Verdict, String>
+where
+    G: Fn(PathBuf, ReleaseTrack) -> Fut,
+    Fut: std::future::Future<Output = Result<f32>>,
+{
+    Ok(check_while(dir, f, release, gate, &|| true).await?.expect("it stays"))
 }
 
 /// The files anywhere under `dir`.
@@ -2066,8 +2396,8 @@ fn folders_for(lib: &Path, r: &Record) -> impl Iterator<Item = PathBuf> {
 /// The checked files placed (X4), the record's cover beside them, and the batch's folder they came from removed. A placing that
 /// fails keeps them there: the batch is let go (`checked`), no user is failed, and the record is placed again from them later. One
 /// taken off the list meanwhile (Y2: its record had otherwise, or its request gone) is placed nowhere, and its files go.
-async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
-    let lib = library();
+async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf], places: &Places) {
+    let lib = places.library.clone().map_err(|e| anyhow::anyhow!(e));
     // Its cover only once there is somewhere to put it: it may have to be fetched.
     let cover = match &lib {
         Ok(_) => cover_for(kept(|k| record_now(k, id)).map_or(it.record.record, |r| r.record)).await,
@@ -2110,6 +2440,8 @@ async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
             });
         }
     }
+    // Its files gone from slskd's folder, or kept: room for the next start either way (SK1.4).
+    room_again();
 }
 
 /// A placing's target noted on its item, with when (Y10), in the list's last look before the rename (V4): whether the item is still on
@@ -2319,8 +2651,8 @@ fn sweep_set_asides(data: &Path, now: i64) {
 
 /// A fetched folder set aside, with why each file failed beside it (`why.json`), in the data folder's
 /// `soulseek-set-aside`, for 14 days (X4); where it went.
-fn set_aside(dir: &Path, id: &str, user: &str, why: &BTreeMap<String, String>) -> Option<String> {
-    let data = crate::serve::instance()?.data_dir.clone()?;
+fn set_aside(dir: &Path, id: &str, user: &str, why: &BTreeMap<String, String>, data: Option<&Path>) -> Option<String> {
+    let data = data?.to_path_buf();
     let to = data.join(SET_ASIDE).join(format!("{id} {}", safe(user)));
     std::fs::create_dir_all(to.parent()?).ok()?;
     if std::fs::rename(dir, &to).is_err() {
@@ -2435,6 +2767,10 @@ mod tests {
             placing: None,
             placed_at: 0,
             place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
         };
         assert!(on_failed(&mut i, "a", "a is offline".into()));
         assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone(), i.failed.clone()), (State::Approved, Some(0), 1, None, vec!["a".to_string()]));
@@ -2480,6 +2816,10 @@ mod tests {
             placing: None,
             placed_at: 0,
             place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
         };
         kept(|k| k.items.push(i));
     }
@@ -2617,7 +2957,16 @@ mod tests {
         let (id, batch) = ("ss-gone", "b-gone");
         listed(id, State::Fetching, Some(batch));
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-gone-{}", std::process::id()));
-        fetch_from(id, &slskd_at(axum::Router::new()).await, &d, never_gated).await;
+        // Changed by round 1.3's plan (OQ-C3 (a), SK1.7): the first time slskd forgets a batch (a restart), the same folder is
+        // fetched again, under a new batch, with no user failed; it is never held for nothing.
+        let forgot = slskd_at(axum::Router::new()).await;
+        fetch_from(id, &forgot, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.batch.clone(), i.chosen, i.failed.clone(), i.local_failures), (State::Approved, None, Some(0), Vec::<String>::new(), 1), "the same folder again, no user failed");
+        assert!(i.due <= now(), "not held: fetched again at the next look");
+        // The second time in a row: its user failed as ever, the next folder.
+        with_item(id, |i| (i.state, i.batch) = (State::Fetching, Some("b-gone-again".into())));
+        fetch_from(id, &forgot, &d, never_gated).await;
         let i = item(id).unwrap();
         assert_eq!((i.state, i.batch.clone(), i.failed.clone()), (State::Approved, None, vec!["a".to_string()]), "the next folder: holding it would wait for ever");
     }
@@ -2634,17 +2983,31 @@ mod tests {
         assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd could not be reached")), "{:?}", i.why);
     }
 
-    #[test]
-    fn a_record_held_at_its_check_can_leave_the_list_and_one_at_work_cannot() {
+    /// Changed by round 1.3's plan (OQ-SK2 (a), the owner: "Out of the list" also stops a transfer under way): was
+    /// `a_record_held_at_its_check_can_leave_the_list_and_one_at_work_cannot`. A record held at its check leaves, its batch with it,
+    /// as before; so does one being checked, and one whose files are coming: its transfers dropped in slskd (through its lane) and
+    /// what came of them removed. Nobody blamed; the record stays off the list.
+    #[tokio::test]
+    async fn a_record_at_work_can_leave_the_list_and_its_transfers_stop() {
         listed("ss-work", State::Checking, Some("b-work"));
-        assert_eq!(dropped("ss-work", now()), None, "being checked");
-        assert!(item("ss-work").is_some());
         with_item("ss-work", |i| hold(i, "AcoustID is not set up".into(), CHECK_AGAIN));
-        assert_eq!(dropped("ss-work", now()).as_deref(), Some("b-work"), "its batch, for its folder to go");
+        assert_eq!(dropped("ss-work").and_then(|i| i.batch).as_deref(), Some("b-work"), "its batch, for its folder to go");
         assert!(item("ss-work").is_none());
-        listed("ss-coming", State::Fetching, Some("b-coming"));
-        with_item("ss-coming", |i| hold(i, "slskd could not be reached".into(), CHECK_AGAIN));
-        assert_eq!(dropped("ss-coming", now()), None, "its files may still be coming");
+        listed("ss-checked-now", State::Checking, Some("b-checked-now"));
+        assert_eq!(dropped("ss-checked-now").and_then(|i| i.batch).as_deref(), Some("b-checked-now"), "being checked: it leaves too");
+        let slskd = Scripted::new().hold_all(30.0);
+        let d = data_folder("oq-sk2");
+        picked("ss-coming", &["peer-a"]);
+        assert!(start_it("ss-coming", &slskd.client(), &d).await);
+        let batch = batch_of("ss-coming");
+        std::fs::create_dir_all(d.join(crate::slskd::FOLDER).join(&batch)).unwrap();
+        std::fs::write(d.join(crate::slskd::FOLDER).join(&batch).join("01 One.flac.part"), b"x").unwrap();
+        let it = dropped("ss-coming").expect("its files coming: it leaves too");
+        cancel_fetch(&slskd.client(), &d, &it).await;
+        assert!(item("ss-coming").is_none() && slskd.deleted(&batch), "its transfers dropped");
+        assert!(!d.join(crate::slskd::FOLDER).join(&batch).exists(), "its partial files removed");
+        assert!(it.failed.is_empty() && slskd.violations().is_empty());
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -2763,6 +3126,10 @@ mod tests {
             placing: None,
             placed_at: 0,
             place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
         };
         kept(|k| k.items.push(i));
         r
@@ -3694,7 +4061,7 @@ mod tests {
         // Taken off while a placing again was under way.
         kept(|k| k.items.retain(|i| i.id != id));
         fetched_to("y2-unplaced", batch);
-        place_from(id, &held, &dir, &files_under(&dir)).await;
+        place_from(id, &held, &dir, &files_under(&dir), &Places::of_server()).await;
         assert!(item(id).is_none(), "nothing written back");
         assert!(!dir.exists(), "placed nowhere, its files gone with it");
         std::fs::remove_dir_all(&d).ok();
@@ -4351,6 +4718,10 @@ mod tests {
             placing: None,
             placed_at: 0,
             place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
         };
         let mut found = item(State::Found);
         search_again(&mut found);
@@ -4485,10 +4856,32 @@ mod tests {
             placing: None,
             placed_at: 0,
             place_failures: 0,
+            ended_at: 0,
+            forgotten: 0,
+            auto: false,
+            found_at: 0,
         }
     }
 
     use crate::slskd::scripted::Scripted;
+
+    /// An item started as the downloads' worker's look starts it (its batch's id kept, sent through the lane); whether it is under way.
+    async fn start_it(id: &str, slskd: &Slskd, folder: &Path) -> bool {
+        start_downloads(&|i: &Item| i.id == id, slskd, folder, &Look::roomy()).await;
+        item(id).is_some_and(|i| i.state == State::Fetching)
+    }
+
+    /// The workers' seams in turn for one item, as 0.17's one fetcher took it up (`fetch_from`, which the tests before round 1.3
+    /// drove; they assert what they did): its start (the disks as they are), its download followed to its end, its check and placing.
+    async fn fetch_from<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, gate: G)
+    where
+        G: Fn(PathBuf, ReleaseTrack) -> Fut,
+        Fut: std::future::Future<Output = Result<f32>>,
+    {
+        start_downloads(&|i: &Item| i.id == id, slskd, folder, &Look::of_disks()).await;
+        follow_one(id, slskd, folder).await;
+        check_one(id, slskd, folder, &Places::of_server(), &gate).await;
+    }
 
     /// Every one of `futures` run together, on this task; their outputs in order.
     async fn all<'a, T>(mut futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = T> + 'a>>>) -> Vec<T> {
@@ -4528,13 +4921,13 @@ mod tests {
         }
         // A seventh under way, to be taken off (its transfers to DELETE).
         picked("ss-sk21-off", &["peer-g"]);
-        assert!(start_one("ss-sk21-off", &client, &d).await);
+        assert!(start_it("ss-sk21-off", &client, &d).await);
         let leaving = item("ss-sk21-off").unwrap();
         waiting_with("ss-sk21-s", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
         let ti1 = Offered { filename: r"z\07 Track.flac".into(), size: 1, extension: None, bit_rate: None, bit_depth: None, sample_rate: None, length: None, is_locked: false };
         let done = std::sync::atomic::AtomicBool::new(false);
         let work = async {
-            let starts = all(ids.iter().map(|id| Box::pin(start_one(id, &client, &d)) as std::pin::Pin<Box<dyn std::future::Future<Output = bool>>>).collect());
+            let starts = all(ids.iter().map(|id| Box::pin(start_it(id, &client, &d)) as std::pin::Pin<Box<dyn std::future::Future<Output = bool>>>).collect());
             let (started, _, bulk, _) = tokio::join!(starts, search_through("ss-sk21-s", &client), client.fetch("peer-z", &ti1), cancel_fetch(&client, &d, &leaving));
             done.store(true, std::sync::atomic::Ordering::SeqCst);
             (started, bulk)
@@ -4572,7 +4965,7 @@ mod tests {
         let kept_seen = seen.clone();
         let slskd = Scripted::new().busy(3).on_post(move |_| kept_seen.lock().unwrap().extend(item("ss-sk22")));
         picked("ss-sk22", &["peer-a"]);
-        assert!(start_one("ss-sk22", &slskd.client(), &d).await);
+        assert!(start_it("ss-sk22", &slskd.client(), &d).await);
         assert_eq!(slskd.post_offsets_secs(), [0, 1, 3, 7]);
         let i = item("ss-sk22").unwrap();
         assert!(i.state == State::Fetching && i.why.is_none() && i.failed.is_empty() && i.local_failures == 0 && i.misses == 0 && i.place_failures == 0, "{i:?}");
@@ -4586,7 +4979,7 @@ mod tests {
         // (a) Retry-After: 20.
         let slskd = Scripted::new().busy(3).retry_after(20);
         picked("ss-sk22-a", &["peer-a"]);
-        assert!(start_one("ss-sk22-a", &slskd.client(), &d).await);
+        assert!(start_it("ss-sk22-a", &slskd.client(), &d).await);
         assert_eq!(slskd.post_offsets_secs()[1], 20, "the second try 20 s after the first");
         // (b) A search's POST: it goes once taken, no miss, no why.
         let found = serde_json::json!([{ "username": "peer-s", "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100, "files": [
@@ -4601,7 +4994,7 @@ mod tests {
         // (c) A DELETE: it goes once taken, and the transfer is gone.
         let slskd = Scripted::new().hold_all(5.0);
         picked("ss-sk22-c", &["peer-c"]);
-        assert!(start_one("ss-sk22-c", &slskd.client(), &d).await);
+        assert!(start_it("ss-sk22-c", &slskd.client(), &d).await);
         let batch = item("ss-sk22-c").unwrap().batch.unwrap();
         slskd.then_busy(3);
         cancel_fetch(&slskd.client(), &d, &item("ss-sk22-c").unwrap()).await;
@@ -4609,7 +5002,7 @@ mod tests {
         // (d) A read answered 429 (a proxy before slskd): read again at its next look, no failed read of `READS`.
         let slskd = Scripted::new().read_busy(READS + 5);
         picked("ss-sk22-d", &["peer-d"]);
-        assert!(start_one("ss-sk22-d", &slskd.client(), &d).await);
+        assert!(start_it("ss-sk22-d", &slskd.client(), &d).await);
         fetch_from("ss-sk22-d", &slskd.client(), &d, |_, _| std::future::ready(Err(acoustid_away()))).await;
         let i = item("ss-sk22-d").unwrap();
         assert_eq!((i.state, i.failed.len(), i.batch.is_some()), (State::Checking, 0, true), "followed to its end: {i:?}");
@@ -4617,7 +5010,7 @@ mod tests {
         let slskd = Scripted::new().busy_for(600_000);
         picked("ss-sk22-e", &["peer-e"]);
         let client = slskd.client();
-        assert!(start_one("ss-sk22-e", &client, &d).await);
+        assert!(start_it("ss-sk22-e", &client, &d).await);
         let at = slskd.post_offsets_secs();
         assert_eq!(&at[..7], [0, 1, 3, 7, 15, 31, 61]);
         assert!(at.windows(2).skip(6).all(|w| w[1] - w[0] == 30), "{at:?}");
@@ -4649,8 +5042,8 @@ mod tests {
         picked("ss-sk23-1", &["peer-a"]);
         picked("ss-sk23-2", &["peer-b"]);
         let client = slskd.client();
-        start_one("ss-sk23-1", &client, &d).await;
-        start_one("ss-sk23-2", &client, &d).await;
+        start_it("ss-sk23-1", &client, &d).await;
+        start_it("ss-sk23-2", &client, &d).await;
         let noted = noted.lock().unwrap().clone();
         assert_eq!(noted.len(), 1);
         assert_eq!(Some(noted[0].0.clone()), noted[0].1, "its batch id on the item before its POST was sent");
@@ -4668,7 +5061,7 @@ mod tests {
         // (a) The connection cut before slskd took it: read back, not known, sent again under the same id, once.
         let slskd = Scripted::new().cut_before_taking();
         picked("ss-sk23-a", &["peer-a"]);
-        start_one("ss-sk23-a", &slskd.client(), &d).await;
+        start_it("ss-sk23-a", &slskd.client(), &d).await;
         let i = item("ss-sk23-a").unwrap();
         let tries: Vec<String> = slskd.posts().into_iter().filter(|o| o.status != 429).map(|o| o.batch).collect();
         assert_eq!(tries, [i.batch.clone().unwrap(), i.batch.clone().unwrap()], "the same id, twice in all");
@@ -4678,11 +5071,600 @@ mod tests {
         let slskd = Scripted::new();
         picked("ss-sk23-b", &["peer-a"]);
         with_item("ss-sk23-b", |i| i.batch = Some("00000000-0000-4000-8000-0000000002b3".into()));
-        start_one("ss-sk23-b", &slskd.client(), &d).await;
+        start_it("ss-sk23-b", &slskd.client(), &d).await;
         let i = item("ss-sk23-b").unwrap();
         assert_eq!(slskd.batches_of("peer-a"), ["00000000-0000-4000-8000-0000000002b3"]);
         assert!(i.state == State::Fetching && i.failed.is_empty() && i.why.is_none(), "{i:?}");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Items whose ids begin `prefix`: a test's own on the shared list.
+    fn ours(prefix: &str) -> impl Fn(&Item) -> bool + Sync + '_ {
+        move |i: &Item| i.id.starts_with(prefix)
+    }
+
+    /// One read of every download of `within`, as each follower makes one.
+    async fn follow_round(within: Within<'_>, slskd: &Slskd, folder: &Path) {
+        let ids: Vec<String> = kept(|k| k.items.iter().filter(|i| within(i) && i.state == State::Fetching).map(|i| i.id.clone()).collect());
+        for id in ids {
+            follow_step(&id, slskd, folder, std::time::Instant::now()).await;
+        }
+    }
+
+    /// The downloads' worker's looks and every follower's reads, again and again until nothing changes but how far.
+    async fn settle(within: Within<'_>, slskd: &Slskd, folder: &Path, look: &Look) {
+        let shape = || kept(|k| k.items.iter().filter(|i| within(i)).map(|i| (i.id.clone(), i.state, i.batch.clone(), i.chosen, i.failed.clone())).collect::<Vec<_>>());
+        for _ in 0..50 {
+            let before = shape();
+            start_downloads(within, slskd, folder, look).await;
+            follow_round(within, slskd, folder).await;
+            if shape() == before {
+                return;
+            }
+        }
+        panic!("never settled");
+    }
+
+    /// Every check of `within` taken until none is left.
+    async fn check_until_idle<G, Fut>(within: Within<'_>, slskd: &Slskd, folder: &Path, places: &Places, gate: &G)
+    where
+        G: Fn(PathBuf, ReleaseTrack) -> Fut,
+        Fut: std::future::Future<Output = Result<f32>>,
+    {
+        for _ in 0..50 {
+            if !check_next(within, slskd, folder, places, gate).await {
+                return;
+            }
+        }
+        panic!("checks never ended");
+    }
+
+    /// The batch an item downloads.
+    fn batch_of(id: &str) -> String {
+        item(id).and_then(|i| i.batch).unwrap_or_else(|| panic!("{id} has no batch"))
+    }
+
+    /// Where a test's checks place and set aside: its own Incoming library and data folder, under `d`.
+    fn places_in(d: &Path) -> Places {
+        Places { library: Ok(d.join("incoming")), data: Some(d.join("data")) }
+    }
+
+    /// Whether a folder holds anything (one not there holds nothing).
+    fn holds_anything(dir: &Path) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|mut r| r.next().is_some())
+    }
+
+    /// One call of the heard gate: the batch its file came in, its name, whether the one decode turn was held meanwhile, and the
+    /// watched items' states then.
+    type Call = (String, String, bool, Vec<(String, State)>);
+
+    /// The gate, heard (SCENARIOS-SK17, "Shapes and fakes"): each call recorded; two at once a violation; `block` stops each call
+    /// until `let_all_go`.
+    #[derive(Clone)]
+    struct Heard {
+        calls: Arc<Mutex<Vec<Call>>>,
+        at_once: Arc<std::sync::atomic::AtomicUsize>,
+        violations: Arc<Mutex<Vec<String>>>,
+        gate: Arc<tokio::sync::Semaphore>,
+        blocking: Arc<std::sync::atomic::AtomicBool>,
+        watch: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Heard {
+        fn new() -> Self {
+            Self {
+                calls: Arc::default(),
+                at_once: Arc::default(),
+                violations: Arc::default(),
+                gate: Arc::new(tokio::sync::Semaphore::new(0)),
+                blocking: Arc::default(),
+                watch: Arc::default(),
+            }
+        }
+        /// Each call waits for `let_all_go`.
+        fn block(self) -> Self {
+            self.blocking.store(true, std::sync::atomic::Ordering::SeqCst);
+            self
+        }
+        /// These items' states recorded with each call.
+        fn watching(self, ids: &[&str]) -> Self {
+            *self.watch.lock().unwrap() = ids.iter().map(|i| i.to_string()).collect();
+            self
+        }
+        fn let_all_go(&self) {
+            self.blocking.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.gate.add_permits(1000);
+        }
+        fn calls(&self) -> Vec<Call> {
+            self.calls.lock().unwrap().clone()
+        }
+        /// The batches heard, in turn, each once.
+        fn batches_in_order(&self) -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            for (b, ..) in self.calls() {
+                if out.last() != Some(&b) {
+                    out.push(b);
+                }
+            }
+            out
+        }
+        /// The watched items' states when `batch`'s first file was heard.
+        fn states_at(&self, batch: &str) -> Vec<(String, State)> {
+            self.calls().into_iter().find(|c| c.0 == batch).map(|c| c.3).unwrap_or_default()
+        }
+        /// The gate as Soulseek's check takes it.
+        fn gate(&self) -> impl Fn(PathBuf, ReleaseTrack) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f32>> + Send>> + use<> {
+            let me = self.clone();
+            move |file: PathBuf, _| {
+                let me = me.clone();
+                Box::pin(async move {
+                    let batch = file.parent().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let held = super::super::analysis_pass::HEAVY.try_acquire().map(drop).is_err();
+                    if me.at_once.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                        me.violations.lock().unwrap().push(format!("two files heard at once: {name}"));
+                    }
+                    let watched = me.watch.lock().unwrap().clone();
+                    let states = watched.iter().filter_map(|id| item(id).map(|i| (id.clone(), i.state))).collect();
+                    me.calls.lock().unwrap().push((batch, name, held, states));
+                    if me.blocking.load(std::sync::atomic::Ordering::SeqCst) {
+                        me.gate.acquire().await.unwrap().forget();
+                    }
+                    me.at_once.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(0.97)
+                })
+            }
+        }
+    }
+
+    /// SK1.1: every picked record starts at once, no cap of Cratarr's own: 25 batch POSTs one after another, all before any batch
+    /// ends; each item downloading its own batch, its percent its own batch's alone.
+    #[tokio::test]
+    async fn picked_records_download_at_once() {
+        let slskd = Scripted::new().slow(50).hold_all(10.0);
+        let d = data_folder("sk11");
+        let ids: Vec<String> = (1..=25).map(|n| format!("ss-sk11-{n:02}")).collect();
+        for (n, id) in ids.iter().enumerate() {
+            picked(id, &[&format!("peer-{:02}", n + 1)]);
+        }
+        let ours = ours("ss-sk11-");
+        let client = slskd.client();
+        start_downloads(&ours, &client, &d, &Look::roomy()).await;
+        assert_eq!(slskd.posts().len(), 25);
+        assert!(slskd.never_overlapped() && slskd.violations().is_empty(), "{:?}", slskd.violations());
+        assert_eq!(slskd.going().len(), 25, "all 25 before any batch ended");
+        let batches: Vec<String> = ids.iter().map(|id| batch_of(id)).collect();
+        assert!(slskd.posts().iter().all(|p| batches.contains(&p.batch)), "a POST for a picked item only, each its own");
+        follow_round(&ours, &client, &d).await;
+        assert!(ids.iter().all(|id| item(id).is_some_and(|i| i.state == State::Fetching && i.percent == 10.0)));
+        slskd.at(&batches[0], 55.0);
+        follow_round(&ours, &client, &d).await;
+        assert_eq!(item(&ids[0]).unwrap().percent, 55.0);
+        assert!(ids[1..].iter().all(|id| item(id).unwrap().percent == 10.0), "each moves with its own transfers alone");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK1.2: never two records of one user at once. ss-2 waits for peer-a's other record, approved, no why, no deadline; ss-4,
+    /// refused by peer-c, moves to its next folder (peer-a) and waits too, after ss-2; each goes the moment the one before it is
+    /// done downloading (gone to its check). Variants: ss-1's failure, or its request leaving, lets ss-2 go at once.
+    #[tokio::test]
+    async fn no_two_records_from_one_user_at_once() {
+        let d = data_folder("sk12");
+        let slskd = Scripted::new().hold_all(5.0).offline("peer-c").writes_to(&d, None);
+        picked("ss-sk12-1", &["peer-a"]);
+        picked("ss-sk12-2", &["peer-a"]);
+        picked("ss-sk12-3", &["peer-b"]);
+        picked("ss-sk12-4", &["peer-c", "peer-a"]);
+        let (ours, client, look) = (ours("ss-sk12-"), slskd.client(), Look::roomy());
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.post_users(), ["peer-a", "peer-b", "peer-c"]);
+        for id in ["ss-sk12-2", "ss-sk12-4"] {
+            let i = item(id).unwrap();
+            assert!(i.state == State::Approved && i.due == 0 && i.batch.is_none(), "{id} waits, no deadline: {i:?}");
+            assert!(!i.why.as_deref().unwrap_or_default().contains("Waiting"), "the wait's words are worked out from the list, never kept: {i:?}");
+        }
+        assert_eq!(item("ss-sk12-2").unwrap().why, None);
+        assert_eq!(item("ss-sk12-4").unwrap().why.as_deref(), Some("peer-c is offline"), "its failure's words, as today");
+        let four = item("ss-sk12-4").unwrap();
+        assert_eq!((four.failed.clone(), four.folders[0].user.as_str()), (vec!["peer-c".to_string()], "peer-a"), "its next folder, as today");
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.posts().len(), 3, "peer-a's turn taken: nothing more");
+        // ss-1's download ends: ss-2's POST at once, while ss-1 waits for its check; ss-4 after ss-2's.
+        slskd.release(&batch_of("ss-sk12-1"));
+        follow_round(&ours, &client, &d).await;
+        assert_eq!(item("ss-sk12-1").unwrap().state, State::Checking);
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.posts().last().map(|p| (p.user.clone(), p.batch.clone())), Some(("peer-a".to_string(), batch_of("ss-sk12-2"))));
+        assert_eq!(item("ss-sk12-4").unwrap().state, State::Approved, "ss-4 waits for ss-2");
+        slskd.release(&batch_of("ss-sk12-2"));
+        follow_round(&ours, &client, &d).await;
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.posts().last().map(|p| (p.user.clone(), p.batch.clone())), Some(("peer-a".to_string(), batch_of("ss-sk12-4"))));
+        for id in ["ss-sk12-1", "ss-sk12-2", "ss-sk12-3"] {
+            assert!(item(id).unwrap().failed.is_empty(), "{id}: nobody failed for waiting");
+        }
+        assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+        // ss-1's failure lets ss-2 go; peer-a failed for ss-1 alone.
+        let slskd = Scripted::new().hold_all(5.0);
+        picked("ss-sk12v-1", &["peer-a"]);
+        picked("ss-sk12v-2", &["peer-a"]);
+        let (ours, client) = (self::ours("ss-sk12v-"), slskd.client());
+        start_downloads(&ours, &client, &d, &look).await;
+        slskd.error(&batch_of("ss-sk12v-1"), "Remote connection closed");
+        follow_round(&ours, &client, &d).await;
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.post_users(), ["peer-a", "peer-a"]);
+        assert_eq!((item("ss-sk12v-1").unwrap().failed, item("ss-sk12v-2").unwrap().failed), (vec!["peer-a".to_string()], vec![]));
+        assert_eq!(item("ss-sk12v-2").unwrap().state, State::Fetching);
+        // ss-1's request leaving (the round takes it off, its fetch stopped) lets ss-2 go.
+        let slskd = Scripted::new().hold_all(5.0);
+        picked("ss-sk12w-1", &["peer-a"]);
+        picked("ss-sk12w-2", &["peer-a"]);
+        let (ours, client) = (self::ours("ss-sk12w-"), slskd.client());
+        start_downloads(&ours, &client, &d, &look).await;
+        let gone = kept(|k| take_off(&mut k.items, |i| i.id == "ss-sk12w-1"));
+        cancel_fetch(&client, &d, &gone[0]).await;
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.post_users(), ["peer-a", "peer-a"]);
+        assert!(item("ss-sk12w-2").unwrap().failed.is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK1.3: checks one at a time, in the order downloads ended (ended together, the list's order), each record placed before the
+    /// next check begins; each file heard on the one decode turn (`HEAVY`): while a test holds it, nothing is heard, and downloads
+    /// go on meanwhile.
+    #[tokio::test]
+    async fn checks_go_one_at_a_time_while_downloads_run() {
+        let d = data_folder("sk13");
+        let places = places_in(&d);
+        let slskd = Scripted::new().hold_all(20.0).writes_to(&d, None);
+        let ids = ["ss-sk13-1", "ss-sk13-2", "ss-sk13-3", "ss-sk13-4"];
+        for (id, peer) in ids.iter().zip(["peer-a", "peer-b", "peer-c", "peer-d"]) {
+            picked(id, &[peer]);
+        }
+        let (ours, client) = (ours("ss-sk13-"), slskd.client());
+        start_downloads(&ours, &client, &d, &Look::roomy()).await;
+        let (b1, b2, b3, b4) = (batch_of(ids[0]), batch_of(ids[1]), batch_of(ids[2]), batch_of(ids[3]));
+        let heavy = super::super::analysis_pass::HEAVY.acquire().await.unwrap();
+        slskd.release(&b2);
+        follow_round(&ours, &client, &d).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        slskd.release(&b1);
+        slskd.release(&b3);
+        follow_round(&ours, &client, &d).await;
+        let ended = |id: &str| item(id).unwrap().ended_at;
+        assert!(ended(ids[1]) > 0 && ended(ids[1]) < ended(ids[0]) && ended(ids[0]) <= ended(ids[2]), "when each ended is kept");
+        let gate = Heard::new().watching(&ids);
+        let g = gate.gate();
+        let checking = check_until_idle(&ours, &client, &d, &places, &g);
+        let meanwhile = async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(gate.calls().is_empty(), "nothing heard while the turn is held");
+            slskd.at(&b4, 60.0);
+            follow_round(&ours, &client, &d).await;
+            assert_eq!(item(ids[3]).unwrap().percent, 60.0, "ss-4's download read and kept meanwhile");
+            drop(heavy);
+        };
+        tokio::join!(checking, meanwhile);
+        assert_eq!(gate.batches_in_order(), [b2.clone(), b1.clone(), b3.clone()]);
+        assert_eq!(gate.calls().len(), 6, "every file of each, then the next");
+        assert!(gate.calls().iter().all(|c| c.2), "each file heard on the one turn");
+        assert!(gate.violations.lock().unwrap().is_empty(), "{:?}", gate.violations.lock().unwrap());
+        assert!(gate.states_at(&b1).contains(&(ids[1].to_string(), State::Placed)), "ss-2 placed before ss-1's check began");
+        assert!(gate.states_at(&b3).contains(&(ids[0].to_string(), State::Placed)), "ss-1 placed before ss-3's check began");
+        assert!(ids[..3].iter().all(|id| item(id).unwrap().state == State::Placed));
+        assert_eq!(item(ids[3]).unwrap().state, State::Fetching);
+        assert!(slskd.violations().is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK1.4 (a): every start weighs the files of every record downloading, waiting for its check, being checked or being placed:
+    /// on a disk with 5 GB free, two records of 2 GB start, the others hold saying so, blaming no one; once one is placed, the next
+    /// starts at the next look.
+    #[tokio::test]
+    async fn downloads_under_way_count_against_the_free_space() {
+        const GB: u64 = 1 << 30;
+        let d = data_folder("sk14");
+        let slskd = Scripted::new().hold_all(1.0).writes_to(&d, None);
+        let ids = ["ss-sk14-1", "ss-sk14-2", "ss-sk14-3", "ss-sk14-4"];
+        for (n, id) in ids.iter().enumerate() {
+            picked(id, &[&format!("peer-{}", n + 1)]);
+            with_item(id, |i| i.folders[0].files.iter_mut().for_each(|f| f.size = GB as i64));
+        }
+        let (ours, client, look) = (ours("ss-sk14-"), slskd.client(), Look::roomy().free_bytes(5 * GB));
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.posts().len(), 2);
+        for id in &ids[2..] {
+            let i = item(id).unwrap();
+            assert!(i.state == State::Approved && i.batch.is_none() && i.failed.is_empty(), "{i:?}");
+            assert!(i.why.as_deref().is_some_and(|w| w.starts_with("Too little free space")), "{:?}", i.why);
+        }
+        // Downloaded, waiting for its check: still weighed.
+        slskd.release(&batch_of(ids[0]));
+        follow_round(&ours, &client, &d).await;
+        assert_eq!(item(ids[0]).unwrap().state, State::Checking);
+        for id in &ids[2..] {
+            with_item(id, |i| i.due = 0);
+        }
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.posts().len(), 2, "its files still on the disk");
+        // Placed: the next starts at the next look, and the fourth still waits.
+        check_until_idle(&ours, &client, &d, &places_in(&d), &|_, _| std::future::ready(Ok(0.97))).await;
+        assert_eq!(item(ids[0]).unwrap().state, State::Placed);
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.post_users().len(), 3);
+        assert_eq!(item(ids[2]).unwrap().state, State::Fetching);
+        assert!(item(ids[3]).unwrap().why.as_deref().is_some_and(|w| w.starts_with("Too little free space")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK1.4 (b): below the disk floor no user's download starts (AL03.2), each saying the server is short of space; an
+    /// administrator's tick goes; space again, all of them go at once, no cap.
+    #[tokio::test]
+    async fn below_the_floor_no_users_download_starts() {
+        let d = data_folder("sk14f");
+        let slskd = Scripted::new().hold_all(1.0);
+        let alices = ["ss-sk14f-a1", "ss-sk14f-a2", "ss-sk14f-a3"];
+        for (n, id) in alices.iter().chain(&["ss-sk14f-r1", "ss-sk14f-r2"]).enumerate() {
+            picked(id, &[&format!("peer-f{n}")]);
+            with_item(id, |i| i.record.request = if n < 3 { 101 + n as i64 } else { 198 + n as i64 });
+        }
+        let (ours, client) = (ours("ss-sk14f-"), slskd.client());
+        start_downloads(&ours, &client, &d, &Look::roomy().below_floor(&[101, 102, 103])).await;
+        assert_eq!(slskd.post_users(), ["peer-f3", "peer-f4"], "root's two");
+        for id in alices {
+            let i = item(id).unwrap();
+            assert!(i.state == State::Approved && i.why.as_deref() == Some(SHORT_OF_SPACE) && i.failed.is_empty() && i.batch.is_none(), "{i:?}");
+        }
+        space_again();
+        start_downloads(&ours, &client, &d, &Look::roomy()).await;
+        assert_eq!(slskd.posts().len(), 5, "all three at once");
+        assert!(alices.iter().all(|id| item(id).unwrap().state == State::Fetching));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK1.5 (kind 3): a user gone offline mid-transfer fails that record alone: its transfers dropped, its folder removed, the
+    /// record to its next folder at once; the user's turn free, so their other record goes by its own try; another download untouched.
+    #[tokio::test]
+    async fn a_user_gone_offline_fails_that_record_alone() {
+        let d = data_folder("sk15");
+        let slskd = Scripted::new().hold_all(5.0).writes_to(&d, None);
+        picked("ss-sk15-1", &["peer-a", "peer-b"]);
+        picked("ss-sk15-2", &["peer-c"]);
+        picked("ss-sk15-3", &["peer-a"]);
+        let (ours, client, look) = (ours("ss-sk15-"), slskd.client(), Look::roomy());
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.post_users(), ["peer-a", "peer-c"]);
+        let (b1, b2) = (batch_of("ss-sk15-1"), batch_of("ss-sk15-2"));
+        std::fs::create_dir_all(d.join(crate::slskd::FOLDER).join(&b1)).unwrap();
+        slskd.at(&b1, 40.0);
+        follow_round(&ours, &client, &d).await;
+        slskd.error(&b1, "Remote connection closed");
+        settle(&ours, &client, &d, &look).await;
+        let one = item("ss-sk15-1").unwrap();
+        assert_eq!((one.failed.clone(), one.state, one.folders[0].user.as_str()), (vec!["peer-a".to_string()], State::Fetching, "peer-b"));
+        assert!(slskd.deleted(&b1) && !d.join(crate::slskd::FOLDER).join(&b1).exists(), "its transfers dropped, its folder removed");
+        assert_eq!(slskd.post_users(), ["peer-a", "peer-c", "peer-b", "peer-a"], "ss-1 to peer-b at once, ss-3's turn on peer-a");
+        let three = item("ss-sk15-3").unwrap();
+        assert!(three.failed.is_empty() && three.state == State::Fetching);
+        slskd.at(&b2, 70.0);
+        follow_round(&ours, &client, &d).await;
+        let two = item("ss-sk15-2").unwrap();
+        assert_eq!((two.state, two.percent, two.batch.as_deref()), (State::Fetching, 70.0, Some(b2.as_str())), "untouched");
+        assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+        // peer-a still offline: ss-3's own try is refused, and peer-a failed for it by that try alone.
+        let slskd = Scripted::new().hold_all(5.0);
+        picked("ss-sk15v-1", &["peer-a", "peer-b"]);
+        picked("ss-sk15v-3", &["peer-a"]);
+        let (ours, client) = (self::ours("ss-sk15v-"), slskd.client());
+        start_downloads(&ours, &client, &d, &look).await;
+        slskd.error(&batch_of("ss-sk15v-1"), "Remote connection closed");
+        slskd.then_offline("peer-a");
+        follow_round(&ours, &client, &d).await;
+        assert!(item("ss-sk15v-3").unwrap().failed.is_empty(), "not failed before it asked");
+        settle(&ours, &client, &d, &look).await;
+        assert_eq!(item("ss-sk15v-3").unwrap().failed, ["peer-a"], "failed by its own try");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK1.6 (kind 3), one way of leaving: alice's four requests leave while ss-q1's POST is being tried again in the lane, ss-q2
+    /// downloads, ss-q3 waits for its check and ss-q4 is being checked (its first file under way); `arrived`: each record comes into
+    /// Incoming through Lidarr instead (X1).
+    async fn four_stages_leave(tag: &str, arrived: bool) {
+        let d = data_folder(tag);
+        let places = places_in(&d);
+        let slskd = Scripted::new().hold_all(10.0).writes_to(&d, None).real_clock();
+        let client = slskd.client();
+        let id = |q: &str| format!("ss-{tag}-{q}");
+        for (n, q) in ["q2", "q3", "q4"].iter().enumerate() {
+            picked(&id(q), &[&format!("peer-{tag}-{q}")]);
+            with_item(&id(q), |i| (i.record.request, i.record.record) = (302 + n as i64, 9_302 + n as i64));
+        }
+        // bob's record, waiting for peer-q2's other one.
+        picked(&id("q5"), &[&format!("peer-{tag}-q2")]);
+        with_item(&id("q5"), |i| (i.record.request, i.record.record) = (399, 9_399));
+        let prefix = format!("ss-{tag}-");
+        let ours = ours(&prefix);
+        start_downloads(&ours, &client, &d, &Look::roomy()).await;
+        let (b2, b3, b4) = (batch_of(&id("q2")), batch_of(&id("q3")), batch_of(&id("q4")));
+        slskd.release(&b4);
+        follow_round(&ours, &client, &d).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        slskd.release(&b3);
+        follow_round(&ours, &client, &d).await;
+        picked(&id("q1"), &[&format!("peer-{tag}-q1")]);
+        with_item(&id("q1"), |i| (i.record.request, i.record.record) = (301, 9_301));
+        slskd.then_busy(3);
+        let gate = Heard::new().block();
+        let g = gate.gate();
+        let q1 = id("q1");
+        let only_q1 = |i: &Item| i.id == q1;
+        let leave = async {
+            while gate.calls().is_empty() || !slskd.posts().iter().any(|p| p.user.ends_with("-q1")) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // The round: the requests taken back (or their records arrived), their items off the list, their fetches stopped.
+            let mine: Vec<Item> = ["q1", "q2", "q3", "q4"].iter().map(|q| item(&id(q)).unwrap()).collect();
+            let mut k = Kept { items: mine.clone(), ..Kept::default() };
+            let approved: Vec<crate::userdata::Request> = if arrived { (301..=304).map(|r| asked(r, None)).collect() } else { Vec::new() };
+            let of: Vec<_> = if arrived { (9_301..=9_304).map(had).collect() } else { Vec::new() };
+            let stopped = take_requests(&mut k, &approved, &of, &[]);
+            assert!(k.items.is_empty(), "all four off the list");
+            kept(|q| q.items.retain(|i| !mine.iter().any(|m| m.id == i.id)));
+            for it in &stopped {
+                cancel_fetch(&client, &d, it).await;
+            }
+            gate.let_all_go();
+            stopped
+        };
+        let roomy = Look::roomy();
+        let (stopped, (), ()) = tokio::join!(leave, check_until_idle(&ours, &client, &d, &places, &g), start_downloads(&only_q1, &client, &d, &roomy));
+        assert_eq!(stopped.len(), 4, "each one's fetch stopped");
+        assert!(stopped.iter().all(|i| i.failed.is_empty() && i.local_failures == 0), "nobody failed");
+        // ss-q1: no batch taken; the start looked inside the lane and found it gone.
+        assert!(slskd.batches_of(&format!("peer-{tag}-q1")).is_empty() && slskd.posts().iter().filter(|p| p.user.ends_with("-q1")).all(|p| p.status == 429));
+        // ss-q2: its transfers dropped, its folder gone; its follower stops at its next read.
+        assert!(slskd.deleted(&b2) && !d.join(crate::slskd::FOLDER).join(&b2).exists());
+        let reads = slskd.reads_of(&b2);
+        assert!(matches!(follow_step(&id("q2"), &client, &d, std::time::Instant::now()).await, Followed::Over));
+        assert!(slskd.reads_of(&b2) <= reads + 1, "no more reads after the next");
+        // ss-q3: its files removed, never heard; ss-q4: the file under way finished, nothing more heard, nothing placed or set aside.
+        assert!(!d.join(crate::slskd::FOLDER).join(&b3).exists());
+        let heard = gate.calls();
+        assert!(!heard.iter().any(|c| c.0 == b3), "ss-q3's files never heard");
+        assert_eq!(heard.iter().filter(|c| c.0 == b4).count(), 1, "ss-q4's file under way finished, no other heard");
+        assert!(!holds_anything(&d.join("incoming")) && !holds_anything(&d.join("data").join(SET_ASIDE)), "nothing placed, nothing set aside");
+        assert!(["q1", "q2", "q3", "q4"].iter().all(|q| item(&id(q)).is_none()));
+        // Any record waiting for those users goes at once.
+        start_downloads(&ours, &client, &d, &Look::roomy()).await;
+        assert_eq!(item(&id("q5")).unwrap().state, State::Fetching);
+        assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK1.6 (kind 3): a request taken back, or its record arriving, meanwhile stops its record at every stage (OQ-SK2 (a)).
+    #[tokio::test]
+    async fn a_request_that_leaves_stops_its_record_at_every_stage() {
+        four_stages_leave("sk16", false).await;
+        four_stages_leave("sk16x", true).await;
+    }
+
+    /// SK1.7 (kind 3): slskd restarts with many under way. (a) It answers nothing a while: every download holds, its batch kept,
+    /// nobody failed, all followed again once it answers. (b) It forgot b1; (c) b2's transfers ended "Application shut down": each
+    /// fetched again from the same folder under a new batch, through the lane, nobody failed, `local_failures` 1; ss-5 still waits for
+    /// peer-a. (d) Forgotten a second time in a row: peer-a failed for ss-1 as ever, its next folder fetched.
+    #[tokio::test]
+    async fn a_slskd_restart_blames_no_user_and_fetches_each_again_once() {
+        let d = data_folder("sk17");
+        let slskd = Scripted::new().hold_all(30.0);
+        picked("ss-sk17-1", &["peer-a", "peer-d"]);
+        picked("ss-sk17-2", &["peer-b"]);
+        picked("ss-sk17-3", &["peer-c"]);
+        picked("ss-sk17-5", &["peer-a"]);
+        let (ours, client, look) = (ours("ss-sk17-"), slskd.client(), Look::roomy());
+        start_downloads(&ours, &client, &d, &look).await;
+        assert_eq!(slskd.post_users(), ["peer-a", "peer-b", "peer-c"]);
+        let (b1, b2, b3) = (batch_of("ss-sk17-1"), batch_of("ss-sk17-2"), batch_of("ss-sk17-3"));
+        // (a)
+        let away = slskd_gone().await;
+        for id in ["ss-sk17-1", "ss-sk17-2", "ss-sk17-3"] {
+            follow_one(id, &away, &d).await;
+            let i = item(id).unwrap();
+            assert!(i.state == State::Fetching && i.batch.is_some() && i.failed.is_empty() && i.due > now(), "{id} held, its batch kept: {i:?}");
+        }
+        for id in ["ss-sk17-1", "ss-sk17-2", "ss-sk17-3"] {
+            with_item(id, |i| i.due = 0);
+        }
+        follow_round(&ours, &client, &d).await;
+        assert!(["ss-sk17-1", "ss-sk17-2", "ss-sk17-3"].iter().all(|id| item(id).unwrap().percent == 30.0), "followed again");
+        // (b) and (c)
+        slskd.forget(&b1);
+        slskd.error(&b2, "Application shut down");
+        settle(&ours, &client, &d, &look).await;
+        for (id, was) in [("ss-sk17-1", &b1), ("ss-sk17-2", &b2)] {
+            let i = item(id).unwrap();
+            assert!(i.failed.is_empty() && i.local_failures == 1 && i.state == State::Fetching && i.batch.as_ref() != Some(was) && i.chosen == Some(0), "{id}: {i:?}");
+        }
+        assert_eq!(slskd.post_users()[3..], ["peer-a", "peer-b"], "again, one after another");
+        assert_eq!(batch_of("ss-sk17-3"), b3);
+        assert_eq!(item("ss-sk17-5").unwrap().state, State::Approved, "ss-5 waits for ss-1's new batch");
+        // (d)
+        slskd.forget(&batch_of("ss-sk17-1"));
+        settle(&ours, &client, &d, &look).await;
+        let one = item("ss-sk17-1").unwrap();
+        assert_eq!((one.failed.clone(), one.state, one.folders[0].user.as_str()), (vec!["peer-a".to_string()], State::Fetching, "peer-d"));
+        assert_eq!(item("ss-sk17-5").unwrap().state, State::Fetching, "peer-a free: ss-5 goes");
+        assert!(slskd.never_overlapped() && slskd.violations().is_empty(), "{:?}", slskd.violations());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// The review of part 2, M1: an id kept and never answered (a stop between keeping it and its POST) is sent again only where a
+    /// new one would be: below the floor a user's waits (AL03.2), short of room it holds (X4); one slskd has is followed as ever.
+    #[tokio::test]
+    async fn a_kept_batch_sent_again_waits_below_the_floor_and_for_room() {
+        let d = data_folder("m1");
+        let slskd = Scripted::new().hold_all(5.0);
+        let client = slskd.client();
+        picked("ss-m1-floor", &["peer-a"]);
+        with_item("ss-m1-floor", |i| (i.record.request, i.batch) = (501, Some(crate::slskd::new_batch())));
+        start_downloads(&ours("ss-m1-floor"), &client, &d, &Look::roomy().below_floor(&[501])).await;
+        let i = item("ss-m1-floor").unwrap();
+        assert!(slskd.posts().is_empty(), "no transfer of a user's below the floor");
+        assert_eq!((i.state, i.why.as_deref()), (State::Approved, Some(SHORT_OF_SPACE)));
+        picked("ss-m1-room", &["peer-b"]);
+        with_item("ss-m1-room", |i| i.batch = Some(crate::slskd::new_batch()));
+        start_downloads(&ours("ss-m1-room"), &client, &d, &Look::roomy().free_bytes(1)).await;
+        assert!(slskd.posts().is_empty(), "nothing sent short of room");
+        assert!(item("ss-m1-room").unwrap().why.as_deref().is_some_and(|w| w.starts_with("Too little free space")));
+        // One slskd took before the stop: read back and followed, the floor holding nothing under way.
+        picked("ss-m1-going", &["peer-c"]);
+        with_item("ss-m1-going", |i| i.record.request = 503);
+        assert!(start_it("ss-m1-going", &client, &d).await);
+        with_item("ss-m1-going", |i| i.state = State::Approved);
+        start_downloads(&ours("ss-m1-going"), &client, &d, &Look::roomy().below_floor(&[503])).await;
+        assert_eq!(item("ss-m1-going").unwrap().state, State::Fetching);
+        assert_eq!(slskd.posts().len(), 1, "never sent twice");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// The review of part 2's note for SK1.6: an item taken off the list while its POST is in flight (slskd taking it, its answer not
+    /// back yet): its batch is let go once slskd answers, never left running unfollowed.
+    #[tokio::test]
+    async fn a_batch_in_flight_when_its_item_leaves_is_let_go() {
+        let d = data_folder("sk16-flight");
+        let arrived = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = arrived.clone();
+        let slskd = Scripted::new().slow(300).hold_all(5.0).on_post(move |_| seen.store(true, std::sync::atomic::Ordering::SeqCst));
+        let client = slskd.client();
+        picked("ss-sk16f-q0", &["peer-q0"]);
+        let leave = async {
+            while !arrived.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let gone = kept(|k| take_off(&mut k.items, |i| i.id == "ss-sk16f-q0"));
+            cancel_fetch(&client, &d, &gone[0]).await;
+            gone[0].batch.clone().unwrap()
+        };
+        let (roomy, mine) = (Look::roomy(), ours("ss-sk16f-"));
+        let (batch, ()) = tokio::join!(leave, start_downloads(&mine, &client, &d, &roomy));
+        assert!(item("ss-sk16f-q0").is_none());
+        assert_eq!(slskd.batches_of("peer-q0"), [batch.clone()], "slskd took it");
+        assert!(slskd.deleted(&batch), "and it was let go, not left running");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// The review of part 2, M2 (SK2.2 (d)'s reads beside the follow): a 429 answering a search's state or its answers is slskd busy:
+    /// read again, never a miss, never "429" in a why.
+    #[tokio::test]
+    async fn a_busy_read_of_a_search_is_no_miss() {
+        let found = serde_json::json!([{ "username": "peer-s", "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100, "files": [
+            { "filename": r"x\Air\Moon Safari\01 One.flac", "size": 1000, "length": 100 }, { "filename": r"x\Air\Moon Safari\02 Two.flac", "size": 1000, "length": 200 } ] }]);
+        // Every rung of the ladder meets them (three rungs here).
+        let slskd = Scripted::new().answers(found.as_array().unwrap().clone()).responses_busy(5);
+        waiting_with("ss-m2-search", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
+        search_through("ss-m2-search", &slskd.client()).await;
+        let i = item("ss-m2-search").unwrap();
+        assert_eq!((i.state, i.misses, i.why.clone()), (State::Found, 0, None), "{i:?}");
     }
 
     /// RQ01.8 (kind 4). (a) Two administrators tick different sources of one Found item at once: the first wins, as a tick acts on a

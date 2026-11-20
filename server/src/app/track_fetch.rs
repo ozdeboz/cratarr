@@ -39,6 +39,10 @@ const PLACE_SECS: i64 = 5;
 const SEARCH_FOR: Duration = Duration::from_secs(60);
 /// Reads of slskd that may fail in a row before a fetch is given up.
 const READS: u32 = 15;
+/// Between two looks at a search's state, at a transfer, and after a read that failed.
+const SEARCHED_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 1_000 });
+const TRANSFER_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 2_000 });
+const READ_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 4_000 });
 /// How long a fetch may wait in an uploader's queue before it is given up.
 const QUEUED_FOR: Duration = Duration::from_secs(30 * 60);
 /// Staged files left from before (a restart, a fetch never added) go after this long.
@@ -350,18 +354,7 @@ pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Re
     });
     let job = id.clone();
     tokio::spawn(async move {
-        let found = async {
-            let sid = slskd.search(&text).await?;
-            let started = std::time::Instant::now();
-            while !slskd.searched(&sid).await? && started.elapsed() < SEARCH_FOR {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            let answers = slskd.answers(&sid).await;
-            slskd.forget(&sid).await;
-            // FLAC and MP3 only: the library's formats, which Cratarr writes tags into.
-            anyhow::Ok(crate::slskd::candidates(answers?, length_ms).into_iter().filter(|c| matches!(c.format.as_str(), "flac" | "mp3")).enumerate().map(|(i, c)| Candidate { id: i, ..c }).collect::<Vec<_>>())
-        }
-        .await;
+        let found = searched_through(&slskd, &text, length_ms).await;
         jobs(|j| {
             if let Some(s) = j.searches.get_mut(&job) {
                 match found {
@@ -372,6 +365,19 @@ pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Re
         });
     });
     Ok(id)
+}
+
+/// A single track's search through this slskd: its candidates, FLAC and MP3 only (the library's formats, which Cratarr writes tags
+/// into).
+async fn searched_through(slskd: &Slskd, text: &str, length_ms: Option<i64>) -> Result<Vec<Candidate>> {
+    let sid = slskd.search(text).await?;
+    let started = std::time::Instant::now();
+    while !slskd.searched(&sid).await? && started.elapsed() < SEARCH_FOR {
+        tokio::time::sleep(SEARCHED_AGAIN).await;
+    }
+    let answers = slskd.answers(&sid).await;
+    slskd.forget(&sid).await;
+    Ok(crate::slskd::candidates(answers?, length_ms).into_iter().filter(|c| matches!(c.format.as_str(), "flac" | "mp3")).enumerate().map(|(i, c)| Candidate { id: i, ..c }).collect())
 }
 
 pub fn search_view(id: &str) -> Option<SearchView> {
@@ -505,12 +511,17 @@ async fn follow(slskd: &Slskd, c: &Candidate, batch: &str, folder: &Path, stage:
                 failed_reads = 0;
                 t
             }
+            // slskd busy (a 429 from a proxy before it): read again, and no failed read (M2).
+            Err(e) if e.is::<crate::slskd::Busy>() => {
+                tokio::time::sleep(READ_AGAIN).await;
+                continue;
+            }
             Err(e) => {
                 failed_reads += 1;
                 if failed_reads >= READS {
                     return Err(e);
                 }
-                tokio::time::sleep(Duration::from_secs(4)).await;
+                tokio::time::sleep(READ_AGAIN).await;
                 continue;
             }
         };
@@ -522,7 +533,7 @@ async fn follow(slskd: &Slskd, c: &Candidate, batch: &str, folder: &Path, stage:
             bail!("{} did not send it", c.user);
         }
         told(t.percent_complete);
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(TRANSFER_AGAIN).await;
     };
     if !t.succeeded() {
         slskd.drop_transfer(&c.user, &t.id).await;
@@ -1169,6 +1180,32 @@ pub fn undo_at(file: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The review of round 1.3's part 2, M2 (SK2.2 (d)): single-track fetch's reads meeting slskd busy (a 429, a proxy before it)
+    /// are read again: never a failed search, never a failed read of its transfer, never "429" in its why.
+    #[tokio::test]
+    async fn single_track_reads_meeting_a_busy_slskd_go_on() {
+        let answers = serde_json::json!([{ "username": "peer-s", "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100,
+            "files": [{ "filename": r"x\Glass Harbour\01 Slack Water.flac", "size": 1000, "length": 100 }] }]);
+        let slskd = crate::slskd::scripted::Scripted::new().read_busy(2).answers(answers.as_array().unwrap().clone()).responses_busy(1);
+        let found = searched_through(&slskd.client(), "Glass Harbour Slack Water", None).await.expect("no failed search for slskd busy");
+        assert_eq!(found.len(), 1);
+        let d = std::env::temp_dir().join(format!("cratarr-single-busy-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let slskd = crate::slskd::scripted::Scripted::new().read_busy(READS + 5).writes_to(&d, None);
+        let file = crate::slskd::Offered { filename: r"x\01 Slack Water.flac".into(), size: 1, extension: None, bit_rate: None, bit_depth: None, sample_rate: None, length: None, is_locked: false };
+        let id = fetch_through_for_tests(&slskd.client(), d.clone(), d.join("staging"), "peer-s", file).await.unwrap();
+        let started = std::time::Instant::now();
+        while fetch_view(&id).is_some_and(|v| matches!(v.state, Fetching::Queued | Fetching::Downloading | Fetching::Checking)) && started.elapsed() < Duration::from_secs(10) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let v = fetch_view(&id).unwrap();
+        let why = v.why.clone().unwrap_or_default();
+        assert!(!why.contains("429") && !why.contains("slskd"), "followed to its end, then judged by the gate alone: {v:?}");
+        assert!(matches!(v.state, Fetching::Passed | Fetching::Refused), "{v:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     /// What a Better copy leaves: `added` in its album, the replaced track `old` named for the trash (paths relative to
     /// the library), and what its Undo reads.
