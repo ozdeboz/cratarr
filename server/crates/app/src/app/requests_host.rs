@@ -24,9 +24,7 @@ pub trait RequestsHost: Send + Sync + 'static {
     fn lidarr(&self) -> Option<crate::lidarr::Lidarr>;
     /// What Lidarr adds an album with: the profiles and root folder chosen on its page in Connections (`discover::add_with`).
     fn lidarr_add_with(&self) -> crate::lidarr::AddWith;
-    /// The house's copy of a record into an account's own music, as a Want's hands take it (`App::copy_for`). What it comes to is
-    /// still Incoming's (`albums::WantCopy`, crate-wide), so the trait it is handed by is too.
-    #[allow(private_interfaces)]
+    /// The house's copy of a record into an account's own music, as a Want's hands take it (`App::copy_for`).
     fn house(&self) -> &dyn super::requests::House;
     /// A passed fetch's proposal made a run on the one path (`file_runs::made`).
     fn made(self: Arc<Self>, work: Box<dyn FnOnce() -> Result<super::file_runs_base::Proposal> + Send>) -> Asked<'static, Result<super::file_runs_base::Status>>;

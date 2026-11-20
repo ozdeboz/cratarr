@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+pub(crate) use super::albums_base::WantCopy;
 use super::incoming_host::IncomingHost;
 use super::{JobView, KeepPreview, KeepResult, ToggleError};
 use super::library::{Active, epoch_now};
@@ -446,21 +447,6 @@ fn judged_copies(served: &crate::serve::Serve, album: &str, record: i64) -> anyh
             Ok((c, said))
         })
         .collect()
-}
-
-/// What a Want's copy of a record the library holds came to (T5).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WantCopy {
-    /// Made in the asker's own music.
-    Made,
-    /// The asker has no own music, or a copy of it is in theirs already: nothing to say.
-    Nothing,
-    /// No copy of it is known whole (S.1): nothing copied; the Want goes to the fetchers.
-    NoneWhole,
-    /// Below the floor (AL03.1), asked for a copy that shares its blocks alone, it would not: nothing copied; the Want waits for space.
-    NoSpace,
-    /// Not made, and why.
-    Failed(String),
 }
 
 /// The conversion at work on this library's copy of a record: a record's other copies have nothing to do with it, and two

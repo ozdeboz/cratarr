@@ -613,7 +613,7 @@ pub(crate) mod tests {
             replaced: vec![TrackMove { track: Some(1), from: (MUSIC, "Drift/1.mp3".into()), to: (MUSIC, ".cratarr-trash/100/Drift/1.mp3".into()), was: None }],
             token: "100/Drift".into(),
         };
-        crate::app::incoming::rows_of_copy(cat, &event, &[true]).unwrap();
+        crate::app::replace_base::rows_of_copy(cat, &event, &[true]).unwrap();
         assert_eq!(used(&serve, "bob"), 0, "(iv), Q9: his FLAC free once Music holds its bytes");
         assert_eq!(rows_of(cat, BOB), his, "(iv) his rows, his shared flag 0 among them, as they were (OQ-E)");
         assert_eq!(total(&serve), 0, "Music's bytes are no one's");

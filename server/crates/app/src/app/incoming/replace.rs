@@ -15,6 +15,7 @@ use super::{EventId, IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayDa
 use crate::app::ToggleError;
 use crate::app::library::epoch_now;
 use crate::incoming::{AlbumFile, ReplacePlan, ReplaceRefusal};
+pub(crate) use crate::app::replace_base::rows_of_copy;
 use crate::journal::{Entry, Event, TrackMove};
 
 /// What Replace would do with an album, for the page to show before asking.
@@ -110,23 +111,6 @@ fn playing_of_copy(event: &Event) -> (Vec<i64>, Vec<(i64, i64)>, Vec<(i64, Strin
     let order: Vec<i64> = copies.iter().filter_map(|m| m.track).collect();
     let before = order.iter().map(|t| (*t, *t)).collect();
     (order, before, replaced.iter().map(|r| r.from.clone()).collect())
-}
-
-/// The catalogue rows after a Replace from someone's own copy's files (`finish_from_copy`), safe to repeat: the main library's old
-/// rows into its trash, marked trashed with the token, letting go of their tracks (as Replace's old files do); the copies' rows made
-/// from the own copy's (`Catalogue::copy_rows`: on the same tracks, read and analysed), each shared as its copy is (`shared`, in
-/// the copies' order). The own copy's rows as they were (OQ-E). Blocking.
-pub(crate) fn rows_of_copy(c: &crate::catalogue::Catalogue, event: &Event, shared: &[bool]) -> Result<()> {
-    let Event::AlbumReplacedFromCopy { copies, replaced, token, .. } = event else { return Ok(()) };
-    for r in replaced {
-        if !c.has_row(r.to.0, &r.to.1) {
-            c.move_into_trash((r.from.0, &r.from.1), (r.to.0, &r.to.1), token)?;
-        }
-    }
-    c.set_tracks(&replaced.iter().map(|r| (r.to.clone(), None)).collect::<Vec<_>>())?;
-    let rows: Vec<((i64, String), (i64, String), bool)> = copies.iter().enumerate().map(|(i, m)| (m.from.clone(), m.to.clone(), shared.get(i).copied().unwrap_or(false))).collect();
-    c.copy_rows(&rows)?;
-    Ok(())
 }
 
 /// The catalogue rows after a Replace from someone's own copy's Undo (`undo_from_copy`), safe to repeat: each copy it took back

@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::fixes::Fix;
+use super::fixes_base::Fix;
 use crate::catalogue::identity::RefTrack;
 use super::musicbrainz::Asked as _;
 pub use super::matching_base::Match;

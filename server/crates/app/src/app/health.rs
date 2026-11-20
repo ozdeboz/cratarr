@@ -658,7 +658,7 @@ impl Checks<'_> {
         let (found, gaps) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
             let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
             // A row that no longer fits its album (A3.4: tracks replaced or added since its look) is not read: the pass looks again.
-            for (album, i) in super::incomplete::still_short(&s)? {
+            for (album, i) in super::incomplete_base::still_short(&s)? {
                 // One the library no longer has is left out.
                 let Some((_, artist, name)) = s.library.album_names(&album)? else { continue };
                 found.push((album, name, artist, i));

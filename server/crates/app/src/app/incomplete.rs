@@ -10,7 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+
+pub use super::incomplete_base::{Incomplete, still_short};
 
 /// A track's length within this of a release's (s).
 const SLACK_SECS: i64 = 5;
@@ -27,55 +28,6 @@ static FAILED: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
 
 fn failed<T>(f: impl FnOnce(&mut HashMap<String, i64>) -> T) -> T {
     f(FAILED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new))
-}
-
-/// What an album lacks of its smallest release that holds it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Incomplete {
-    /// How many tracks the release has, and the album.
-    pub of: usize,
-    pub has: usize,
-    /// The release, as Renumber shows one ("Delight, 2023, Digital Media").
-    pub release: String,
-    /// Its release group: what "Ask for the full album" asks Lidarr for.
-    #[serde(default)]
-    pub release_group: Option<String>,
-    /// The release's MusicBrainz id (0.9.8: where single-track replacement finds the missing tracks).
-    #[serde(default)]
-    pub release_id: Option<String>,
-    /// Each missing track: its disc and number on the release (from 1), and its title.
-    pub missing: Vec<(u32, u32, String)>,
-    /// The release's length and its longest track (ms), where every track's length is known (0.13: the type rule reads
-    /// an incomplete album as its release).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub length_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub longest_ms: Option<u64>,
-}
-
-impl Incomplete {
-    /// Whether this row still fits its album (A3.4): its `has` is the album's tracks in the library now. One that no longer does (a
-    /// Replace, tracks added or gone since its look) is read by nothing, and the pass looks at its album again at once.
-    pub fn fits(&self, present: usize) -> bool {
-        self.has == present
-    }
-}
-
-/// The albums found missing tracks whose rows still fit them (A3.4), each with its row: what Health's records missing tracks, a
-/// record's own health rows (and their "Ask for the full album") and the missing tracks' release read. Blocking.
-pub fn still_short(served: &crate::serve::Serve) -> Result<Vec<(String, Incomplete)>> {
-    let counts = served.library.song_counts()?;
-    Ok(fitting(served.userdata.albums_incomplete()?, &counts))
-}
-
-/// `still_short`'s rule: the rows that read and fit their album's tracks now (`counts`, by album).
-fn fitting(rows: Vec<(String, String)>, counts: &HashMap<String, usize>) -> Vec<(String, Incomplete)> {
-    rows.into_iter()
-        .filter_map(|(album, json)| {
-            let i = serde_json::from_str::<Incomplete>(&json).ok()?;
-            i.fits(counts.get(&album).copied().unwrap_or(0)).then_some((album, i))
-        })
-        .collect()
 }
 
 /// The album's tracks (title, length s) against the release group's releases: the smallest holding every track, and
@@ -276,7 +228,7 @@ mod tests {
         let due: Vec<String> = due_albums(&serve, t + 60).unwrap().into_iter().map(|(a, _)| a).collect();
         assert_eq!(due, [whole.clone()], "the album whose row no longer fits taken at once; the other waits its 60 days");
         for (file, src) in [("health.rs", include_str!("health.rs")), ("track_fetch.rs", include_str!("track_fetch.rs"))] {
-            assert!(src.contains("super::incomplete::still_short(") && !src.contains("albums_incomplete()"), "{file} reads the rows that fit alone");
+            assert!(src.contains("super::incomplete_base::still_short(") && !src.contains("albums_incomplete()"), "{file} reads the rows that fit alone");
         }
         std::fs::remove_dir_all(&root).ok();
     }

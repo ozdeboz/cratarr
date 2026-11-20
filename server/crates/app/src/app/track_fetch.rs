@@ -116,7 +116,7 @@ fn place(view: &mut ReleaseView, files: &[super::renumber_base::Track]) {
 /// match's.
 fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<String>> {
     // Its row where it still fits the album (A3.4).
-    let found = super::incomplete::still_short(served)?.into_iter().find(|(a, _)| a == album).map(|(_, i)| i);
+    let found = super::incomplete_base::still_short(served)?.into_iter().find(|(a, _)| a == album).map(|(_, i)| i);
     if let Some(id) = found.and_then(|i| i.release_id) {
         return Ok(Some(id));
     }
@@ -1150,7 +1150,7 @@ fn tag(track: &Path, neighbour: &Path, t: &ReleaseTrack) -> Result<()> {
         .and_then(|f| f.primary_tag().cloned())
         .map(|tag| tag.items().filter(|i| ALBUM_KEYS.contains(&i.key())).cloned().collect())
         .unwrap_or_default();
-    let width = super::fixes::values(neighbour, &["tracknumber"])?.into_iter().next().flatten().filter(|n| n.starts_with('0')).map_or(1, |n| n.len());
+    let width = super::fixes_base::values(neighbour, &["tracknumber"])?.into_iter().next().flatten().filter(|n| n.starts_with('0')).map_or(1, |n| n.len());
     let own: Vec<(ItemKey, String)> = [
         (ItemKey::TrackTitle, Some(t.title.clone())),
         (ItemKey::TrackArtist, Some(t.artist.clone())),
@@ -1176,7 +1176,7 @@ fn tag(track: &Path, neighbour: &Path, t: &ReleaseTrack) -> Result<()> {
             }
         },
         |copy| {
-            let got = super::fixes::values(copy, &["title", "musicbrainz_trackid"])?;
+            let got = super::fixes_base::values(copy, &["title", "musicbrainz_trackid"])?;
             if got[0].as_deref() != Some(title.as_str()) || (!recording.is_empty() && got[1].as_deref() != Some(recording.as_str())) {
                 bail!("its tags did not read back as written");
             }
@@ -1583,7 +1583,7 @@ mod tests {
         tags(&neighbour, &[(ItemKey::TrackTitle, "Euphoria"), (ItemKey::TrackNumber, "05")]);
         assert_eq!(name_like("05 Euphoria.flac", t.position, &t.title, "flac"), "07 Bloom.flac");
         tag(&file, &neighbour, &t).unwrap();
-        let got = super::super::fixes::values(&file, &["tracknumber", "title", "album", "musicbrainz_trackid"]).unwrap();
+        let got = super::super::fixes_base::values(&file, &["tracknumber", "title", "album", "musicbrainz_trackid"]).unwrap();
         assert_eq!(got, [Some("7".to_string()), Some("Bloom".into()), Some("Delight".into()), Some("r7".into())], "the tag a plain number, as Cratarr tags; the name padded as its neighbours");
         std::fs::remove_dir_all(&d).ok();
     }

@@ -30,8 +30,6 @@ impl RequestsHost for App {
         super::discover::add_with(self)
     }
 
-    // House is crate-wide while what it comes to (albums::WantCopy) is (RequestsHost::house).
-    #[allow(private_interfaces)]
     fn house(&self) -> &dyn super::requests::House {
         self
     }
@@ -50,7 +48,7 @@ impl RequestsHost for App {
 }
 
 impl super::requests::House for App {
-    fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = super::albums::WantCopy> + Send + 'a>> {
+    fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = super::albums_base::WantCopy> + Send + 'a>> {
         Box::pin(self.copy_for(account, record, sharing))
     }
 }

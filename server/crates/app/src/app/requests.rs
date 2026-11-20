@@ -145,7 +145,7 @@ pub(crate) struct Hands<'a> {
 
 /// The house's copy of a record into an account's own music (C52, T5): what it came to. `sharing`: made only where it shares its
 /// blocks with what it is made of, taking no new space (below the floor, AL03.1); else not made (`WantCopy::NoSpace`).
-pub(crate) trait House: Send + Sync {
+pub trait House: Send + Sync {
     fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>>;
 }
 
@@ -828,7 +828,7 @@ pub(super) async fn hand_after(lidarr: Option<&dyn Fetcher>, soulseek: bool, ser
     said
 }
 
-use super::albums::WantCopy;
+use super::albums_base::WantCopy;
 
 /// What a request of a record the library has says once its asker's copy is made in their own music (C52).
 pub const COPIED_INTO_OWN: &str = "Copied into your music";
