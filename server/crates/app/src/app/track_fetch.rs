@@ -993,7 +993,7 @@ fn undo_file(id: &str) -> Result<PathBuf> {
 /// Adds a passed fetch to its album as a run on the one path (decision 0092's writers' map, 0.14: the copy chosen after
 /// Cratarr's check is the yes): "Missing tracks · Album", or "Better copy · Album" where it replaces one; its Undo the
 /// run's (the new track to the trash, the one it replaced back).
-pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super::file_runs::Status> {
+pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super::file_runs_base::Status> {
     let (wanted, staged) = jobs(|j| {
         let f = j.fetches.get(fetch)?;
         (f.view.state == Fetching::Passed).then(|| (f.wanted.clone(), f.staged.clone()))
@@ -1009,7 +1009,7 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
         };
         let (dest, undo) = place_track(&s, &wanted, &staged)?;
         let what = if wanted.replace.is_some() { "Better copy" } else { "Missing tracks" };
-        Ok(super::file_runs::Proposal {
+        Ok(super::file_runs_base::Proposal {
             kind: "track".into(),
             title: format!("{what} · {title}"),
             records: vec![crate::journal::RunRecord { album: wanted.album.clone(), title, artist }],
