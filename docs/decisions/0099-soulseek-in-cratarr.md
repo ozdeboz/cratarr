@@ -88,3 +88,18 @@ folder go when a file fails; an outage is not a failed file.
   approved record stays approved with its folders, a fetch under way keeps its batch and is followed again, and a search
   counts no miss. Tried again in five minutes. Only slskd answering that it no longer knows a batch ends that fetch. The
   bulk intake's track stops and says why, as above.
+
+## Amendment (2026-11-19): clipping, a pop and clicks are notes, not refusals
+
+The owner, by the question tool. Production's queue (0.16.3): of 27 folders set aside across 10 records, 20 were for
+clipping, pops or clicks alone; for 5 records every copy failed that way (the release's own loud master), so good copies
+kept being refused and the record went back to Found. Only 7 failed for real faults.
+
+- **Soulseek's check sets a folder aside only for a fault:** a transcode (highs that stop at a lossy wall: "Not
+  lossless: it stops at 16 kHz", "Re-encoded from a lower bitrate: …"), a wrong recording (AcoustID knows the file as
+  another; a length more than 2 s off the recording's), or broken or missing files (frames that would not decode, a file
+  that will not decode at all, a file not in slskd's folder).
+- **Clipping, a pop at the very end and clicks** (mid-track too) are notes: the file passes on them, AcoustID is still
+  asked, and the arrival's intake card in Incoming shows them amber, in the gate's words.
+- **Single-track intake and the bulk intake keep refusing them** (0080): they add into an album in Music with no review,
+  the bulk intake by itself.

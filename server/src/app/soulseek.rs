@@ -3378,6 +3378,249 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    // ---- SK5 (the owner, 2026-11-19): clipping, a pop at the very end and clicks are notes, not refusals. Glass Harbour's "Tide
+    // Tables" (2012), record 11, from peer-a's folder, peer-b's and peer-c's after it.
+
+    const TIDE_TABLES: [&str; 3] = ["01 Slack Water.flac", "02 Neap.flac", "03 Spring Tide.flac"];
+
+    /// "Tide Tables" on the list under `id`, a folder of each of `users`' holding its three tracks, the first ticked.
+    fn tide_tables(id: &str, state: State, batch: Option<&str>, users: &[&str]) {
+        let lengths = [250, 240, 260];
+        let folder = |user: &&str| Folder {
+            user: user.to_string(),
+            dir: "Tide Tables".into(),
+            format: "flac".into(),
+            lossless: true,
+            free_slot: true,
+            queue: 0,
+            speed: 1,
+            extra: 0,
+            files: TIDE_TABLES.iter().zip(lengths).map(|(f, secs)| file(&format!(r"Tide Tables\{f}"), secs)).collect(),
+            unchecked: None,
+        };
+        let i = Item {
+            id: id.into(),
+            record: Record { record: 11, artist: "Glass Harbour".into(), album: "Tide Tables".into(), year: Some(2012), request: 11 },
+            state,
+            tracks: vec![track(1, "Slack Water", 250), track(2, "Neap", 240), track(3, "Spring Tide", 260)],
+            untimed: Vec::new(),
+            folders: users.iter().map(folder).collect(),
+            chosen: Some(0),
+            failed: Vec::new(),
+            misses: 0,
+            due: 0,
+            why: None,
+            batch: batch.map(Into::into),
+            percent: 0.0,
+            placed: None,
+            set_aside: Vec::new(),
+            checked: None,
+            local_failures: 0,
+            placing: None,
+            placed_at: 0,
+            place_failures: 0,
+        };
+        kept(|k| k.items.push(i));
+    }
+
+    /// "Tide Tables" downloaded into `at`, each file's bytes its own name.
+    fn tide_tables_into(at: &Path) {
+        std::fs::create_dir_all(at).unwrap();
+        for f in TIDE_TABLES {
+            std::fs::write(at.join(f), f.as_bytes()).unwrap();
+        }
+    }
+
+    /// slskd's completed-downloads folder, `batch`'s "Tide Tables" in it.
+    fn tide_tables_fetched(name: &str, batch: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-{name}-{}", std::process::id()));
+        tide_tables_into(&d.join(crate::slskd::FOLDER).join(batch));
+        d
+    }
+
+    /// The release a fetch of `it` checks its folder's files against, as `fetch_from` makes it.
+    fn release_to_check(it: &Item) -> Vec<ReleaseTrack> {
+        it.tracks.iter().map(|t| super::super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect()
+    }
+
+    /// What one file's sound was heard to have (SK5's heard gate): its findings, frames that would not decode, and how much longer
+    /// than its recording it is.
+    #[derive(Default, Clone)]
+    struct Sound {
+        flaws: crate::analysis::flaws::Findings,
+        damaged: u32,
+        longer: f64,
+    }
+
+    /// The gate, heard (SK5): what each file's sound was heard to have, by its name, judged by Soulseek's own gate
+    /// (`track_fetch::judge_track`), AcoustID knowing it as its track's recording unless told another; each file AcoustID is asked
+    /// about noted. A file told to be undecodable goes through the real gate, which decodes it.
+    #[derive(Default)]
+    struct Heard {
+        sounds: HashMap<String, Sound>,
+        other: Vec<String>,
+        undecodable: Vec<String>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Heard {
+        fn sound(mut self, name: &str, f: impl FnOnce(&mut Sound)) -> Self {
+            f(self.sounds.entry(name.into()).or_default());
+            self
+        }
+
+        fn clips(self, name: &str, n: u32, first: f64) -> Self {
+            self.sound(name, |s| (s.flaws.clips, s.flaws.first_clip) = (n, Some(first)))
+        }
+
+        fn clips_everywhere(self, n: u32, first: f64) -> Self {
+            TIDE_TABLES.iter().fold(self, |h, f| h.clips(f, n, first))
+        }
+
+        fn click(self, name: &str, at: f64) -> Self {
+            self.sound(name, |s| s.flaws.clicks.push(at))
+        }
+
+        fn pop(self, name: &str) -> Self {
+            self.sound(name, |s| s.flaws.pop_at_end = true)
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+
+        async fn gate(&self, file: PathBuf, track: ReleaseTrack) -> Result<f32> {
+            let name = file.file_name().unwrap().to_string_lossy().into_owned();
+            if self.undecodable.contains(&name) {
+                return super::super::track_fetch::gate_track(&file, &track).await;
+            }
+            let s = self.sounds.get(&name).cloned().unwrap_or_default();
+            let print = crate::acoustid::Print { fingerprint: String::new(), duration_secs: track.length_ms.unwrap_or_default() as f64 / 1000.0 + s.longer, damaged: s.damaged, flaws: s.flaws };
+            let recording = if self.other.contains(&name) { "another recording".to_string() } else { track.recording.clone() };
+            let lookup = |_: crate::acoustid::Print| {
+                self.asked.lock().unwrap().push(name.clone());
+                std::future::ready(Ok(vec![crate::acoustid::Found { score: 0.97, recordings: vec![crate::acoustid::Recording { id: recording }] }]))
+            };
+            super::super::track_fetch::judge_track(print, &track, lookup).await
+        }
+    }
+
+    /// SK5.1 (OQ-SK4): a folder whose tracks clip, click and pop passes Soulseek's check: AcoustID asked about every file, no user
+    /// failed, nothing set aside, and on to its placing with its files as they were fetched. A unit test has no library, so its
+    /// placing stops there, its checked files kept (as `a_failed_placing_keeps_its_checked_files_and_lets_its_batch_go`); the
+    /// end-to-end SK6.3 places it.
+    #[tokio::test]
+    async fn clipping_a_pop_and_clicks_are_notes_not_refusals() {
+        let (id, batch) = ("ss-n1", "b-n1");
+        tide_tables(id, State::Fetching, Some(batch), &["peer-a", "peer-b"]);
+        let d = tide_tables_fetched("n1", batch);
+        let dir = d.join(crate::slskd::FOLDER).join(batch);
+        let heard = &Heard::default().clips("02 Neap.flac", 5, 106.0).pop("03 Spring Tide.flac").click("03 Spring Tide.flac", 130.0);
+        fetch_from(id, &slskd_at(all_in()).await, &d, |file, track| heard.gate(file, track)).await;
+        assert_eq!(heard.asked(), TIDE_TABLES, "AcoustID asked about every file, the clipped one and the popped one too");
+        let i = item(id).unwrap();
+        assert!(i.failed.is_empty() && i.set_aside.is_empty(), "no user failed, nothing set aside: {:?}", i.why);
+        assert_eq!((i.state, i.chosen, i.folders.iter().map(|f| f.user.as_str()).collect::<Vec<_>>()), (State::Checking, Some(0), vec!["peer-a", "peer-b"]));
+        assert_eq!(i.checked.as_deref(), Some(batch), "passed: on to its placing, which only the test's missing library stops");
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("It could not be placed")), "{:?}", i.why);
+        for f in TIDE_TABLES {
+            assert_eq!(std::fs::read(dir.join(f)).unwrap(), f.as_bytes(), "{f} as it was fetched");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK5.2: a real fault still sets its folder aside and fails its user for the next folder, the file's why the fault's own words,
+    /// with clipping besides or not: highs that stop at 16 kHz in a FLAC or a 320 kbit/s MP3, AcoustID's other recording, 30 s
+    /// longer than the recording, 2 frames that would not decode, no decode at all, not in slskd's folder.
+    #[tokio::test]
+    async fn real_faults_still_set_a_folder_aside() {
+        use crate::analysis::flaws::Sold;
+        let neap = "02 Neap.flac";
+        let walled = |sold: Sold| move |s: &mut Sound| (s.flaws.sold, s.flaws.cutoff_hz) = (sold, Some(16_000.0));
+        let faults: [(&str, Box<dyn Fn(Heard) -> Heard>, String); 7] = [
+            ("a FLAC walled", Box::new(move |h: Heard| h.sound(neap, walled(Sold::Lossless))), "Not lossless: it stops at 16 kHz".into()),
+            ("a 320 walled", Box::new(move |h: Heard| h.sound(neap, walled(Sold::Mp3 { kbps: 320 }))), "Re-encoded from a lower bitrate: it stops at 16 kHz".into()),
+            ("another recording", Box::new(move |mut h: Heard| (h.other.push(neap.into()), h).1), "AcoustID does not know this file as that recording".into()),
+            ("30 s longer", Box::new(move |h: Heard| h.sound(neap, |s| s.longer = 30.0)), "It is 30 s longer than the recording".into()),
+            ("2 frames", Box::new(move |h: Heard| h.sound(neap, |s| s.damaged = 2)), "2 frames would not decode".into()),
+            // Its words the decoder's own, read from the file as it lies (below).
+            ("no decode", Box::new(move |mut h: Heard| (h.undecodable.push(neap.into()), h).1), String::new()),
+            ("missing", Box::new(|h: Heard| h), "It is not in slskd's folder".into()),
+        ];
+        for (n, (fault, heard_so, words)) in faults.iter().enumerate() {
+            for clipped in [false, true] {
+                let base = if clipped { Heard::default().clips_everywhere(5, 106.0) } else { Heard::default() };
+                let heard = &heard_so(base);
+                let (id, batch) = (format!("ss-sk52-{n}-{clipped}"), format!("b-sk52-{n}-{clipped}"));
+                tide_tables(&id, State::Fetching, Some(&batch), &["peer-a", "peer-b"]);
+                let d = tide_tables_fetched(&format!("sk52-{n}-{clipped}"), &batch);
+                let dir = d.join(crate::slskd::FOLDER).join(&batch);
+                if *fault == "missing" {
+                    std::fs::remove_file(dir.join(neap)).unwrap();
+                }
+                let words = if *fault == "no decode" { format!("{:#}", crate::acoustid::print(&dir.join(neap)).unwrap_err()) } else { words.clone() };
+                let gate = move |file, track| heard.gate(file, track);
+                // The check's verdict, which `set_aside` writes beside the folder (why.json): the fault alone, in its own words.
+                let it = item(&id).unwrap();
+                let why = check(&dir, &it.folders[0], &release_to_check(&it), &gate).await.unwrap().unwrap_err();
+                assert_eq!(why.into_iter().collect::<Vec<_>>(), [(neap.to_string(), words)], "{fault}, clipped besides: {clipped}");
+                // Through the fetch: its user failed, the next folder ticked, the folder gone from slskd's (set aside where there is a
+                // data folder, which a unit test has none of).
+                fetch_from(&id, &slskd_at(all_in()).await, &d, gate).await;
+                let i = item(&id).unwrap();
+                assert_eq!((i.state, i.failed.clone(), i.folders[0].user.as_str(), i.chosen, i.batch.clone()), (State::Approved, vec!["peer-a".to_string()], "peer-b", Some(0), None), "{fault}, clipped besides: {clipped}");
+                assert_eq!(i.why.as_deref(), Some("1 of its files failed the check; set aside"), "{fault}, clipped besides: {clipped}");
+                assert!(!dir.exists(), "{fault}, clipped besides: {clipped}");
+                std::fs::remove_dir_all(&d).ok();
+            }
+        }
+    }
+
+    /// slskd taking every batch (SK5.4): the user each POST names noted, the batch's files written into slskd's folder under `d` as
+    /// it is taken, and every batch read back done.
+    fn taking_batches(d: &Path, posts: Arc<Mutex<Vec<String>>>) -> axum::Router {
+        let d = d.to_path_buf();
+        all_in().route(
+            "/api/v0/transfers/downloads/batches",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                posts.lock().unwrap().push(body["username"].as_str().unwrap_or_default().to_string());
+                tide_tables_into(&d.join(crate::slskd::FOLDER).join(body["id"].as_str().unwrap_or_default()));
+                std::future::ready(axum::Json(serde_json::json!({ "batch": {}, "failures": [] })))
+            }),
+        )
+    }
+
+    /// SK5.4 (kind 6): a record whose every copy clips at the same moments (its master's) is placed from its first folder: no second
+    /// user's folder fetched, nobody failed, never back to found for a pick. Ticked here as today; Part 3's own pick (SK3.1) starts it
+    /// once built, and its placing needs a library a unit test has none of, so it stops at its placing, its files kept.
+    #[tokio::test]
+    async fn a_clipping_master_is_placed_from_its_first_certain_folder() {
+        let id = "ss-m";
+        tide_tables(id, State::Approved, None, &["peer-a", "peer-b", "peer-c"]);
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-sk54-{}", std::process::id()));
+        let posts = Arc::new(Mutex::new(Vec::new()));
+        let heard = &Heard::default().clips_everywhere(5, 106.0);
+        let slskd = slskd_at(taking_batches(&d, posts.clone())).await;
+        fetch_from(id, &slskd, &d, |file, track| heard.gate(file, track)).await;
+        assert_eq!(*posts.lock().unwrap(), ["peer-a"], "the first folder fetched");
+        assert_eq!(heard.asked(), TIDE_TABLES, "every file passed to AcoustID");
+        let i = item(id).unwrap();
+        let batch = i.checked.clone().expect("passed: on to its placing, its files kept");
+        assert!(i.failed.is_empty() && i.set_aside.is_empty(), "{:?}", i.why);
+        assert_eq!((i.state, i.chosen, i.folders.len()), (State::Checking, Some(0), 3));
+        // Taken up again when due: placed from the same files, nothing fetched again, no other folder.
+        with_item(id, |i| i.due = 0);
+        fetch_from(id, &slskd, &d, |file, track| heard.gate(file, track)).await;
+        assert_eq!(*posts.lock().unwrap(), ["peer-a"], "no second user's folder fetched");
+        assert_eq!(heard.asked().len(), 3, "nor checked again");
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.checked.as_deref(), i.failed.len()), (State::Checking, Some(batch.as_str()), 0), "never back to found");
+        for f in TIDE_TABLES {
+            assert_eq!(std::fs::read(d.join(crate::slskd::FOLDER).join(&batch).join(f)).unwrap(), f.as_bytes(), "{f} as it was fetched");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// X4 (D17): a request whose record was retired follows the record its placed album joined or made; one on a live record stays.
     #[test]
     fn a_request_on_a_retired_record_follows_its_placed_album() {
