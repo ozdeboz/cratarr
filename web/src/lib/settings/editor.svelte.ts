@@ -34,6 +34,7 @@ import {
 } from '../api';
 import { settingsRead, settingsSaved } from '../settingsSections.svelte';
 import { toast } from '../toast.svelte';
+import { libraryOf } from './libraryIds';
 
 /** A server (a source, in the code) as the page edits it. Secrets typed here are kept apart: the server never sends saved ones. */
 export type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean };
@@ -355,10 +356,12 @@ class SettingsEditor {
     return { id: d.id, kind: d.kind, enabled: d.enabled, libraries, values };
   };
 
-  /** A server's libraries in the order Libraries lists them: Cratarr's own folders as chosen (decision 0044), another
-   *  server's as it has them. */
+  /** A server's libraries in the order Libraries lists them: Cratarr's own folders as chosen (decision 0044), each by its
+   *  library's id (CU18, lib/settings/libraryIds), another server's as it has them. */
   libraryOrder = (d: Draft): string[] =>
-    d.kind === 'cratarr' && Array.isArray(d.values.folders) ? (d.values.folders as string[]) : (d.view?.server_libraries.map((l) => l.id) ?? []);
+    d.kind === 'cratarr' && Array.isArray(d.values.folders)
+      ? (d.values.folders as string[]).map((p) => libraryOf(d.view?.server_libraries ?? [], p))
+      : (d.view?.server_libraries.map((l) => l.id) ?? []);
 
   useOf = (d: Draft, id: string): Exclude<LibraryUse, 'own'> => d.libraries.find((l) => l.id === id)?.kind ?? 'unused';
 
@@ -397,6 +400,11 @@ class SettingsEditor {
   setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null; fetcher?: Fetcher | null; keep_to?: string | null }) => {
     const l = d.libraries.find((x) => x.id === id);
     if (l) Object.assign(l, change);
+  };
+  /** Cratarr's own library in another folder (CU18): its id and everything set on it kept, its folder `path` (CU17: a move). */
+  setPath = (d: Draft, id: string, path: string) => {
+    const l = d.libraries.find((x) => x.id === id);
+    if (l) l.path = path;
   };
 
   checkLidarr = async () => {

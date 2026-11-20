@@ -1157,7 +1157,11 @@ export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
  *  into it (decision 0096: one Incoming library per fetcher), and where Add to puts them by default (`keep_to`, a main
  *  library; none: the first; 0101 point 2). */
 export type LibrarySetting = {
+  /** Its id: a server's own; Cratarr's own library's, its folder's, kept for life (CU17). */
   id: string;
+  /** Cratarr's own library's folder (CU17: `LibrarySetting { id, path }`): a path changed on an id is a move, the library and
+   *  its switches kept (CU18's Change folder). */
+  path?: string;
   kind: 'main' | 'incoming';
   quality?: Quality;
   colour?: string | null;
