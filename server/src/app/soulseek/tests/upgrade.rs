@@ -287,6 +287,47 @@ async fn the_found_items_of_0163_are_searched_again_once_given_their_record() {
     std::fs::remove_dir_all(&d).ok();
 }
 
+/// SK4.4, Part 3's half: the 18 found items 0.16 left start by themselves where the folders their search again finds are certain;
+/// the others wait for a pick, with those fresh folders. Never one with record 0 (before the round gives it), never from 0.16's
+/// folders as they are, nobody failed by the search again.
+#[tokio::test]
+async fn the_found_items_of_0163_are_searched_again_and_start_where_certain() {
+    let (d, _, mut k) = loaded("u44a", QUEUE);
+    let found = ids_in(State::Found);
+    let slskd = Scripted::new().hold_all(5.0);
+    on_list("u44z", &k);
+    let unrecorded: Vec<String> = found.iter().map(|id| format!("u44z-{id}")).collect();
+    start_downloads(&|i: &Item| unrecorded.contains(&i.id), &slskd.client(), &d, &Look::roomy()).await;
+    assert!(slskd.posts().is_empty(), "never an automatic start of an item with record 0, nor from 0.16's folders");
+    first_round(&mut k, REQUESTS);
+    on_list("u44a", &k);
+    let mine: Vec<String> = found.iter().map(|id| format!("u44a-{id}")).collect();
+    let failed_before: Vec<Vec<String>> = mine.iter().map(|id| item(id).unwrap().failed).collect();
+    // Their searches come back: every other one an exact folder with a free slot, the rest only a fuller folder.
+    for (n, id) in mine.iter().enumerate() {
+        with_item(id, |i| {
+            let mut f = two_tracks(&format!("peer-u44a-{n}"));
+            if n % 2 == 1 {
+                (f.extra, f.unchecked) = (1, Some("Takes 2 of 3 files".into()));
+            }
+            (i.tracks, i.state, i.folders, i.found_at, i.chosen) = (vec![track(1, "One", 100), track(2, "Two", 200)], State::Found, vec![f], now(), None);
+        });
+    }
+    start_downloads(&|i: &Item| mine.contains(&i.id), &slskd.client(), &d, &Look::roomy()).await;
+    for (n, id) in mine.iter().enumerate() {
+        let i = item(id).unwrap();
+        if n % 2 == 0 {
+            assert!(i.state == State::Fetching && i.auto, "{id}: certain, it starts by itself: {i:?}");
+        } else {
+            assert!(i.state == State::Found && !i.auto && i.folders.len() == 1, "{id}: it waits for a pick, its fresh folders kept: {i:?}");
+        }
+        assert_eq!(i.failed, failed_before[n], "{id}: nobody failed by searching again");
+    }
+    assert_eq!(slskd.posts().len(), 9);
+    assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    std::fs::remove_dir_all(&d).ok();
+}
+
 /// SK4.5: 0.16.3's 8 waiting and 8 stuck go on as today: the stuck ones (due 0) looked at in the first round (A1.4), the waiting ones
 /// when due; a search that finds nothing makes each waiting with a miss, none stuck; the placed one stays.
 #[tokio::test]

@@ -6760,6 +6760,19 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// SK3.10, the request's word (`words_in`): a found item waiting for room or space reads Waiting with that why for its asker; one
+    /// Cratarr picked reads Fetching, as any picked one.
+    #[test]
+    fn a_certain_item_waiting_for_room_is_waiting_for_its_asker() {
+        let mut waits = found_twice("ss-sk310-a");
+        (waits.record.request, waits.why) = (3101, Some(super::super::requests::WAITS_FOR_ROOM.into()));
+        let mut picked = found_twice("ss-sk310-b");
+        (picked.record.request, picked.record.record, picked.state, picked.chosen, picked.auto) = (3102, 9_701, State::Approved, Some(0), true);
+        let words = words_in(&[waits, picked], &[(3101, None), (3102, None)]);
+        assert_eq!(words.get(&3101), Some(&Word::Waiting { why: Some("Waits for room".into()) }));
+        assert!(matches!(words.get(&3102), Some(Word::Fetching { .. })), "{words:?}");
+    }
+
     /// SK1.8 (kind 4): two picks of one user at the same moment, root's tick of ss-2 and Cratarr's pick of ss-1, start one download:
     /// the other waits for that user's other record, and goes once its transfers are done. Variant: root ticks ss-1 itself as Cratarr
     /// picks it: picked once, one batch.

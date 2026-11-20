@@ -6531,7 +6531,8 @@ async fn a_folder_with_only_clipping_a_click_and_a_pop_passes_with_notes_end_to_
     assert!(hidden_left(&incoming).is_empty());
     assert_eq!(slskd.post_users(), ["peer-a"], "peer-b never asked");
     let states = seen.states("ss-1");
-    let from = states.iter().position(|s| s == "fetching").unwrap();
+    // Once under way (picked, fetching, checked, placed: the sampler may miss a short download's fetching), never back.
+    let from = states.iter().position(|s| ["approved", "fetching", "checking", "placed"].contains(&s.as_str())).expect("seen under way");
     assert!(states[from..].iter().all(|s| !["searching", "found", "waiting"].contains(&s.as_str())), "{states:?}");
     let alice = s.sign_in("alice", "alice pw").await;
     let id = requests[0]["id"].as_i64().unwrap();
