@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 
 use super::library::{Library, epoch_now};
 use super::history::Period;
+use super::insights_records::InsightsPlaylists;
 use crate::insights::Insights;
 
 /// How long a built report is kept.
@@ -23,7 +24,7 @@ type Key = (Option<String>, Option<String>, Vec<String>, Period);
 pub struct InsightsService {
     lib: Arc<Library>,
     /// For the tracks in a crate.
-    playlists: Arc<super::playlists::PlaylistService>,
+    playlists: Arc<dyn InsightsPlaylists>,
     /// The last reports: when, and for what.
     kept: Mutex<Vec<(i64, Key, Arc<Insights>)>>,
 }
@@ -44,7 +45,7 @@ impl InsightsService {
         Some(self.lib.catalogue().folders().iter().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i).collect())
     }
 
-    pub(super) fn new(lib: Arc<Library>, playlists: Arc<super::playlists::PlaylistService>) -> Self {
+    pub(super) fn new(lib: Arc<Library>, playlists: Arc<dyn InsightsPlaylists>) -> Self {
         Self { lib, playlists, kept: Mutex::new(Vec::new()) }
     }
 

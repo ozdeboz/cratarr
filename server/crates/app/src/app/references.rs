@@ -24,6 +24,8 @@ use crate::catalogue::identity::{self, Listed, RefTrack};
 use crate::catalogue::records::{RecordRow, Ref, ReferenceRow};
 use crate::serve::ids;
 
+use super::records_host::RecordsHost;
+
 /// The sources, in the order a record's entry lists them.
 pub const SOURCES: [&str; 4] = ["musicbrainz", "discogs", "bandcamp", "acoustid"];
 
@@ -1065,8 +1067,13 @@ fn sources(k: &Kept, bandcamp_year: Option<u32>) -> Vec<Source> {
 }
 
 /// A record's references as kept, a list not kept yet read now (Bandcamp's page looked up when the record is opened).
-pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
+pub async fn of<H: RecordsHost + ?Sized>(app: &Arc<H>, album: &str) -> Result<References> {
+    of_served(app.served(), album).await
+}
+
+/// `of`, with Cratarr's own library as the app holds it.
+async fn of_served(served: &Option<Arc<crate::serve::Serve>>, album: &str) -> Result<References> {
+    let served = served.clone().context("Cratarr's own library is not open")?;
     let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
     let (s, a) = (served.clone(), album.to_string());
     let k = crate::run::spawn_blocking(move || kept(&s, &a, record)).await??;
@@ -1171,13 +1178,13 @@ fn chose(cat: &Catalogue, record: i64, album: &str, c: &Choose, files: &[Listed]
     Ok(c.by_hand == Some(true) && !was)
 }
 
-pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<References> {
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
+pub async fn choose<H: RecordsHost + ?Sized>(app: &Arc<H>, album: &str, c: Choose) -> Result<References> {
+    let served = app.served().clone().context("Cratarr's own library is not open")?;
     let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
     let (s, a) = (served.clone(), album.to_string());
     crate::run::spawn_blocking(move || choose_in(&s, &a, record, &c)).await??;
-    app.collection.refresh().await;
-    app.collection.tell_changed();
+    app.collection().refresh().await;
+    app.collection().tell_changed();
     of(app, album).await
 }
 
@@ -1357,8 +1364,8 @@ mod tests {
         assert!(chose(&cat, record, &album, &Choose { link: Some("https://example.org/x".into()), ..Choose::default() }, &[]).is_err());
     }
 
-    fn matched(release: &str, certain: bool) -> crate::app::matching::Match {
-        crate::app::matching::Match {
+    fn matched(release: &str, certain: bool) -> crate::app::matching_base::Match {
+        crate::app::matching_base::Match {
             release: release.into(),
             release_group: Some("00000000-0000-4000-8000-000000000101".into()),
             title: "Tide Tables".into(),

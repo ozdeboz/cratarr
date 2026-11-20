@@ -31,6 +31,7 @@ use super::import::{Matcher, key, loose};
 use super::lastfm::{Auth, Progress};
 use super::musicbrainz::Asked as _;
 use super::reach::Sent as _;
+use super::records_host::RecordsHost;
 
 /// The task's kind (`app::tasks`).
 pub const KIND: &str = "discover";
@@ -2866,8 +2867,8 @@ pub fn lastfm_key_ok(key: &str) -> bool {
 
 /// Lidarr, where it is connected and switched on: Want fetches through it.
 /// What Want adds an album with: Lidarr's choices in Connections.
-pub fn add_with(app: &super::App) -> crate::lidarr::AddWith {
-    let cfg = app.incoming.lidarr_state().0;
+pub fn add_with<H: RecordsHost + ?Sized>(app: &H) -> crate::lidarr::AddWith {
+    let cfg = app.lidarr_config();
     crate::lidarr::AddWith {
         quality: cfg.as_ref().and_then(|c| c.quality_profile),
         metadata: cfg.as_ref().and_then(|c| c.metadata_profile),
@@ -2875,13 +2876,13 @@ pub fn add_with(app: &super::App) -> crate::lidarr::AddWith {
     }
 }
 
-pub fn lidarr(app: &super::App) -> Option<crate::lidarr::Lidarr> {
-    app.incoming.lidarr_state().1
+pub fn lidarr<H: RecordsHost + ?Sized>(app: &H) -> Option<crate::lidarr::Lidarr> {
+    app.lidarr()
 }
 
 /// Looks up the account's suggestions as a task (`app::tasks`), its result the `Found`.
-pub fn start(app: &Arc<super::App>, serve: Arc<crate::serve::Serve>, account: &str, who: Who) -> Result<super::tasks::Task, String> {
-    let (cat, a, artists) = (app.library.catalogue(), account.to_string(), app.artists.clone());
+pub fn start<H: RecordsHost + ?Sized>(app: &Arc<H>, serve: Arc<crate::serve::Serve>, account: &str, who: Who) -> Result<super::tasks::Task, String> {
+    let (cat, a, artists) = (app.library().catalogue(), account.to_string(), app.artists().clone());
     super::tasks::spawn(KIND, account, false, move |h| async move {
         let progress = move |name: &str, done: u64, total: Option<u64>| h.step(name, done, total);
         look(&serve, cat, &a, &who, artists, &progress).await

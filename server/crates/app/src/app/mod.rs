@@ -17,6 +17,7 @@ pub use cratarr_gate::app::audiomuse;
 pub mod beat_this;
 pub mod capabilities;
 mod app_base;
+mod app_records;
 pub mod changes;
 pub mod analysis_pass;
 pub mod analysis_import;
@@ -138,6 +139,9 @@ pub mod renumber_base;
 pub mod requests_base;
 pub mod search_base;
 pub mod track_fetch_records;
+mod insights_records;
+mod playlists_insights;
+pub mod records_host;
 
 use std::sync::Arc;
 
