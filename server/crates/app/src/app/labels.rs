@@ -225,7 +225,7 @@ pub struct LabelEntry {
     pub had: bool,
     /// An open request's mark for its record.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<super::requests::Mark>,
+    pub request: Option<super::requests_base::Mark>,
     /// How many editions of one album its record's row stands for, its own among them (F12.1, `app::editions`); none: one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editions: Option<u32>,

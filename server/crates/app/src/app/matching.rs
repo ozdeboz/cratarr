@@ -8,12 +8,12 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::fixes::Fix;
 use crate::catalogue::identity::RefTrack;
 use super::musicbrainz::Asked as _;
+pub use super::matching_base::Match;
 
 /// The task's kind (`app::tasks`).
 pub const KIND: &str = "match";
@@ -26,31 +26,6 @@ const CANDIDATES: usize = 3;
 const LEAST_SCORE: i64 = 80;
 /// A match is looked for again after this long.
 const AGAIN: i64 = 30 * 86_400;
-
-/// An album's match, as kept.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Match {
-    pub release: String,
-    pub release_group: Option<String>,
-    pub title: String,
-    /// Its artist credit as MusicBrainz writes it, and its first artist's id.
-    pub artist: String,
-    pub artist_id: Option<String>,
-    pub year: Option<u32>,
-    pub certain: bool,
-    pub why: String,
-    /// Each of the album's files (by name) with its recording and its first artist's id.
-    pub tracks: Vec<(String, String, Option<String>)>,
-    /// Each one's length on the release (s), as `tracks` (the intake card's reference lengths, 0.14).
-    #[serde(default)]
-    pub lengths: Vec<Option<i64>>,
-    /// The release's format ("CD", "Digital Media"), as its words name it; none in a match kept before.
-    #[serde(default)]
-    pub format: String,
-    /// How many of MusicBrainz's editions compared fit with every track within `LIKELY_SECS` (its words: "several fit").
-    #[serde(default)]
-    pub fits: usize,
-}
 
 /// A release as matching reads it.
 #[derive(Debug, Clone, Default)]

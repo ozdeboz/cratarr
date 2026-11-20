@@ -146,6 +146,8 @@ pub mod device_index_base;
 pub mod file_facts_base;
 pub mod file_runs_base;
 mod incoming_base;
+pub mod intake_card_base;
+pub mod matching_base;
 mod incoming_settings;
 pub mod listening_base;
 mod playlists_base;
@@ -157,6 +159,9 @@ mod queue_base;
 pub mod radio_base;
 mod along_base;
 pub mod renumber_base;
+pub mod requests_base;
+pub mod search_base;
+pub mod track_fetch_records;
 
 use std::sync::Arc;
 

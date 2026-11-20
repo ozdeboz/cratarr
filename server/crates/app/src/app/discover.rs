@@ -1858,7 +1858,7 @@ pub struct Missing {
     pub bandcamp: Option<String>,
     /// An open request's mark (0.9.5): wanted, or coming and how far; none without one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<super::requests::Mark>,
+    pub request: Option<super::requests_base::Mark>,
     /// A retired record's (OQ16): when it went from Music, "Was in Music until <date>".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub was_until: Option<i64>,
