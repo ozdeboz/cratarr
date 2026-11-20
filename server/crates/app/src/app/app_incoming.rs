@@ -12,6 +12,10 @@ impl IncomingHost for App {
         &self.library
     }
 
+    fn collection(&self) -> &Arc<super::collection::CollectionService> {
+        &self.collection
+    }
+
     fn incoming(&self) -> &Arc<super::incoming::IncomingService> {
         &self.incoming
     }
@@ -22,6 +26,10 @@ impl IncomingHost for App {
 
     fn served(&self) -> &Option<Arc<crate::serve::Serve>> {
         &self.served
+    }
+
+    fn request_fetcher(&self) -> Option<Box<dyn crate::ports::Fetcher>> {
+        super::requests::fetcher(self)
     }
 
     fn add_fetched(self: Arc<Self>, fetch: String) -> Asked<'static, Result<super::file_runs::Status>> {

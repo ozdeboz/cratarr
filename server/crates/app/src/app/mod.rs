@@ -12,6 +12,7 @@
 //! - `settings`: the Settings page.
 
 mod albums;
+mod app_albums;
 pub mod artists;
 pub use cratarr_gate::app::audiomuse;
 pub mod beat_this;
