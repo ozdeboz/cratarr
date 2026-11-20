@@ -26,7 +26,7 @@ impl PlayedOn {
 /// Off: the queue ends. One: the playing track starts again. All: after the last track the album or playlist starts
 /// again (what was added by hand plays once).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum Repeat {
     #[default]

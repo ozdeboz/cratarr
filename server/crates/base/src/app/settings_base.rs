@@ -10,9 +10,9 @@ use anyhow::Result;
 use super::incoming_base::LidarrPair;
 
 /// A future a service hands back, as the Settings page awaits it (inside the HTTP handlers: `Send`).
-pub(super) type Later<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type Later<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-pub(super) trait SettingsIncoming: Send + Sync {
+pub trait SettingsIncoming: Send + Sync {
     /// The saved Lidarr connection and its client.
     fn lidarr_state(&self) -> LidarrPair;
     fn trash_days(&self) -> u32;
@@ -22,7 +22,7 @@ pub(super) trait SettingsIncoming: Send + Sync {
     fn forget_lists(&self) -> Later<'_, ()>;
 }
 
-pub(super) trait SettingsPlaylists: Send + Sync {
+pub trait SettingsPlaylists: Send + Sync {
     /// 0 when there is no Music folder.
     fn count(&self) -> Later<'_, Result<usize>>;
 }

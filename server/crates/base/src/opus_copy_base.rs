@@ -16,16 +16,16 @@ use crate::convert;
 pub const BITRATE: i32 = 160_000;
 
 /// Opus always runs at 48 kHz.
-pub(crate) const RATE: u32 = 48_000;
+pub const RATE: u32 = 48_000;
 
 /// 20 ms frames, the encoder's best for music.
-pub(crate) const FRAME: usize = 960;
+pub const FRAME: usize = 960;
 
 /// An Opus packet is at most this long.
 const MAX_PACKET: usize = 4000;
 
 /// Audio packets per Ogg page: about a second.
-pub(crate) const PAGE_PACKETS: usize = 50;
+pub const PAGE_PACKETS: usize = 50;
 
 const VENDOR: &str = concat!("Cratarr ", env!("CARGO_PKG_VERSION"), " (libopus)");
 
@@ -91,7 +91,7 @@ pub fn copy_at(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>),
 
 /// The end of a track: `pre_skip` samples of silence after the music, so the encoder lets out the last of it (its
 /// delay held them back: a stream ended 6.5 ms short), then the last frame padded.
-pub(crate) fn drain_encoder(encoder: &mut Encoder, pcm: &mut Vec<f32>, channels: usize, pre_skip: u16, packets: &mut Vec<Vec<u8>>) -> Result<()> {
+pub fn drain_encoder(encoder: &mut Encoder, pcm: &mut Vec<f32>, channels: usize, pre_skip: u16, packets: &mut Vec<Vec<u8>>) -> Result<()> {
     pcm.resize(pcm.len() + usize::from(pre_skip) * channels, 0.0);
     pcm.resize(pcm.len().div_ceil(FRAME * channels) * FRAME * channels, 0.0);
     for frame in pcm.chunks(FRAME * channels) {
@@ -205,14 +205,14 @@ fn cover_comment(input: &Path) -> Option<String> {
 }
 
 /// libopus's encoder, for music at a bit rate.
-pub(crate) struct Encoder {
+pub struct Encoder {
     raw: *mut opusic_sys::OpusEncoder,
     channels: usize,
     out: Vec<u8>,
 }
 
 impl Encoder {
-    pub(crate) fn new(channels: usize, bitrate: i32) -> Result<Self> {
+    pub fn new(channels: usize, bitrate: i32) -> Result<Self> {
         let mut error = 0;
         // SAFETY: plain constructor; the result is checked before use and freed in `drop`.
         let raw = unsafe { opusic_sys::opus_encoder_create(RATE as i32, channels as i32, opusic_sys::OPUS_APPLICATION_AUDIO, &mut error) };
@@ -236,7 +236,7 @@ impl Encoder {
     }
 
     /// How many samples the encoder delays the music by: the stream's pre-skip.
-    pub(crate) fn lookahead(&self) -> Result<u16> {
+    pub fn lookahead(&self) -> Result<u16> {
         let mut v: i32 = 0;
         // SAFETY: a GET request takes a pointer to one opus_int32.
         let r = unsafe { opusic_sys::opus_encoder_ctl(self.raw, opusic_sys::OPUS_GET_LOOKAHEAD_REQUEST, &mut v as *mut i32) };
@@ -247,7 +247,7 @@ impl Encoder {
     }
 
     /// One frame of interleaved samples into one packet.
-    pub(crate) fn encode(&mut self, frame: &[f32]) -> Result<Vec<u8>> {
+    pub fn encode(&mut self, frame: &[f32]) -> Result<Vec<u8>> {
         debug_assert_eq!(frame.len(), FRAME * self.channels);
         // SAFETY: `frame` holds FRAME samples per channel, `out` MAX_PACKET bytes, as the call is told.
         let n = unsafe {
@@ -267,22 +267,22 @@ impl Drop for Encoder {
     }
 }
 
-pub(crate) const BOS: u8 = 0x02;
+pub const BOS: u8 = 0x02;
 
-pub(crate) const EOS: u8 = 0x04;
+pub const EOS: u8 = 0x04;
 
 /// A page going on with the packet the page before it began (RFC 3533).
-pub(crate) const CONTINUED: u8 = 0x01;
+pub const CONTINUED: u8 = 0x01;
 
 /// One logical Ogg stream, written a page at a time.
-pub(crate) struct Ogg<W: Write> {
+pub struct Ogg<W: Write> {
     out: W,
     serial: u32,
     sequence: u32,
 }
 
 impl<W: Write> Ogg<W> {
-    pub(crate) fn new(out: W, serial: u32) -> Self {
+    pub fn new(out: W, serial: u32) -> Self {
         Self { out, serial, sequence: 0 }
     }
 
@@ -302,7 +302,7 @@ impl<W: Write> Ogg<W> {
     /// One packet over as many pages as it needs (the comment header with a cover): each page as full as a page can
     /// be (255 segments), those after the first marked as going on with it (RFC 3533); `granule` on each (0: headers,
     /// RFC 7845 §3).
-    pub(crate) fn packet(&mut self, p: &[u8], granule: u64) -> Result<()> {
+    pub fn packet(&mut self, p: &[u8], granule: u64) -> Result<()> {
         let mut lacing = vec![255u8; p.len() / 255];
         lacing.push((p.len() % 255) as u8);
         let mut at = 0;
@@ -341,13 +341,13 @@ impl<W: Write> Ogg<W> {
 pub use crate::serve::opus_copy_crc::crc32;
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) mod tests {
+pub mod tests {
     // Shared with the tests of the modules and crates above (test-support): idle where no test calls it.
     #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use std::path::Path;
 
     /// A 16-bit stereo WAV of a 440 Hz sine, `secs` long.
-    pub(crate) fn wav(path: &Path, rate: u32, secs: f64) {
+    pub fn wav(path: &Path, rate: u32, secs: f64) {
         let n = (f64::from(rate) * secs) as u32;
         let data_len = n * 4;
         let mut b = Vec::new();

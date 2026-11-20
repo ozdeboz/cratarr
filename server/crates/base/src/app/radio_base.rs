@@ -7,7 +7,7 @@ use cratarr_rules::radio::Mode;
 
 /// Autoplay's modes; off is its absence (`stop` in commands).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AutoMode {
     #[default]
@@ -70,14 +70,14 @@ impl AutoplayMode {
 /// What Radio and Autoplay stay inside (decision 0094: the page's collection), as Cratarr's own library has it: a
 /// crate as saved (a genre too, `genre:<name>`), a playlist, a record, an artist, or tracks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Within {
     /// `without`: the libraries switched off, as the crate showed (Home's crates are of every library).
     Crate {
         id: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(as = "Option<_>", optional))]
+        #[cfg_attr(any(test, feature = "test-support"), ts(as = "Option<_>", optional))]
         without: Vec<String>,
     },
     Playlist { id: String },
@@ -87,10 +87,10 @@ pub enum Within {
         source: String,
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(test, ts(optional))]
+        #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(as = "Option<_>", optional))]
+        #[cfg_attr(any(test, feature = "test-support"), ts(as = "Option<_>", optional))]
         without: Vec<String>,
     },
     Tracks { source: String, ids: Vec<String> },

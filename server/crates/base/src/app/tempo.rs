@@ -31,7 +31,7 @@ pub struct TrackTempo {
 pub use crate::journal::TempoChange;
 
 /// A track's file: its folder in the catalogue, its path there, and where it is.
-pub(super) fn place(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String, PathBuf)> {
+pub fn place(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String, PathBuf)> {
     let (folder, rel) = cat.place_of_source(source, id)?;
     let path = cat.folders().get(folder)?.join(&rel);
     Some((folder, rel, path))
@@ -43,7 +43,7 @@ fn whole(v: Option<f64>) -> Option<u32> {
 }
 
 /// A track's tempo: its tag's, else Cratarr's measure (as the library has it), and the measure.
-pub(super) fn tempo_of(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<TrackTempo> {
+pub fn tempo_of(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<TrackTempo> {
     let (folder, rel, path) = place(cat, source, id)?;
     let measured = whole(cat.analysis_of(folder, &rel).and_then(|a| a.bpm).map(f64::from));
     let tag = whole(crate::retag::bpm(&path).and_then(|v| v.trim().parse().ok()));
@@ -63,7 +63,7 @@ pub fn adjusted(t: &TrackTempo, how: Adjust) -> Option<u32> {
 /// the yes; Undo is the run's): each of Cratarr's own tracks whose tag changes, its BPM now → after. With the tracks'
 /// tempos as they will be. The tempo is the track's, so every copy's file gets it, each from what it holds itself. Blocking
 /// for the plan; the run writes in the background.
-pub(super) fn proposal(served: &crate::serve::Serve, ids: &[String], how: Adjust) -> Result<(super::file_runs_base::Proposal, Vec<TrackTempo>)> {
+pub fn proposal(served: &crate::serve::Serve, ids: &[String], how: Adjust) -> Result<(super::file_runs_base::Proposal, Vec<TrackTempo>)> {
     let cat = served.catalogue();
     let own = crate::source::cratarr::KIND.id;
     let mut p = super::file_runs_base::Proposal { kind: "tempo".into(), ..Default::default() };
@@ -118,7 +118,7 @@ pub(super) fn proposal(served: &crate::serve::Serve, ids: &[String], how: Adjust
 
 /// Writes a track's BPM tag (none: removes it); the catalogue reads it again at once and carries Cratarr's analysis of
 /// it over to the rewritten file, so its measure and beats stay (`Catalogue::reread`). Blocking.
-pub(super) fn write(cat: &crate::catalogue::Catalogue, source: &str, id: &str, to: Option<u32>) -> Result<()> {
+pub fn write(cat: &crate::catalogue::Catalogue, source: &str, id: &str, to: Option<u32>) -> Result<()> {
     let (_, _, path) = place(cat, source, id).context("the track's file is not known")?;
     crate::retag::set_bpm(&path, to)?;
     cat.reread(std::slice::from_ref(&path)).map(drop)

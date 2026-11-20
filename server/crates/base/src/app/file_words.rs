@@ -88,7 +88,7 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
 }
 
 /// `proposal`, from these words.
-pub(super) fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
+pub fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
     let field = field_of(kind);
     let cat = serve.catalogue();
     let roots = cat.folders();
@@ -187,12 +187,14 @@ async fn ticked_proposal(plan: &str, albums: Vec<String>, stamps: Option<HashMap
     Ok(p)
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests {
+    // Shared with the tests of the crates above (test-support): idle where no test calls it.
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
     use crate::app::words::store::Word;
 
-    pub(crate) fn w(word: &str, sources: &[Source]) -> Word {
+    pub fn w(word: &str, sources: &[Source]) -> Word {
         Word { word: word.into(), sources: sources.to_vec() }
     }
 

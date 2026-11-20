@@ -17,25 +17,25 @@ use super::radio_base::{AutoMode, AutoplayMode, Within};
 
 /// A track as players hold it: the page's own description (`LocalTrack` in web/src/lib/localPlayer.svelte.ts).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 pub struct QueueTrack {
     /// Its record's type, as the Library list serves it (GOTO.S1): a queue row's Go to names it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub album_type: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(test, ts(as = "Option<Vec<String>>", optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(as = "Option<Vec<String>>", optional))]
     pub album_secondary: Vec<String>,
     /// Its entry in the queue (decision 0033): an id of its own, never reused, apart from the track's.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub entry: String,
     /// `next`: added by hand (Play next, Add to queue), not part of the album or playlist that plays (0033's lanes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub lane: Option<String>,
     /// Its place in the album or playlist as it was played, before any shuffle: turning shuffle off orders by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub n: Option<u32>,
     pub source: String,
     pub id: String,
@@ -49,23 +49,23 @@ pub struct QueueTrack {
     pub album_id: Option<String>,
     /// Its length, for the queue's rows and the time left; players keep it as they keep the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub duration_secs: Option<f64>,
     /// Who asked for it, a queue request accepted (decision 0079; 0.10): the follower's name, or the guest's as the
     /// page shows it ("Guest Sam"). It stays with the entry wherever the entry goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub asked_by: Option<String>,
     /// The copy it is heard from, a library's id: Play from's queue names it on every track and every stream of it asks for it,
     /// so it lives as long as the queue does, and a track added names none. Nothing else keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub from: Option<String>,
 }
 
 /// An announcement as a player reports it (Command::Announce).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 pub struct Announcing {
     /// The command's id.
     pub id: String,
@@ -73,16 +73,16 @@ pub struct Announcing {
     pub state: AnnounceState,
     /// Why it failed, in a few words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub error: Option<String>,
     /// When its parts happened, as the app measured them (0.9.1); apps from before it leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub timeline: Option<Timeline>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum AnnounceState {
     Playing,
@@ -95,25 +95,25 @@ pub enum AnnounceState {
 /// music fully ducked, the speech's end (its last loud block), the music back up, and done; `gave_up` when the clip
 /// was given up (the music stopped under it). Each as far as it came.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 pub struct Timeline {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub clip_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub started_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub ducked_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub speech_end_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub released_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub done_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gave_up: bool,
@@ -172,20 +172,20 @@ impl Announcing {
 /// place in the queue, the place in it, and the hold's top speed (×) where it says it. A page driving the player shows
 /// its look-ahead and the hold's zoom by it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 pub struct Landing {
     pub index: i64,
     pub position_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub top_x: Option<f64>,
 }
 
 /// A device's audio output (decision 0033, amended 2026-10-19): `bluetooth`, `speaker`, `wired`, `usb`, `hdmi`,
 /// `remote` or `other`, and the device's own name where it has one (a car's Bluetooth, say; none for a speaker).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(rename = "AudioOutput"))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), ts(rename = "AudioOutput"))]
 pub struct Output {
     #[serde(rename = "type")]
     pub kind: String,
@@ -195,7 +195,7 @@ pub struct Output {
 
 impl Output {
     /// A queue's name from where it plays: a Bluetooth device's own (a car's), else none.
-    pub(super) fn queue_name(&self) -> Option<String> {
+    pub fn queue_name(&self) -> Option<String> {
         (self.kind == "bluetooth").then(|| self.name.clone()).flatten().filter(|n| !n.trim().is_empty())
     }
 }
@@ -203,28 +203,28 @@ impl Output {
 /// A player's link as the player sees it (decision 0045): what Cratarr cannot see while the player's reports still get
 /// through and its command stream does not. Times are epoch ms on Cratarr's clock.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 pub struct ReportedLink {
     /// Its command stream open since; none while it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub connected_since: Option<u64>,
     /// Attempts to connect that failed since it was last connected.
     #[serde(default)]
     pub failed: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub last_error: Option<String>,
     /// The address of Cratarr's it uses (home or public).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub address: Option<String>,
     /// A wait it is in before trying again: until when, and why (a refusal's ten minutes, say).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub wait_until: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub wait_why: Option<String>,
 }
 
@@ -246,7 +246,7 @@ pub struct LinkView {
 /// A sleep timer: the player pauses at `at_ms` (epoch milliseconds), or when the playing track ends. The player that
 /// plays keeps it, as only it is sure to be awake then (offline, behind a locked screen).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 pub struct Sleep {
     #[serde(default)]
     pub at_ms: Option<u64>,
@@ -255,7 +255,7 @@ pub struct Sleep {
 }
 
 /// A value that is there, null included: `Some(None)` for null, the field's absence stays `None` (its default).
-pub(super) fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+pub fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
     T::deserialize(d).map(Some)
 }
 
@@ -787,6 +787,6 @@ pub fn players() -> Option<Arc<dyn Players>> {
 }
 
 /// Play On as it starts: the players there are, the first one set (as `PlayOn::instance` keeps its first).
-pub(super) fn set_players(on: Arc<dyn Players>) {
+pub fn set_players(on: Arc<dyn Players>) {
     let _ = PLAYERS.set(on);
 }

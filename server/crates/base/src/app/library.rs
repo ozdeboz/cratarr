@@ -27,11 +27,11 @@ pub struct SourceTab {
     pub playing: bool,
 }
 
-pub(crate) fn epoch_now() -> i64 {
+pub fn epoch_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-pub(super) fn label_of(cfg: &SourceConfig) -> String {
+pub fn label_of(cfg: &SourceConfig) -> String {
     source::kind(&cfg.kind).map_or_else(|| cfg.kind.clone(), |k| k.label.to_string())
 }
 
@@ -93,7 +93,7 @@ fn folders_of(main: Vec<String>, own: Vec<String>, incoming: Vec<String>, last_m
 /// every library switched on). `without`: `source/library` keys, as the page's library switches keep them; only this
 /// server's count. A folder is left out when every library of the server in use that keeps files there (as
 /// `derive_folders` finds them) is switched off; a folder none of them keeps stays.
-pub(super) fn folders_switched_off(a: &Active, without: &[String]) -> Vec<String> {
+pub fn folders_switched_off(a: &Active, without: &[String]) -> Vec<String> {
     let off = |library: &str| without.iter().any(|k| k.strip_prefix(a.cfg.id.as_str()).and_then(|r| r.strip_prefix('/')) == Some(library));
     let (mut on, mut out) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
     for l in a.libraries().iter().filter_map(|u| a.placement.libraries.iter().find(|l| l.id == u.id)) {
@@ -104,25 +104,25 @@ pub(super) fn folders_switched_off(a: &Active, without: &[String]) -> Vec<String
 }
 
 /// A configured source and, when it is enabled and its settings work, the connection and where its music lies.
-pub(super) struct Active {
-    pub(super) cfg: SourceConfig,
-    pub(super) source: Option<Arc<dyn Source>>,
-    pub(super) placement: Placement,
-    pub(super) error: Option<String>,
+pub struct Active {
+    pub cfg: SourceConfig,
+    pub source: Option<Arc<dyn Source>>,
+    pub placement: Placement,
+    pub error: Option<String>,
 }
 
 /// A library in use (0101 point 1), as every reader takes it (`Active::libraries`). `owner`: own music's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Used {
-    pub(super) id: String,
-    pub(super) kind: LibraryKind,
-    pub(super) owner: Option<String>,
+pub struct Used {
+    pub id: String,
+    pub kind: LibraryKind,
+    pub owner: Option<String>,
 }
 
 impl Active {
     /// The libraries in use, in order: the settings' list, then (Cratarr's own source) each account's own music (0101
     /// point 9, from the own-music folder). What a library is, every reader asks here, never the list itself.
-    pub(super) fn libraries(&self) -> Vec<Used> {
+    pub fn libraries(&self) -> Vec<Used> {
         let mut used: Vec<Used> = self.cfg.libraries.0.iter().map(|l| Used { id: l.id.clone(), kind: l.kind, owner: None }).collect();
         if let Some(own) = self.cfg.own_music() {
             used.extend(self.placement.libraries.iter().filter(|l| std::path::Path::new(&l.id).parent() == Some(own.as_path())).map(|l| Used {
@@ -141,42 +141,42 @@ impl Active {
     }
 
     /// The main libraries' ids, in order: the first takes every fallback (0101 point 1).
-    pub(super) fn main(&self) -> Vec<String> {
+    pub fn main(&self) -> Vec<String> {
         self.of(LibraryKind::Main)
     }
 
     /// The Incoming libraries' ids, in order.
-    pub(super) fn incoming(&self) -> Vec<String> {
+    pub fn incoming(&self) -> Vec<String> {
         self.of(LibraryKind::Incoming)
     }
 
     /// Where `account`'s own music lies, made or not, as a library's id; none without an own-music folder.
-    pub(super) fn own_of(&self, account: &str) -> Option<String> {
+    pub fn own_of(&self, account: &str) -> Option<String> {
         self.cfg.own_music().filter(|_| self.cfg.own_music_on(account)).map(|own| own.join(account).display().to_string())
     }
 
     /// The libraries whose records are kept: the main ones and everyone's own music, out of a fetcher's reach.
-    pub(super) fn kept(&self) -> Vec<String> {
+    pub fn kept(&self) -> Vec<String> {
         self.libraries().into_iter().filter(|u| u.kind != LibraryKind::Incoming).map(|u| u.id).collect()
     }
 
     /// What library `id` is; none for one not in use.
-    pub(super) fn kind_of(&self, id: &str) -> Option<LibraryKind> {
+    pub fn kind_of(&self, id: &str) -> Option<LibraryKind> {
         self.libraries().into_iter().find(|u| u.id == id).map(|u| u.kind)
     }
 
     /// Whether library `id` is in use.
-    pub(super) fn used(&self, id: &str) -> bool {
+    pub fn used(&self, id: &str) -> bool {
         self.kind_of(id).is_some()
     }
 
     /// The quality limit a move into `library` follows: its own, else its kind's; none for one not in use.
-    pub(super) fn quality_of(&self, library: &str) -> Quality {
+    pub fn quality_of(&self, library: &str) -> Quality {
         self.cfg.libraries.get(library).and_then(|l| l.quality).or_else(|| self.kind_of(library).map(LibraryKind::quality)).unwrap_or(Quality::None)
     }
 
     /// The dot of `library`'s albums (`settings::colour_among`).
-    pub(super) fn colour_of(&self, library: &str) -> Option<String> {
+    pub fn colour_of(&self, library: &str) -> Option<String> {
         let used = self.libraries();
         crate::settings::colour_among(used.iter().map(|u| (u.id.as_str(), u.kind)), library, self.cfg.libraries.get(library).and_then(|l| l.colour.as_deref()))
     }
@@ -206,14 +206,14 @@ impl Active {
     }
 
     /// The playlist line for a track: its path in the Music folder, if it lies there.
-    pub(super) fn entry(&self, music: Option<&str>, track: &source::Track) -> Option<String> {
+    pub fn entry(&self, music: Option<&str>, track: &source::Track) -> Option<String> {
         self.placement.entry(music?, track.path.as_deref())
     }
 
     /// A track's playlist line, for any track Cratarr can see, in whichever library it lies: its path in the folder lines are
     /// made from (`InUse::first`), or for one elsewhere its path from there ("../lidarr-music/X/01.flac"). Keep and Replace move
     /// such a line along with the file, and Delete takes it out (decision 0011 §6).
-    pub(super) fn line(&self, folders: &crate::catalogue::InUse, track: &source::Track) -> Option<String> {
+    pub fn line(&self, folders: &crate::catalogue::InUse, track: &source::Track) -> Option<String> {
         let (_, first) = folders.first()?;
         folders.iter().find_map(|(_, f)| {
             let rel = self.placement.entry(&f.to_string_lossy(), track.path.as_deref())?;
@@ -227,7 +227,7 @@ impl Active {
 /// catalogue, the user data, each catalogue folder's kind and the tag rules. Blocking.
 pub type Upgrade = fn(&Catalogue, &crate::userdata::UserData, &[(i64, LibraryKind)], &crate::catalogue::Rules) -> Result<()>;
 
-pub(super) const CATALOGUE_KEY: &str = "catalogue";
+pub const CATALOGUE_KEY: &str = "catalogue";
 const TOP_KEY: &str = "catalogue_top";
 
 /// What the user data remembers of the catalogue, against the catalogue open now.
@@ -361,7 +361,7 @@ impl Library {
     /// `last_music`: where the Music libraries were last found (or CRATARR_PLAYLIST_DIR), used until a server answers.
     /// `playlists_db`: where the playlists are kept (the user data). `upgrade`: 0.17's step (`step_017::run`), as App::new
     /// hands it in; none, no step.
-    pub(super) async fn new(
+    pub async fn new(
         data_dir: Option<String>,
         last_music: Option<String>,
         sources: Vec<SourceConfig>,
@@ -462,7 +462,7 @@ impl Library {
 
     /// Look at each server's library scan (one cheap request each): one at the same progress for `STALL_SECS` has
     /// stopped; a scan that finished after a notice clears it.
-    pub(super) async fn watch_servers(&self) {
+    pub async fn watch_servers(&self) {
         let now = epoch_now();
         for (id, s) in self.connected_sources() {
             let Ok(scan) = s.library_scan().await else { continue };
@@ -512,7 +512,7 @@ impl Library {
         self.naming.write().unwrap_or_else(|p| p.into_inner()).1 = Some(t);
     }
 
-    pub(super) fn tag_rules(&self) -> crate::catalogue::Rules {
+    pub fn tag_rules(&self) -> crate::catalogue::Rules {
         self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
@@ -555,7 +555,7 @@ impl Library {
 
     /// Whether a server of this kind (`source::*::KIND.id`) is set up and switched on, answering or not (0.11, decision
     /// 0085: the capability list).
-    pub(super) fn kind_on(&self, kind: &str) -> bool {
+    pub fn kind_on(&self, kind: &str) -> bool {
         self.live().iter().any(|a| a.cfg.enabled && a.cfg.kind == kind)
     }
 
@@ -570,7 +570,7 @@ impl Library {
     }
 
     /// Some enabled server has an Incoming library: the header's `incoming` and the capability list's.
-    pub(super) fn incoming_on(&self) -> bool {
+    pub fn incoming_on(&self) -> bool {
         self.live().iter().any(|a| a.cfg.enabled && !a.incoming().is_empty())
     }
 
@@ -589,7 +589,7 @@ impl Library {
             .collect()
     }
 
-    pub(super) fn live(&self) -> Arc<Vec<Arc<Active>>> {
+    pub fn live(&self) -> Arc<Vec<Arc<Active>>> {
         self.live.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
@@ -603,21 +603,21 @@ impl Library {
         self.catalogue().folders().iter().filter(|(_, f)| off.contains(f)).map(|(i, _)| i).collect()
     }
 
-    pub(super) fn connected(&self) -> Vec<(Arc<Active>, Arc<dyn Source>)> {
+    pub fn connected(&self) -> Vec<(Arc<Active>, Arc<dyn Source>)> {
         self.live().iter().filter_map(|a| a.source.clone().map(|s| (a.clone(), s))).collect()
     }
 
-    pub(super) fn folders(&self) -> Folders {
+    pub fn folders(&self) -> Folders {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).0.clone()
     }
 
-    pub(super) fn music(&self) -> Option<String> {
+    pub fn music(&self) -> Option<String> {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).0.music.clone()
     }
 
     /// The catalogue's folders that are the main libraries', by their ids (0101 point 1: main libraries are equal; a
     /// folder's id says nothing of its kind).
-    pub(super) fn main_folders(&self) -> Vec<i64> {
+    pub fn main_folders(&self) -> Vec<i64> {
         let f = self.folders();
         let main: Vec<&std::path::Path> = f.music.iter().chain(&f.more_main).map(std::path::Path::new).collect();
         self.catalogue.folders().iter().filter(|(_, p)| main.contains(&p.as_path())).map(|(id, _)| id).collect()
@@ -638,7 +638,7 @@ impl Library {
     }
 
     /// Whether a catalogue folder's records are kept: not an Incoming library's.
-    pub(super) fn is_kept(&self, folder: i64) -> bool {
+    pub fn is_kept(&self, folder: i64) -> bool {
         self.kept_folders().contains(&folder)
     }
 
@@ -660,7 +660,7 @@ impl Library {
 
     /// `account`'s own music as a library, its id (0101 point 9): its subfolder of the own-music folder, made at its first
     /// use, when it starts off for everyone else (0101 point 6). None while no own-music folder is set.
-    pub(super) async fn own_library(&self, account: &str) -> Result<Option<String>> {
+    pub async fn own_library(&self, account: &str) -> Result<Option<String>> {
         let _one_at_a_time = self.changing.lock().await;
         let live = self.live();
         let Some(at) = live.iter().position(|a| a.cfg.own_music().is_some()) else { return Ok(None) };
@@ -693,7 +693,7 @@ impl Library {
 
     /// The name of the library the Music folder belongs to, as its server calls it: what Keep and Replace say they
     /// put albums in. None while no server says (or Cratarr does not see its files).
-    pub(super) fn music_name(&self) -> Option<String> {
+    pub fn music_name(&self) -> Option<String> {
         let music = self.music()?;
         self.connected().iter().find_map(|(a, _)| {
             a.placement.libraries.iter().find(|l| a.kind_of(&l.id) == Some(LibraryKind::Main) && l.folders.contains(&music)).map(|l| l.name.clone())
@@ -701,7 +701,7 @@ impl Library {
     }
 
     /// Where the playlists are kept (the user data): a playlist by its id.
-    pub(super) fn playlists_db(&self) -> &Arc<crate::userdata::UserData> {
+    pub fn playlists_db(&self) -> &Arc<crate::userdata::UserData> {
         &self.playlists_db
     }
 
@@ -710,13 +710,13 @@ impl Library {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).1.clone()
     }
 
-    pub(super) fn store(&self) -> Result<Arc<Store>, ToggleError> {
+    pub fn store(&self) -> Result<Arc<Store>, ToggleError> {
         self.store_opt().ok_or(ToggleError::NoMusicFolder)
     }
 
     /// One account's playlists (decision 0051): the first administrator's (`None`) are the ones kept before accounts;
     /// another's are its own, their copies in a folder of their own.
-    pub(super) fn store_for(&self, account: Option<&str>) -> Result<Arc<Store>, ToggleError> {
+    pub fn store_for(&self, account: Option<&str>) -> Result<Arc<Store>, ToggleError> {
         let top = self.store()?;
         let Some(account) = account else { return Ok(top) };
         if !crate::playlists::account_folder_ok(account) {
@@ -732,7 +732,7 @@ impl Library {
 
     /// Every account's playlists, for Cratarr's own work over all of them (albums that move, dead entries): the first
     /// administrator's, and each other account's that has any.
-    pub(super) fn all_stores(&self) -> Vec<Arc<Store>> {
+    pub fn all_stores(&self) -> Vec<Arc<Store>> {
         let Some(top) = self.store_opt() else { return Vec::new() };
         let mut out = vec![top.clone()];
         let first = crate::serve::instance().and_then(|s| s.users.owner());
@@ -747,7 +747,7 @@ impl Library {
     }
 
     /// Where Cratarr keeps its own files (none: in memory only).
-    pub(super) fn data_dir(&self) -> Option<&str> {
+    pub fn data_dir(&self) -> Option<&str> {
         self.data_dir.as_deref()
     }
 
@@ -758,7 +758,7 @@ impl Library {
 
     /// Put new sources in use, and follow where their libraries' files are: a new Music folder gets its own playlist
     /// store, and the catalogue follows the folders.
-    pub(super) async fn switch_to(&self, next: Vec<Arc<Active>>) -> Result<()> {
+    pub async fn switch_to(&self, next: Vec<Arc<Active>>) -> Result<()> {
         let old = self.folders();
         let folders = derive_folders(&next, old.music.as_deref());
         *self.live.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
@@ -820,12 +820,14 @@ impl Library {
     }
 }
 
-#[cfg(test)]
-pub(super) mod switched_off_tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod switched_off_tests {
+    // Shared with the tests of the crates above (test-support): idle where no test calls it.
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
 
     /// A data folder of a test's own, and its user data.
-    pub(in crate::app) fn data_folder(name: &str) -> (PathBuf, Arc<crate::userdata::UserData>) {
+    pub fn data_folder(name: &str) -> (PathBuf, Arc<crate::userdata::UserData>) {
         let d = std::env::temp_dir().join(format!("cratarr-library-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
         std::fs::create_dir_all(&d).unwrap();

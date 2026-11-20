@@ -9,7 +9,7 @@ use crate::journal::Event;
 /// rows into its trash, marked trashed with the token, letting go of their tracks (as Replace's old files do); the copies' rows made
 /// from the own copy's (`Catalogue::copy_rows`: on the same tracks, read and analysed), each shared as its copy is (`shared`, in
 /// the copies' order). The own copy's rows as they were (OQ-E). Blocking.
-pub(crate) fn rows_of_copy(c: &crate::catalogue::Catalogue, event: &Event, shared: &[bool]) -> Result<()> {
+pub fn rows_of_copy(c: &crate::catalogue::Catalogue, event: &Event, shared: &[bool]) -> Result<()> {
     let Event::AlbumReplacedFromCopy { copies, replaced, token, .. } = event else { return Ok(()) };
     for r in replaced {
         if !c.has_row(r.to.0, &r.to.1) {

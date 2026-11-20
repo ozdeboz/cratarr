@@ -22,8 +22,8 @@ pub struct Mark {
 /// and the key it was asked by (Discover's). One coming wins over one only wanted.
 #[derive(Debug, Clone, Default)]
 pub struct Marks {
-    pub(super) by_record: HashMap<i64, Mark>,
-    pub(super) by_key: HashMap<String, Mark>,
+    pub by_record: HashMap<i64, Mark>,
+    pub by_key: HashMap<String, Mark>,
 }
 
 impl Marks {

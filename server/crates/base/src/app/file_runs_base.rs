@@ -169,7 +169,7 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
 }
 
 /// `view`, its libraries these folders.
-pub(super) fn view_in(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite], written: bool, roots: &[PathBuf]) -> PlanView {
+pub fn view_in(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite], written: bool, roots: &[PathBuf]) -> PlanView {
     let library_of = |path: &Path| roots.iter().find(|r| path.starts_with(r)).map(|r| r.display().to_string());
     let records = records
         .iter()

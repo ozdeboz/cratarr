@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 
-pub(super) fn file_name(rel: &str) -> String {
+pub fn file_name(rel: &str) -> String {
     Path::new(rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.to_string())
 }
 
@@ -23,21 +23,21 @@ pub struct ReleaseFacts {
 
 /// A release's medium: its tracks' titles and lengths (s), in order.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct Medium {
-    pub(super) format: String,
-    pub(super) tracks: Vec<(String, Option<u32>)>,
+pub struct Medium {
+    pub format: String,
+    pub tracks: Vec<(String, Option<u32>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct Release {
+pub struct Release {
     /// MusicBrainz's id (none for a Discogs release).
-    pub(super) id: String,
-    pub(super) facts: ReleaseFacts,
-    pub(super) media: Vec<Medium>,
+    pub id: String,
+    pub facts: ReleaseFacts,
+    pub media: Vec<Medium>,
 }
 
 /// "4:05" as seconds.
-pub(super) fn duration(s: &str) -> Option<u32> {
+pub fn duration(s: &str) -> Option<u32> {
     let mut secs = 0u32;
     for part in s.trim().split(':') {
         secs = secs * 60 + part.trim().parse::<u32>().ok()?;
@@ -46,7 +46,7 @@ pub(super) fn duration(s: &str) -> Option<u32> {
 }
 
 /// A Discogs tracklist position's medium: "2-5" disc 2, "B3" side B, "3" the one.
-pub(super) fn medium_of(position: &str) -> String {
+pub fn medium_of(position: &str) -> String {
     let p = position.trim();
     if let Some((d, _)) = p.split_once(['-', '.']) {
         return d.to_string();
@@ -54,7 +54,7 @@ pub(super) fn medium_of(position: &str) -> String {
     p.chars().take_while(|c| c.is_ascii_alphabetic()).collect()
 }
 
-pub(super) fn discogs_release(v: &Value) -> Release {
+pub fn discogs_release(v: &Value) -> Release {
     let format = v["formats"].as_array().and_then(|f| f.first()).and_then(|f| f["name"].as_str()).unwrap_or_default().to_string();
     let mut media: Vec<(String, Medium)> = Vec::new();
     for t in v["tracklist"].as_array().into_iter().flatten().filter(|t| t["type_"].as_str().is_none_or(|k| k == "track")) {
@@ -97,13 +97,13 @@ fn titled(t: &str) -> [String; 2] {
     [super::import::loose(t), super::import::loose(base)]
 }
 
-pub(super) fn same_title(a: &str, b: &str) -> bool {
+pub fn same_title(a: &str, b: &str) -> bool {
     let (x, y) = (titled(a), titled(b));
     !x[0].is_empty() && (x[0] == y[0] || (!x[1].is_empty() && x[1] == y[1]))
 }
 
 /// A record's tracks to read: one file a track, the one that plays. What writes goes by `files_in`.
-pub(super) fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
+pub fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
     let tracks = row_tracks(&served.library, album)?;
@@ -125,7 +125,7 @@ fn row_tracks(lib: &crate::serve::library::Library, album: &str) -> Result<Vec<T
 /// What a writer writes to: every file of a record, or of its copy at (catalogue folder, folder in it) alone. A track's files
 /// come together, in the album's order, the one that plays first, and read as that track. A file on no track of the row copy
 /// (a copy with tracks of its own, until they are taken) comes last, as its own tags say.
-pub(super) fn files_in(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Vec<Track>> {
+pub fn files_in(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Vec<Track>> {
     let (lib, cat) = (&served.library, served.catalogue());
     if let Some((folder, dir)) = at {
         return copy_tracks(lib, cat, album, *folder, dir);
@@ -156,7 +156,7 @@ pub(super) fn files_in(served: &crate::serve::Serve, album: &str, at: Option<&(i
 
 /// The tracks of a record's copy at (catalogue folder, folder in it), in its order, or of the record with none named. A copy
 /// that does not play has no rows in `songs`: its files and what their tags say are all there is of it.
-pub(super) fn tracks_in(album: &str, at: Option<&(i64, String)>) -> Result<(Vec<Track>, Option<String>, String, String)> {
+pub fn tracks_in(album: &str, at: Option<&(i64, String)>) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let Some((folder, dir)) = at else { return tracks_of(album) };
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
@@ -189,7 +189,7 @@ fn by_its_tags(root: &str, id: String, folder: i64, rel: String, ms: u64, tags: 
 }
 
 /// `tracks_in`'s reading of a copy's files.
-pub(super) fn copy_tracks(lib: &crate::serve::library::Library, cat: &crate::catalogue::Catalogue, album: &str, folder: i64, dir: &str) -> Result<Vec<Track>> {
+pub fn copy_tracks(lib: &crate::serve::library::Library, cat: &crate::catalogue::Catalogue, album: &str, folder: i64, dir: &str) -> Result<Vec<Track>> {
     let root = lib.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
     let tags = tagged(cat, folder, dir)?;
     let mut tracks: Vec<Track> = lib.copy_songs(album, folder, dir)?.into_iter().map(|(id, rel, ms)| by_its_tags(&root, id, folder, rel, ms, &tags)).collect();

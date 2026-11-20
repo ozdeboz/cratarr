@@ -45,7 +45,7 @@ pub struct Choice {
 }
 
 /// A track's tag values by name, as the tag reader reads them (the first of each).
-pub(crate) fn values(track: &Path, names: &[&str]) -> Result<Vec<Option<String>>> {
+pub fn values(track: &Path, names: &[&str]) -> Result<Vec<Option<String>>> {
     let (tags, _) = crate::catalogue::tags::read(track)?;
     Ok(names.iter().map(|n| tags.items.iter().find(|(_, name, _)| *name == Some(*n)).map(|(_, _, v)| v.clone())).collect())
 }

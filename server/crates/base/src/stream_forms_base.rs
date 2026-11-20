@@ -20,13 +20,13 @@ fn rate_of(source: u32) -> u32 {
 }
 
 /// A sample at 16 bits (a 16-bit source comes back exactly as it was).
-pub(crate) fn to_i16(x: f32) -> i16 {
+pub fn to_i16(x: f32) -> i16 {
     (x * 32_768.0).round().clamp(-32_768.0, 32_767.0) as i16
 }
 
 /// The source, its rate out, the frame it starts at (where `from_ms` is) and its length out; `None` when it is not a
 /// lossless file.
-pub(crate) fn open(input: &Path, from_ms: u64) -> Result<Option<(convert::Source, u32, u64, Option<u64>)>> {
+pub fn open(input: &Path, from_ms: u64) -> Result<Option<(convert::Source, u32, u64, Option<u64>)>> {
     let Some(mut source) = convert::Source::open(input)? else { return Ok(None) };
     let format = source.format.clone();
     if format.channels == 0 {

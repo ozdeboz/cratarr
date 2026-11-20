@@ -68,7 +68,7 @@ pub struct SyncService {
 }
 
 impl SyncService {
-    pub(super) fn new(lib: Arc<Library>, state: SyncState, journal: Arc<crate::journal::Journal>) -> Self {
+    pub fn new(lib: Arc<Library>, state: SyncState, journal: Arc<crate::journal::Journal>) -> Self {
         let follow = super::follow::Follow::new(lib.clone(), journal);
         Self {
             lib,
@@ -85,7 +85,7 @@ impl SyncService {
 
     /// Hear of album actions and their Undo, and make the playlist lines follow at once, for as long as Cratarr runs.
     /// What is missed (a lag, a failed write) the pass catches up.
-    pub(super) fn listen(self: &Arc<Self>) {
+    pub fn listen(self: &Arc<Self>) {
         use tokio::sync::broadcast::error::RecvError;
         let journal = self.follow.journal();
         for (mut rx, undone) in [(journal.subscribe(), false), (journal.subscribe_undone(), true)] {
@@ -289,7 +289,7 @@ impl SyncService {
     }
 
     /// Bring the copies of these playlists in step soon after an edit (the pass would in 30 s).
-    pub(super) fn changed(self: &Arc<Self>, _playlists: Vec<String>) {
+    pub fn changed(self: &Arc<Self>, _playlists: Vec<String>) {
         if self.wanted.swap(true, Ordering::Relaxed) {
             return;
         }
@@ -324,7 +324,7 @@ impl SyncService {
 
     /// Every playlist's sync as the page shows it, by playlist: shared or not, and its copy in each account (made yet
     /// or not) with how its last pass went (yours first).
-    pub(super) fn links(&self) -> HashMap<String, Vec<LinkView>> {
+    pub fn links(&self) -> HashMap<String, Vec<LinkView>> {
         let last = self.last.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let owners = self.owners.lock().unwrap_or_else(|p| p.into_inner()).clone();
         // A copy on a server switched off is not waiting for anything: left out (the owner, 2026-11-04: every playlist
@@ -393,22 +393,22 @@ impl SyncService {
     }
 
     /// The other names each playlist is spoken as, by playlist.
-    pub(super) fn spoken(&self) -> std::collections::HashMap<String, Vec<String>> {
+    pub fn spoken(&self) -> std::collections::HashMap<String, Vec<String>> {
         self.state.spoken().unwrap_or_default()
     }
 
-    pub(super) fn set_spoken(&self, playlist: &str, names: &[String]) -> Result<(), ToggleError> {
+    pub fn set_spoken(&self, playlist: &str, names: &[String]) -> Result<(), ToggleError> {
         Ok(self.state.set_spoken(playlist, names)?)
     }
 
     /// What can be set for a playlist's sync: sharing it with everyone.
-    pub(super) async fn choices(&self) -> Vec<TargetChoice> {
+    pub async fn choices(&self) -> Vec<TargetChoice> {
         vec![TargetChoice { target: Kind::Shared.key(), label: "Shared with everyone".into() }]
     }
 
     /// Share a playlist with everyone: the next pass gives every account a copy (also those that took it out before).
     /// Accounts follow by themselves; only sharing is set.
-    pub(super) async fn link(self: &Arc<Self>, playlist: &str, kind: Kind) -> Result<(), ToggleError> {
+    pub async fn link(self: &Arc<Self>, playlist: &str, kind: Kind) -> Result<(), ToggleError> {
         if kind != Kind::Shared {
             return Err(ToggleError::Refused("accounts follow by themselves; only sharing is set".into()));
         }
@@ -427,7 +427,7 @@ impl SyncService {
 
     /// A restored playlist (its deletion undone) gets back what it had: shared, and the copies (made again by the next
     /// pass).
-    pub(super) async fn restore_links(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
+    pub async fn restore_links(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
         {
             let _one = self.one_at_a_time.lock().await;
             self.state.revive_targets(playlist)?;
@@ -437,7 +437,7 @@ impl SyncService {
     }
 
     /// A new playlist: yours only (the next pass makes its copy); what a deleted one of the same name had is not its.
-    pub(super) async fn new_playlist(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
+    pub async fn new_playlist(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
         self.state.forget_retired(playlist)?;
         self.state.clear_left(playlist)?;
         self.changed(vec![playlist.to_string()]);
@@ -445,7 +445,7 @@ impl SyncService {
     }
 
     /// Stop sharing a playlist: the next pass deletes the other accounts' copies; yours stays.
-    pub(super) async fn unlink(self: &Arc<Self>, playlist: &str, kind: &Kind) -> Result<(), ToggleError> {
+    pub async fn unlink(self: &Arc<Self>, playlist: &str, kind: &Kind) -> Result<(), ToggleError> {
         if kind != &Kind::Shared {
             return Err(ToggleError::Refused("accounts follow by themselves; only sharing is set".into()));
         }

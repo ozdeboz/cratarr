@@ -20,12 +20,12 @@ pub enum Event {
 /// Events kept for a subscriber that is a moment behind; one further behind skips what it missed.
 const KEPT: usize = 256;
 
-pub(super) fn bus() -> &'static broadcast::Sender<Event> {
+pub fn bus() -> &'static broadcast::Sender<Event> {
     static BUS: OnceLock<broadcast::Sender<Event>> = OnceLock::new();
     BUS.get_or_init(|| broadcast::channel(KEPT).0)
 }
 
-pub(super) fn tell(e: Event) {
+pub fn tell(e: Event) {
     // No subscriber is no error.
     let _ = bus().send(e);
 }

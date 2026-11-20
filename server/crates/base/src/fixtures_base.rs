@@ -8,7 +8,7 @@ use anyhow::Result;
 const RATE: u32 = 44_100;
 
 /// A tone (`seconds` long, its pitch by `n`) as a 16-bit stereo WAV.
-pub(crate) fn wav(path: &Path, n: u32, seconds: u32) -> Result<()> {
+pub fn wav(path: &Path, n: u32, seconds: u32) -> Result<()> {
     let frames = (RATE * seconds) as usize;
     let hz = 220.0 * (1.0 + f64::from(n) * 0.125);
     let mut data = Vec::with_capacity(frames * 4);

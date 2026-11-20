@@ -22,9 +22,9 @@ pub struct LidarrView {
 }
 
 /// A Lidarr connection and its client (`None` when the key cannot be used in a header).
-pub(super) type LidarrPair = (Option<settings::LidarrConfig>, Option<crate::lidarr::Lidarr>);
+pub type LidarrPair = (Option<settings::LidarrConfig>, Option<crate::lidarr::Lidarr>);
 
-pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
+pub fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
     // Switched off: kept, not used.
     let client = cfg.as_ref().filter(|c| c.enabled).and_then(|c| match crate::lidarr::Lidarr::new(&c.url, &c.api_key) {
         Ok(l) => Some(l),

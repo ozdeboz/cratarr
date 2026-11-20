@@ -26,6 +26,6 @@ pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>
 
 /// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
 /// aside (`name_key`), each run of digits as its number. Classical's works are ordered by it too (0.12).
-pub(crate) fn natural(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn natural(a: &str, b: &str) -> std::cmp::Ordering {
     natural_keys(&name_key(a), &name_key(b))
 }

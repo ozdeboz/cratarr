@@ -127,7 +127,7 @@ enum Asked {
 }
 
 impl SettingsService {
-    pub(super) fn new(
+    pub fn new(
         lib: Arc<Library>,
         files: Arc<dyn Files>,
         playlists: Arc<dyn SettingsPlaylists>,
@@ -182,7 +182,7 @@ impl SettingsService {
 
     /// Work out the template Music already follows, once, when none is saved: what Keep and Replace use until one is.
     /// Waits until the catalogue has read most of the library's tags.
-    pub(super) async fn infer_naming(&self) {
+    pub async fn infer_naming(&self) {
         if self.lib.templates() != (None, None) {
             return;
         }

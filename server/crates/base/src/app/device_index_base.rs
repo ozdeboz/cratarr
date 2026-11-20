@@ -17,7 +17,7 @@ use crate::settings::LibraryKind;
 impl Library {
     /// Every catalogue folder as a device names it: its library where one holds it, else its path, so a server's library not
     /// answering for now does not take its rows off every device. By its id, a folder's, `order` saying the libraries' order. Blocking.
-    pub(super) fn index_libraries(&self, serve: &Serve) -> Vec<index::Library> {
+    pub fn index_libraries(&self, serve: &Serve) -> Vec<index::Library> {
         let (kinds, live, folders) = (self.folder_kinds(), self.live(), self.catalogue().folders());
         let of = |path: &Path| {
             live.iter().find_map(|a| {
@@ -52,7 +52,7 @@ impl Library {
 }
 
 /// Where the log stands for a device at `since`, nothing built: whether it has anything to ask for. Blocking.
-pub(super) fn stands_for(serve: &Serve, libraries: &[index::Library], since: Option<i64>) -> Result<IndexStands> {
+pub fn stands_for(serve: &Serve, libraries: &[index::Library], since: Option<i64>) -> Result<IndexStands> {
     let turn = serve.device_turn();
     let cat = serve.catalogue();
     let (rev, floor) = (cat.index_rev()?, cat.index_floor()?);

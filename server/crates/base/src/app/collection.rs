@@ -47,7 +47,7 @@ pub struct CollectionService {
 }
 
 impl CollectionService {
-    pub(super) fn new(lib: Arc<Library>, shelves: Arc<Shelves>) -> Self {
+    pub fn new(lib: Arc<Library>, shelves: Arc<Shelves>) -> Self {
         Self { lib, shelves, cache: Mutex::new(HashMap::new()), changed: tokio::sync::broadcast::channel(16).0, reading: Mutex::new(()) }
     }
 

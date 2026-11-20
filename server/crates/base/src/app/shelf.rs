@@ -11,7 +11,7 @@ use crate::source::{self, Source};
 /// Which catalogue folders hold a list's albums: the Music folder (catalogue folder 0) or the Incoming ones (1 on).
 /// Both can hold an album directory of the same name, so a list looks only at its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Shelf {
+pub enum Shelf {
     Music,
     Incoming,
 }
@@ -27,7 +27,7 @@ fn details_at(seen: &Seen, folders: &[i64], path: &str) -> Option<source::AlbumD
 }
 
 /// One read of a server's albums.
-pub(super) struct ShelfRead {
+pub struct ShelfRead {
     /// False when the server cannot list albums at all.
     pub supported: bool,
     pub albums: Vec<source::Album>,
@@ -35,7 +35,7 @@ pub(super) struct ShelfRead {
 }
 
 /// Reads album lists, keeping what had to be asked of a server (see `read`).
-pub(super) struct Shelves {
+pub struct Shelves {
     lib: Arc<Library>,
     /// Album details asked of a source, by source and album id: (the source's stamp then, details).
     details: Mutex<HashMap<String, (Option<String>, source::AlbumDetails)>>,
@@ -44,14 +44,14 @@ pub(super) struct Shelves {
 }
 
 impl Shelves {
-    pub(super) fn new(lib: Arc<Library>, data_dir: Option<&str>) -> Self {
+    pub fn new(lib: Arc<Library>, data_dir: Option<&str>) -> Self {
         let details_file = data_dir.map(|d| PathBuf::from(d).join("incoming-albums.json"));
         let details = details_file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         Self { lib, details: Mutex::new(details), details_file }
     }
 
     /// The albums of `libraries` on one server, newest first, at most `limit` from each library.
-    pub(super) async fn read(&self, a: &Active, s: &dyn Source, libraries: &[String], shelf: Shelf, limit: usize) -> ShelfRead {
+    pub async fn read(&self, a: &Active, s: &dyn Source, libraries: &[String], shelf: Shelf, limit: usize) -> ShelfRead {
         let supported = s.lists_albums();
         let mut listed = Vec::new();
         let mut error = None;
