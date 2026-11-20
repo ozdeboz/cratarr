@@ -24,7 +24,9 @@ release to the moment 0.17's last preview is cut.
    - `gate`: the file gate, reachable only through itself;
    - `app`;
    - `api`;
-   - a thin `cratarr-server` binary.
+   - a thin `cratarr-server` binary;
+   - `cratarr-domain`: the domain core's pure part (0104), pure, above `rules`, below `store`; made at the core's
+     first run (added 2026-11-20).
 
    It is a directed graph with no cycles.
 2. **Moves only:**
@@ -34,14 +36,19 @@ release to the moment 0.17's last preview is cut.
      their old names;
    - no formatter runs, so the diffs stay moves and import lines.
 3. **Each step ends green,** with the same test counts before and after.
-4. **Phase 2,** cutting `app` by object area, comes with the domain core's runs: 85% of recent commits touch `app`.
+4. **Phase 2,** cutting `app` by object area, comes right after 0.17 (the owner, 2026-11-20; first planned with the
+   domain core's runs): the wrong-way references are untangled in three lanes by area, then the files move in one
+   night; the domain core builds on the split crates. 85% of recent commits touch `app`.
 5. **One boxing spawn helper** follows the moves in its own commit, against the compile time that tasks' future types
    cost.
 
 ## Consequences
 
-- **0.17's release branch is cut before the split.** 0.17's later fixes are carried to the split tree by hand.
-- **Expected, to be measured with the same one-line edits as before the split:**
+- **0.17's release branch is cut before the split.** It is merged forward into the split tree, and so are 0.17's later
+  fixes (CONTRIBUTING: a merge, never a cherry-pick), conflicts resolved by hand onto the crates' paths (amended
+  2026-11-20; first written as carried by hand).
+- **Expected, measured from the development runs' own timings after the split** (the owner, 2026-11-20, in place of
+  repeating the one-line edits):
   - a store edit and its tests drop from about 68 s to about 18 s;
   - an api edit from 93 s to about 20 s;
   - the small crates' to a few seconds;

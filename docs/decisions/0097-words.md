@@ -30,7 +30,8 @@ switch (types and years, Settings › Libraries) and a second was planned for wo
 3. **Hand, then the files, then the services.** What is set by hand wins (each field with Reset back to its
    sources); then what the files say; then the services (MusicBrainz, Discogs, Last.fm), weighted, a word below the
    floor left out. **Mood is AudioMuse's** (CLAP), hand able to override it for a record; the files' MOOD words are
-   read again as genre, style or tag (a genre where they are one, "religious" a style, the rest tags).
+   read again as genre, style or tag (a genre where it is one of the 26, a style where a source calls it a genre or a
+   style, the rest tags: amended 2026-11-20, below).
 4. **One spelling per word.** Case, spaces and hyphens fold by themselves; real synonyms are one alias list per kind
    (as 0.12's genres'), kept in the Catalogue sheet. Every reader sees the one spelling.
 
@@ -76,3 +77,30 @@ Each step on staging before the next.
 - A word found by search is a word a crate's condition finds, and the other way round; a mood is a measured mood.
 - The files change only where the listener chose a kind to be written, and only after Review.
 - Nothing a source said is lost: a word switched off or folded stays in Cratarr, its source named.
+
+## Amended 2026-11-20: one genre model, and where a word lives (the owner; for 0.18)
+
+Genres are a hand-kept set of 26 (`shared/genres.json`): Rock, Pop, Electronic, Dance, Ambient, Experimental, Jazz,
+Blues, Soul, Funk, R&B, Hip Hop, Reggae, Latin, Folk, Country, World, Classical, Metal, Punk, Soundtrack, Spoken Word,
+Children's, Religious, Easy Listening, New Age. No families above them. A word some caller (Discogs, MusicBrainz, a
+file's GENRE) names a genre or style and that isn't one of the 26 is a style; any other word is a tag. Every path splits
+on "/", ";" and "," (never on "&"; a leading "&" or "and" dropped), after the owner's exceptions list ("RnB/Swing" is
+R&B and New Jack Swing; "Cut-up/DJ" is Turntablism). A style counts toward any number of the 26 through links that are
+never shown; they run after the merge, for record and track alike. A word lives where its source said it (files and
+AudioMuse per track; Discogs, MusicBrainz and Last.fm per record; the hand at either) and rises to the record on half the
+tracks, AudioMuse's by its average score. Write puts genres and styles into GENRE; STYLE is never written. Health lists
+the STYLE words that are no style, and old MOOD tags, to clear, each in one run with one Undo (0092).
+
+Open, for the owner:
+
+- **The link map:** which style counts toward which of the 26 (seeded from Discogs' pairings and MusicBrainz's
+  "subgenre of" and "fusion of"), edited by the owner before anything is built.
+- **Written to files' Style row.** Assumed: the recommended answer, where the Genre row writes genres and styles into
+  GENRE, the Style row goes, and Mood and Tags stay. The other answers: the Style row stays, writing styles into GENRE,
+  off by default; or the same, on by default.
+- **A hand list is final.** Recommended: where the hand set a record's or a track's genres, links add nothing to them; a
+  hand style list's links give genres where the genre kind has no hand list.
+- **Non-words are no words.** Recommended: a value of digits alone, or a word only a file's STYLE uses that no caller
+  knows (work titles, opus numbers), is no genre, style or tag; its raw value stays as the file's fact.
+- **Old MOOD tags taken in.** Recommended: the clean-up first writes their genre and style words into GENRE (and their
+  tags into GROUPING where Tags are written), then clears MOOD; a MOOD that Cratarr wrote is never listed.

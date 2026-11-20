@@ -36,7 +36,10 @@ inventing:
    them, never stored apart. Names follow MusicBrainz's model where they meet: release group, release, recording, work.
 2. **Machines:** the request, the Soulseek item and the arrival each move by one pure `next(state, event)`. A record's
    holding is worked out from its copies by one rule. Waits, holds, retries and progress are job states, shared with
-   0.18's job runner. Each state's words come from one table.
+   0.18's job runner. Each state's words come from one table. The pure domain (the machines, the request's standing,
+   `decide()` and `can()`, the wording and when-tables, the facts' resolving, the matcher, the views' types) lives in a
+   crate of its own, `cratarr-domain`: pure, above `rules`, below `store` (0106). `rules` keeps what the device also
+   runs: a record's holding and its pairing of files to tracks, and the lists (amended 2026-11-20).
 3. **Facts with their sources** (0105): every attribute keeps each source's value, the files' and the hand's. One rule
    resolves them: the hand, then the files, then the services as equals. Disagreement shows as versions. Pictures are
    facts too (0107).
@@ -67,6 +70,7 @@ inventing:
 - The design, its prior art and an inventory of today's duplications are kept with the plan. The prior art includes
   MusicBrainz's model, beets' matching, Seerr's request states, Lidarr's accept-or-reject rules and Siren's entity
   shape.
-- Two data changes, a request column and a facts table, are rehearsed on a copy of production's data before the
-  upgrade.
+- The data changes are rehearsed together on a copy of production's data before the upgrade: a request column, a table
+  for the facts with no home of their own, and the others 0.18's plan lists with its risks (amended 2026-11-20; first
+  written as two).
 - A new page dependency, a query cache (MIT), comes in with live updates.

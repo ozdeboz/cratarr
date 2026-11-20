@@ -132,11 +132,17 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   - **0.17 ends at its first preview and that preview's fixes** (the owner, 2026-11-19). What it was still to hold moves to
     0.18 ([whats-new-0.17](whats-new-0.17.md) says what 0.17 is).
 - **0.18: the crate split, then the domain core** (the owner, 2026-11-19):
-  - the server crate split first ([0106](decisions/0106-the-server-crate-split.md)), for a small edit-and-test loop;
-  - the domain core ([0104](decisions/0104-the-domain-core.md)) in three runs:
+  - the server crate split first and whole ([0106](decisions/0106-the-server-crate-split.md)), for a small
+    edit-and-test loop: phase 1, then right after 0.17 the untangling by area and the move night (the owner,
+    2026-11-20);
+  - the domain core ([0104](decisions/0104-the-domain-core.md)) in three runs, on the split crates:
     1. records and the one record sheet, with live updates;
     2. requests and Soulseek;
-    3. artists and labels, with pictures and their picker ([0107](decisions/0107-pictures-are-facts-with-one-picker.md));
+    3. artists and labels, with pictures and their picker ([0107](decisions/0107-pictures-are-facts-with-one-picker.md))
+       and artist relations ([0100](decisions/0100-cratarrs-own-records-artists-labels.md)'s amendment);
+  - the job runner and the gate's flows: every action through one command path;
+  - one genre model ([0097](decisions/0097-words.md)'s amendment): 26 genres, the rest styles or tags, and where a word
+    lives;
   - versions, none chosen ([0105](decisions/0105-no-source-ranks-above-another.md)), Health's issues as sheets, and filters
     per object kind on the core;
   - what 0.17 did not hold: uploads, and the rest of 0.17's list above.
