@@ -43,6 +43,7 @@ mod app_playing;
 pub mod play;
 mod playlists;
 mod playlists_served;
+mod app_playlists;
 mod playon;
 mod playon_served;
 mod plays;
