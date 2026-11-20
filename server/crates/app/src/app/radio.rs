@@ -436,7 +436,7 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
         return Ok(c.index.clone());
     }
     // The playlists' songs: every account's playlists' lines through the catalogue (what people put together).
-    let lines = match served.playlists() {
+    let lines = match super::PlaylistService::held_by(served) {
         Some(p) => p.snapshot_all().await.map_err(|e| anyhow::anyhow!("reading the playlists: {e:?}"))?,
         None => Vec::new(),
     };
@@ -719,7 +719,7 @@ async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
     let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
     let index = index(&served, &dir).await?;
     let user = served.current_user();
-    let excluded = match served.playlists() {
+    let excluded = match super::PlaylistService::held_by(&served) {
         Some(p) => p.excluded_songs_of(user.as_deref()).await?,
         None => HashSet::new(),
     };

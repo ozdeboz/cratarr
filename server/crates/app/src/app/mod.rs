@@ -16,6 +16,7 @@ pub mod artists;
 pub use cratarr_gate::app::audiomuse;
 pub mod beat_this;
 pub mod capabilities;
+mod app_served;
 pub mod changes;
 pub mod analysis_pass;
 pub mod analysis_import;
@@ -30,6 +31,7 @@ pub mod health;
 pub mod length_fixes;
 pub mod backup_list;
 mod incoming;
+mod incoming_served;
 mod insights;
 pub mod kept;
 mod kodi;
@@ -37,7 +39,9 @@ mod library;
 mod playing;
 pub mod play;
 mod playlists;
+mod playlists_served;
 mod playon;
+mod playon_served;
 mod plays;
 mod queue;
 pub mod history;
@@ -186,6 +190,10 @@ pub struct App {
 
 impl App {
     pub async fn new(cfg: Config, saved: Saved, origin: Origin, served: Option<Arc<crate::serve::Serve>>) -> Result<Arc<Self>> {
+        // What the crates' facts take from the app, before anything can read them (`serve::services::FactsFrom`).
+        if let Some(s) = &served {
+            s.set_facts_from(Arc::new(app_served::AppFacts));
+        }
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
         // The playlists are kept in Cratarr's own library's user data (decision 0101); a test without one keeps them in
         // memory.

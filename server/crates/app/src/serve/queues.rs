@@ -17,8 +17,8 @@
 //! not take a player's again and again.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 
 use serde_json::{Value, json};
 
@@ -33,66 +33,11 @@ use crate::userdata::AppQueue;
 const MOST: usize = 1000;
 /// Of which this many come before the one that plays.
 const BEFORE: usize = 100;
-/// A paused app's session lasts this long after its last report (Navidrome's).
-const PAUSED_FOR: Duration = Duration::from_secs(30 * 60);
-/// A playing one this long after its track's end.
-const AFTER_END: Duration = Duration::from_secs(5);
 /// A play counts when it stops past half the track or this far in (Navidrome's, as Last.fm's).
 const COUNTS_AFTER_MS: u64 = 240_000;
 
-/// What the apps report playing, by account and app.
-#[derive(Default)]
-pub struct Sessions(Mutex<HashMap<(String, String), Session>>);
-
-#[derive(Debug, Clone)]
-struct Session {
-    song: String,
-    state: &'static str,
-    position_ms: u64,
-    rate: f64,
-    duration_ms: u64,
-    /// When the report came.
-    at: Instant,
-    /// The same, epoch seconds.
-    at_epoch: i64,
-}
-
-impl Session {
-    fn moving(&self) -> bool {
-        self.state == "playing"
-    }
-
-    /// Where it is now: counted on from the report while it plays, never past the end.
-    fn position_now(&self) -> u64 {
-        if !self.moving() {
-            return self.position_ms;
-        }
-        let gone = self.at.elapsed().as_millis() as f64 * self.rate;
-        (self.position_ms + gone as u64).min(self.duration_ms.max(self.position_ms))
-    }
-
-    fn over(&self) -> bool {
-        let lasts = if self.moving() && self.rate > 0.0 {
-            let left = self.duration_ms.saturating_sub(self.position_ms) as f64 / self.rate;
-            Duration::from_millis(left as u64) + AFTER_END
-        } else {
-            PAUSED_FOR
-        };
-        self.at.elapsed() > lasts
-    }
-}
-
-impl Sessions {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), Session>> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
-    fn live(&self) -> Vec<((String, String), Session)> {
-        let mut all = self.lock();
-        all.retain(|_, s| !s.over());
-        all.iter().map(|(k, s)| (k.clone(), s.clone())).collect()
-    }
-}
+pub use super::queues_sessions::Sessions;
+use super::queues_sessions::Session;
 
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -198,7 +143,7 @@ struct Player {
 
 /// The asking account's players (decision 0051).
 fn players(serve: &Serve) -> Vec<Player> {
-    let Some(on) = serve.play_on() else { return Vec::new() };
+    let Some(on) = crate::app::PlayOn::held_by(serve) else { return Vec::new() };
     on.list()
         .into_iter()
         .map(|v| Player {
@@ -372,7 +317,7 @@ pub async fn get(serve: &Arc<Serve>, user: &User, by_index: bool) -> Result<Answ
         changed: q.changed,
         by: q.client,
     });
-    let (catalogue, whose, on) = (serve.catalogue().clone(), crate::app::whose_players(), serve.play_on().cloned());
+    let (catalogue, whose, on) = (serve.catalogue().clone(), crate::app::whose_players(), crate::app::PlayOn::held_by(serve));
     let player = crate::run::spawn_blocking(move || latest_player_queue(on, &catalogue, whose.as_deref())).await.map_err(|e| Failed(0, e.to_string()))?;
     let Some(mut q) = saved.chain(player).max_by_key(|q| q.changed) else {
         return Ok(Answer::Json(json!({})));
@@ -416,6 +361,7 @@ pub async fn get(serve: &Arc<Serve>, user: &User, by_index: bool) -> Result<Answ
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn a_players_number_stays_the_same() {

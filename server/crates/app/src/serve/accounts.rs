@@ -73,7 +73,7 @@ fn sessions_of(serve: &Serve, user: &str, current: Option<&str>) -> Vec<serde_js
 
 /// An account's devices: its Play On players.
 fn devices_of(serve: &Serve, user: &str) -> Vec<serde_json::Value> {
-    let Some(on) = serve.play_on() else { return Vec::new() };
+    let Some(on) = crate::app::PlayOn::held_by(serve) else { return Vec::new() };
     on.list_for(Some(user))
         .into_iter()
         .map(|p| json!({ "id": p.name, "name": p.name, "kind": p.kind, "online": p.online, "last_seen": p.seen }))
@@ -166,7 +166,7 @@ async fn forget_own_device(State(serve): State<Arc<Serve>>, Path(id): Path<Strin
 
 /// Forgets `user`'s device `id` (its queue with it); not found when it is someone else's.
 fn forget(serve: &Serve, user: &str, id: &str) -> Response {
-    let Some(on) = serve.play_on() else { return refused(StatusCode::NOT_FOUND, "No such device.") };
+    let Some(on) = crate::app::PlayOn::held_by(serve) else { return refused(StatusCode::NOT_FOUND, "No such device.") };
     match on.forget(id, user) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => refused(StatusCode::NOT_FOUND, "No such device."),
@@ -223,7 +223,7 @@ async fn set_own_settings(State(serve): State<Arc<Serve>>, axum::Json(b): axum::
         Ok(Ok(version)) => {
             // "Others may follow me" off (decision 0079): whoever follows them follows no one now.
             if settings["followable"].as_bool() != Some(true)
-                && let Some(on) = serve.play_on()
+                && let Some(on) = crate::app::PlayOn::held_by(&serve)
             {
                 on.end_following_of(&me);
             }
@@ -328,7 +328,7 @@ async fn set_active(State(serve): State<Arc<Serve>>, Path(name): Path<String>, a
 /// devices stop playing for it (paused: their queues stay, as its data does). Returns how many sign-ins ended.
 async fn left(serve: &Serve, name: &str) -> usize {
     let ended = serve.sessions.revoke_user(name, None).unwrap_or(0);
-    if let Some(on) = serve.play_on() {
+    if let Some(on) = crate::app::PlayOn::held_by(serve) {
         for p in on.list_for(Some(name)).into_iter().filter(|p| p.online && p.playing) {
             if let Err(e) = on.command(&p.name, crate::app::PlayOnCommand::Pause).await {
                 tracing::warn!(target: "signin", user = %name, player = %p.name, "could not stop its player: {e}");

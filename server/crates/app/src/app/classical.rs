@@ -200,14 +200,7 @@ struct Line {
     duration_secs: Option<f64>,
 }
 
-/// A work as Other versions names it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(export))]
-pub struct WorkRef {
-    pub mbid: String,
-    pub title: String,
-}
+pub use crate::serve::classical_works::{RowWork, WorkRef};
 
 /// Another track of the same work.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -301,23 +294,6 @@ pub struct WorkView {
     pub parent: Option<WorkRef>,
     pub parts: Vec<WorkPart>,
     pub recordings: Vec<WorkRecording>,
-}
-
-/// The work an album's track performs (0.12, decision 0086; an album's rows' `work`): the work that holds it and its
-/// number there, where MusicBrainz says. A classical record's tracks only (0.13: MusicBrainz has works for almost every
-/// song, so a soundtrack listed its songs as works).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(export))]
-pub struct RowWork {
-    pub mbid: String,
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
-    pub parent: Option<WorkRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
-    pub part_number: Option<u32>,
 }
 
 /// A top-level work as search finds it (0.12, decision 0086: works reachable): its MusicBrainz id, title, catalogue
@@ -1037,12 +1013,7 @@ struct Kept {
 
 static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
 
-/// What the index is made from, cheaply: the crates' facts read again when it moves (their Type axis has Classical).
-pub fn stamp(serve: &crate::serve::Serve) -> i64 {
-    let marks = serve.userdata.marks_stamp().unwrap_or(0);
-    let facts = serve.userdata.works_stamp().unwrap_or(0);
-    marks.wrapping_mul(1_000_003).wrapping_add(facts)
-}
+pub use crate::serve::classical_stamp::stamp;
 
 /// The index (kept until the library is built again or a mark changes; what the passes find counts within a minute).
 /// Blocking.

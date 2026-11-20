@@ -6,27 +6,38 @@ pub mod accounts;
 pub use cratarr_gate::serve::api;
 pub use cratarr_gate::serve::art;
 pub mod auth_check;
+pub mod backup_list_write;
+pub mod classical_stamp;
+pub mod classical_works;
 pub use cratarr_gate::serve::copies;
+pub mod device_index_settled;
 pub mod files;
 pub use cratarr_gate::serve::ids;
 pub mod import;
+pub mod import_job;
 pub use cratarr_gate::serve::index_rows;
 pub mod ldap;
 pub use cratarr_gate::serve::library;
 pub mod library_api;
 pub use cratarr_gate::serve::listener;
+pub mod opus_copy_crc;
 pub mod playlists;
+pub mod playlists_row;
 pub use cratarr_gate::serve::proxy;
 pub mod queues;
+pub mod queues_sessions;
 pub use cratarr_gate::serve::rate;
 pub use cratarr_gate::serve::read;
+pub mod requests_kept;
 pub mod review;
 pub mod routes;
+pub mod services;
 pub mod sessions;
 pub mod signin;
 pub mod users;
 pub use cratarr_gate::serve::view;
 pub use cratarr_gate::serve::who;
+pub mod words_stamp;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -93,7 +104,7 @@ pub struct Serve {
     /// Cratarr source can answer while the app starts (decision 0032).
     catalogue_cell: std::sync::OnceLock<Arc<Catalogue>>,
     /// Imports from media servers into the user data (decision 0030, amended 2026-10-15).
-    pub import: import::Importer,
+    pub import: import_job::Importer,
     rules: RwLock<Rules>,
     /// When the library was last built, epoch seconds (`getIndexes`' `lastModified`).
     built_at: RwLock<i64>,
@@ -107,23 +118,25 @@ pub struct Serve {
     /// One cover resized at a time: a client asks for hundreds at once, and decoding one takes tens of megabytes.
     resizing: tokio::sync::Semaphore,
     /// Cratarr's playlist service, once the app is up (`set_playlists`): the Subsonic playlists are its files.
-    playlists: std::sync::OnceLock<Arc<crate::app::PlaylistService>>,
+    playlists: std::sync::OnceLock<Arc<dyn services::Playlists>>,
     /// Playlists a client emptied, waiting briefly for the call that refills them (`playlists::Held`).
     pub held: playlists::Held,
     /// What the Subsonic apps report playing (`getNowPlaying`).
-    pub now_playing: queues::Sessions,
+    pub now_playing: queues_sessions::Sessions,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
-    incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
+    incoming: std::sync::OnceLock<Arc<dyn services::Incoming>>,
     /// Cratarr's players, once the app is up (`set_play_on`): an account's devices, and what plays for getNowPlaying.
-    play_on: std::sync::OnceLock<Arc<crate::app::PlayOn>>,
+    play_on: std::sync::OnceLock<Arc<dyn services::Players>>,
     /// Each album's cover stamp (0.9.7, `cover_stamps`), as of the last build; read from the library when first asked.
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
     /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
-    device: std::sync::Mutex<crate::app::device_index::Settled>,
+    device: std::sync::Mutex<device_index_settled::Settled>,
     /// Who asked for what, as last read (`app::requests::requesters`, R30).
-    requesters: std::sync::Mutex<crate::app::requests::KeptRequesters>,
+    requesters: std::sync::Mutex<requests_kept::KeptRequesters>,
+    /// What the crates' facts take from the app, once the app is made (`set_facts_from`).
+    facts_from: std::sync::OnceLock<Arc<dyn services::FactsFrom>>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -183,7 +196,7 @@ impl Serve {
             directory: ldap::Directory::open(data_dir)?,
             throttle: Default::default(),
             catalogue_cell: Default::default(),
-            import: import::Importer::default(),
+            import: import_job::Importer::default(),
             rules: RwLock::new(rules),
             built_at: RwLock::new(now()),
             built: tokio::sync::watch::channel(0).0,
@@ -199,6 +212,7 @@ impl Serve {
             covers: tokio::sync::broadcast::channel(16).0,
             device: Default::default(),
             requesters: Default::default(),
+            facts_from: Default::default(),
         }))
     }
 
@@ -284,7 +298,7 @@ impl Serve {
             if !folder.is_dir() || name.starts_with('.') || name == account {
                 continue;
             }
-            others.push(format!("{}/{}", crate::source::cratarr::KIND.id, folder.display()));
+            others.push(format!("{}/{}", crate::source::CRATARR, folder.display()));
         }
         if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &others) {
             tracing::warn!("others' own music not switched off for {account}: {e:#}");
@@ -309,7 +323,7 @@ impl Serve {
     /// The song an id stands for now: one a take retired names the track that took it, and a queue or an app's list can hold
     /// it long after (`Listener::song` plays it). Any other id is as given. Blocking.
     pub fn song_now(&self, id: &str) -> String {
-        let taken = self.catalogue_cell.get().and_then(|c| c.track_of_source(crate::source::cratarr::KIND.id, id));
+        let taken = self.catalogue_cell.get().and_then(|c| c.track_of_source(crate::source::CRATARR, id));
         taken.map_or_else(|| id.to_string(), ids::song)
     }
 
@@ -341,7 +355,7 @@ impl Serve {
     }
 
     /// Track rows with their record's type (GOTO.S1), one read for them all (GOTO.S6). Blocking.
-    pub fn with_types(&self, rows: &mut [crate::app::PlaylistRow]) {
+    pub fn with_types(&self, rows: &mut [playlists_row::PlaylistRow]) {
         let mut ids: Vec<String> = rows.iter().filter_map(|r| r.album_id.clone()).collect();
         ids.sort();
         ids.dedup();
@@ -363,11 +377,11 @@ impl Serve {
         Ok(self.catalogue_cell.get().map(|c| c.artist_of(name)).transpose()?.flatten().map(ids::artist))
     }
 
-    pub fn set_playlists(&self, service: Arc<crate::app::PlaylistService>) {
+    pub fn set_playlists(&self, service: Arc<dyn services::Playlists>) {
         let _ = self.playlists.set(service);
     }
 
-    pub fn playlists(&self) -> Option<&Arc<crate::app::PlaylistService>> {
+    pub fn playlists(&self) -> Option<&Arc<dyn services::Playlists>> {
         self.playlists.get()
     }
 
@@ -385,20 +399,25 @@ impl Serve {
         }
     }
 
-    pub fn set_incoming(&self, service: Arc<crate::app::IncomingService>) {
+    pub fn set_incoming(&self, service: Arc<dyn services::Incoming>) {
         let _ = self.incoming.set(service);
     }
 
-    pub fn incoming(&self) -> Option<&Arc<crate::app::IncomingService>> {
+    pub fn incoming(&self) -> Option<&Arc<dyn services::Incoming>> {
         self.incoming.get()
     }
 
-    pub fn set_play_on(&self, on: Arc<crate::app::PlayOn>) {
+    pub fn set_play_on(&self, on: Arc<dyn services::Players>) {
         let _ = self.play_on.set(on);
     }
 
-    pub fn play_on(&self) -> Option<&Arc<crate::app::PlayOn>> {
+    pub fn play_on(&self) -> Option<&Arc<dyn services::Players>> {
         self.play_on.get()
+    }
+
+    /// What the crates' facts take from the app (`services::FactsFrom`), set as the app is made: until then they have none of it.
+    pub fn set_facts_from(&self, from: Arc<dyn services::FactsFrom>) {
+        let _ = self.facts_from.set(from);
     }
 
     /// Tests elsewhere: the covers' stamps as a build's end leaves them.
@@ -414,12 +433,12 @@ impl Serve {
     }
 
     /// Who asked for what, as last read (`app::requests::requesters`).
-    pub fn requesters_kept(&self) -> std::sync::MutexGuard<'_, crate::app::requests::KeptRequesters> {
+    pub fn requesters_kept(&self) -> std::sync::MutexGuard<'_, requests_kept::KeptRequesters> {
         self.requesters.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// A device's index being made: until this goes, another waits, as two would hold twice what one does. Blocking.
-    pub fn device_turn(&self) -> std::sync::MutexGuard<'_, crate::app::device_index::Settled> {
+    pub fn device_turn(&self) -> std::sync::MutexGuard<'_, device_index_settled::Settled> {
         self.device.lock().unwrap_or_else(|p| p.into_inner())
     }
 
@@ -506,7 +525,7 @@ impl Serve {
         self.built_now(why, whole, folders, change == library::Change::Songs)?;
         // The backup's list of shared copies anew (C41): what a Delete, a move or an emptied trash changed of the copies' originals,
         // the build has read.
-        if let Err(e) = crate::app::backup_list::write_for(self) {
+        if let Err(e) = backup_list_write::write_for(self) {
             tracing::warn!(target: "library", "the backup's list of shared copies was not written: {e:#}");
         }
         Ok(true)
@@ -1022,19 +1041,19 @@ impl view::ServeView for Serve {
         Serve::reread(self, paths)
     }
     fn words_stamp(&self) -> i64 {
-        crate::app::words::stamp(self)
+        words_stamp::stamp(self)
     }
     fn classical_stamp(&self) -> i64 {
-        crate::app::classical::stamp(self)
+        classical_stamp::stamp(self)
     }
     fn add_classical(&self, facts: &mut [crate::crates::Facts]) -> Result<()> {
-        crate::app::classical::add_kind(self, facts)
+        self.facts_from.get().map_or(Ok(()), |f| f.add_classical(self, facts))
     }
     fn add_words(&self, album_of: &std::collections::HashMap<String, String>, facts: &mut [crate::crates::Facts]) -> Result<()> {
-        crate::app::words::build(self, album_of, facts)
+        self.facts_from.get().map_or(Ok(()), |f| f.add_words(self, album_of, facts))
     }
     fn kept_labels(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
-        crate::app::discogs_facts::kept_labels(self)
+        self.facts_from.get().map_or_else(|| Ok(Default::default()), |f| f.kept_labels(self))
     }
 }
 
