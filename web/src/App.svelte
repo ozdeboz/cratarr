@@ -66,7 +66,7 @@
   import { art } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
-  import { reducedMotion, SHEET_OUT } from './lib/motion';
+  import { DECELERATE_CSS, reducedMotion, SHEET_OUT } from './lib/motion';
   import { glass, panelBeside } from './lib/glass.svelte';
   import { reveal, subjectIn } from './lib/reveal';
   import GlobalResults from './lib/GlobalResults.svelte';
@@ -90,7 +90,8 @@
   import { tick, untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
   import { longpress } from './lib/longpress';
-  import { followAddress, setBeside } from './lib/panel.svelte';
+  import { followAddress, panelMoved, setBeside } from './lib/panel.svelte';
+  import { PANEL_MS, panelMs, panelSlide, SLIDE_IN } from './lib/panelMotion';
   import { placeBack, type Restore } from './lib/placeBack';
   import RadioSheet from './lib/RadioSheet.svelte';
   import ReviewSheet from './lib/ReviewSheet.svelte';
@@ -276,9 +277,9 @@
   $effect(() => {
     panel.split = split;
   });
-  // Beside the page, the panel's history is its own: the device's and the browser's Back are the page's (the owner,
-  // 2026-11-02); full screen, Back steps back through the panel (lib/panel).
-  $effect(() => setBeside(split || sidePanel()));
+  // Back steps back through the panel, closes it, then moves the page, beside the page as over it (lib/panel; BACK, the owner
+  // 2026-11-20); a split page's own part is the page's.
+  $effect(() => setBeside(split || sidePanel(), split));
   // Over the page unless the player is beside it: a split page (Settings, Health, Insights) has the panel, not the
   // player, so with the player not wanted beside, the mini-player's tap opens it over the page there too (the owner,
   // 2026-10-24: in Settings › Display it would not open).
@@ -328,6 +329,38 @@
   const overlayDrawn = $derived(overlay || held.overlay);
   /** Coming in by a hand-over: no entrance (it covers what it takes over from at once). */
   const handingNow = $derived(handing(held));
+  // The panel's own motion (BACK, lib/panelMotion): in from its right edge as it opens, out to it as Back or its ✕ closes it;
+  // nothing for a page gone to or a hand-over. How long, read as each motion starts.
+  const panelMsNow = (how: 'open' | 'close') => panelMs(panelMoved(), how, Date.now(), reducedMotion() || handingNow);
+  /** The tablet's panel coming: back in the page's grid, if it was lifted out going, and in from its right edge. */
+  function asideIn(node: HTMLElement, p: { duration: number }) {
+    Object.assign(node.style, { position: '', right: '', width: '', zIndex: '' });
+    return panelSlide(node, p);
+  }
+  /** The tablet's panel going: lifted out of the page's grid at once (the page widens at once), out over it to its right edge. */
+  function asideOut(node: HTMLElement, p: { duration: number }) {
+    if (p.duration) Object.assign(node.style, { position: 'fixed', right: '0', width: `${sideWidth}px`, zIndex: '20' });
+    return panelSlide(node, p);
+  }
+  // The phone's layer coming: Hold keeps it hidden until what it holds is ready (a fade from its start ran unseen, and it popped
+  // in), so it waits out of sight at its right edge (`arriving`) and slides in once Hold has shown it, or at Hold's own limit.
+  let layerEl: HTMLElement | null = null;
+  function arriving(el: HTMLElement) {
+    layerEl = el;
+    if (!untrack(() => panelMsNow('open'))) return;
+    el.classList.add('arriving');
+    const late = setTimeout(layerComes, 3000);
+    return () => {
+      clearTimeout(late);
+      if (layerEl === el) layerEl = null;
+    };
+  }
+  function layerComes() {
+    const el = layerEl;
+    if (!el?.classList.contains('arriving')) return;
+    el.classList.remove('arriving');
+    el.animate(SLIDE_IN, { duration: PANEL_MS, easing: DECELERATE_CSS });
+  }
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && besideDrawn);
   // The mini-player stands in for the player wherever the panel does not show it (decision 0023); with nothing to play
@@ -1191,7 +1224,7 @@
     {/if}
     {#if besideDrawn}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniTop ? 0 : miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniTop ? 0 : miniSpace}px`} bind:this={sideEl} in:asideIn={{ duration: panelMsNow('open') }} out:asideOut={{ duration: panelMsNow('close') }}>
         <SheetArea area={() => sideEl}>
           <!-- One commit (lib/Hold): what the panel showed stays until the item opened is ready. -->
           <Hold key={panel.viewed} bind:shown={panel.shown} onshown={() => sidebar && letGoHeld()}>
@@ -1203,8 +1236,8 @@
   </div>
 
   {#if layerDrawn}
-    <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} transition:fade={{ duration: reducedMotion() || handingNow ? 0 : 200 }}>
-      <Hold key={panel.viewed} bind:shown={panel.shown} seeThrough onshown={() => playlistLayer && letGoHeld()}>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
+    <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} {@attach arriving} out:panelSlide={{ duration: panelMsNow('close') }}>
+      <Hold key={panel.viewed} bind:shown={panel.shown} seeThrough onshown={() => (layerComes(), playlistLayer && letGoHeld())}>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
     </div>
   {:else if navPlace.layerHeld && !besideDrawn}
     <!-- A panel closed for another page (a breadcrumb's): its layer, empty, over the page until the page gone to shows
@@ -1416,6 +1449,12 @@
 
   /* A panel of Requests, Downloads, Insights, Health or Settings on a phone: under the top bar, not over it (the owner,
      2026-10-25); a playlist's, an album's or an artist's still covers it all. */
+  /* Out of sight at its right edge, faded, until Hold shows what it holds (BACK): then it slides in (App's `layerComes`). */
+  .playlist-layer:global(.arriving) {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
   .playlist-layer.under-bar {
     /* The page's colour, as beside the page (.player-side); a playlist's layer keeps the cards' (the owner, 2026-10-25). */
     background: var(--bg);
