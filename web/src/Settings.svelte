@@ -5,7 +5,7 @@
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
   import { installed } from './lib/offline.svelte';
-  import { panelBeside } from './lib/glass.svelte';
+  import { glass, panelBeside } from './lib/glass.svelte';
   import { library } from './lib/albums.svelte';
   import { serverConnection } from './lib/connection.svelte';
   import { switchable } from './lib/deviceMusic.svelte';
@@ -29,7 +29,6 @@
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
   import { keptFor, partsShown, SETTINGS_GROUPS, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
   import { pageView, searchNone, usePageAction, usePageMode } from './lib/pageView.svelte';
-  import { glass } from './lib/glass.svelte';
   import { settingsBasic, settingsListed, toggleAdvanced } from './lib/settings/basic.svelte';
   import { about } from './lib/AboutSheet.svelte';
   import { loadWhatsNew, whatsNewShows } from './lib/whatsNew.svelte';
