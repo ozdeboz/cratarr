@@ -29,7 +29,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use axum::Json;
@@ -37,7 +37,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use cratarr_rules::index::{self, Artist, Builder, Gone, Index, Refused, Rows, Sounds, TrackHead};
 
-use super::{App, ToggleError};
+use super::playing_host::PlayingHost;
+use super::ToggleError;
 use crate::crates::Facts;
 use crate::serve::Serve;
 use crate::serve::ids;
@@ -120,27 +121,7 @@ pub fn build(serve: &Serve, facts: &[Facts], libraries: &[index::Library], rev: 
     to.build(rev).map_err(refused)
 }
 
-/// What the log was last brought up to: all that can move a row without moving the log. The reading only weakly, so as not to
-/// hold on to it, and so its address stays taken: a reading made in the same place would pass for it (`Catalogue::crate_facts`).
-#[derive(Debug, Default)]
-pub struct Settled {
-    facts: Weak<Vec<Facts>>,
-    built: i64,
-    rev: i64,
-    libraries: Vec<index::Library>,
-}
-
-impl Settled {
-    /// Whether what was settled is what stands now: no row can differ, and nothing needs building.
-    fn holds(&self, facts: &Arc<Vec<Facts>>, built: i64, rev: i64, libraries: &[index::Library]) -> bool {
-        self.rev == rev && self.stands(facts, built, libraries)
-    }
-
-    /// `holds`, but for the log: the reading, the build and the libraries, which move rows with no word in it.
-    pub(super) fn stands(&self, facts: &Arc<Vec<Facts>>, built: i64, libraries: &[index::Library]) -> bool {
-        std::ptr::eq(self.facts.as_ptr(), Arc::as_ptr(facts)) && self.built == built && self.libraries == libraries
-    }
-}
+pub use crate::serve::device_index_settled::Settled;
 
 /// The sounds of `index`'s tracks, as of its rev: a track's taken from the reading in its turn, and held in eight bits.
 pub(super) fn sounds_of(facts: &[Facts], index: &Index) -> Sounds {
@@ -349,22 +330,22 @@ pub fn takes_gzip(headers: &HeaderMap) -> bool {
 }
 
 /// `GET /api/index`: the whole index `account` can see, every library it can see in it, as `Index::save` writes it.
-pub async fn read(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn read<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let bytes = crate::run::spawn_blocking(move || Bytes::of(whole(&serve, libraries, account.as_deref())?.save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `GET /api/index/changes?since=<rev>`: what `account` lacks at `since`.
-pub async fn changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn changes<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let found = crate::run::spawn_blocking(move || feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `GET /api/index/sounds`: the sounds of every track `account` can see, as `Sounds::save` writes them.
-pub async fn sounds(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn sounds<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let bytes = crate::run::spawn_blocking(move || {
         let (index, facts) = whole_of(&serve, &libraries, account.as_deref())?;
         Bytes::of(sounds_of(&facts, &index).save(), takes_gzip)
@@ -373,8 +354,8 @@ pub async fn sounds(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, 
 }
 
 /// `GET /api/index/sounds/changes?since=<rev>`: what of the sounds `account` lacks at `since`.
-pub async fn sound_changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
-    let libraries = app.library.index_libraries(&serve);
+pub async fn sound_changes<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
+    let libraries = app.library().index_libraries(&serve);
     let found = crate::run::spawn_blocking(move || sounds_feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
@@ -404,10 +385,10 @@ fn marks_of(fits: &HashMap<String, f64>, skipped: &HashMap<String, f64>, uses: &
 
 /// `GET /api/index/own`: what the server last worked out for the account asking, and no one else: its fits and its counts, as
 /// `Marks::save` writes them.
-pub async fn own(app: &Arc<App>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+pub async fn own<H: PlayingHost + ?Sized>(app: &Arc<H>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
     let user = account.ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
-    let (fits, skipped, uses) = (app.playlists.taste_fits(&user, &[]).await?, app.playlists.skipped_fits(&user, &[]).await?, app.playlists.uses_by_track(&user).await?);
-    let rest = serde_json::to_string(&app.playlists.device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
+    let (fits, skipped, uses) = (app.playlists().taste_fits(&user, &[]).await?, app.playlists().skipped_fits(&user, &[]).await?, app.playlists().uses_by_track(&user).await?);
+    let rest = serde_json::to_string(&app.playlists().device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
     let bytes = crate::run::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).with_own(rest).save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
 }

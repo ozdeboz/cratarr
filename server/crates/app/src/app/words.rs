@@ -75,11 +75,7 @@ pub fn key(word: &str) -> String {
     crate::search::words(word).join(" ")
 }
 
-/// What the merge is made from, cheaply: when the library was built, and the words and the album tags as kept.
-pub fn stamp(serve: &crate::serve::Serve) -> i64 {
-    let words = serve.userdata.words_stamp().unwrap_or(0);
-    serve.built_at().wrapping_mul(1_000_003).wrapping_add(words)
-}
+pub use crate::serve::words_stamp::stamp;
 
 /// The store as last built with the crates' facts (`build`): each record's words by its id (Cratarr's own library's),
 /// and every word by kind and key with its one spelling and every source that says it anywhere.

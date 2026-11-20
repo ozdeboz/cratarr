@@ -13,6 +13,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::discover::Suggestion;
+use super::playing_host::PlayingHost;
 
 /// The seeds a group has.
 const GROUP: usize = 3;
@@ -101,17 +102,22 @@ fn shown_with(shown: &[String], group: &[(String, String)]) -> Vec<String> {
 }
 
 /// The account's own artists and what the library has; none where it keeps no play history (its seeds are its plays).
-async fn own(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<Option<(super::discover::Have, Vec<super::discover::OwnArtist>)>> {
+async fn own(cat: &Arc<crate::catalogue::Catalogue>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<Option<(super::discover::Have, Vec<super::discover::OwnArtist>)>> {
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     if !crate::run::spawn_blocking(move || ud.tracking(&a)).await? {
         return Ok(None);
     }
-    Ok(Some(super::discover::own(serve, app.library.catalogue(), account).await?))
+    Ok(Some(super::discover::own(serve, cat.clone(), account).await?))
 }
 
 /// The group showing, and whether it is still being made (the page asks again). One is picked and made where none is.
-pub async fn showing(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
-    let Some((_, artists)) = own(app, serve, account).await? else { return Ok(Default::default()) };
+pub async fn showing<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
+    showing_in(&app.library().catalogue(), serve, account).await
+}
+
+/// `showing`, on the library's catalogue.
+async fn showing_in(cat: &Arc<crate::catalogue::Catalogue>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
+    let Some((_, artists)) = own(cat, serve, account).await? else { return Ok(Default::default()) };
     let pool = pool(&artists);
     let (s, a) = (serve.clone(), account.to_string());
     let (st, _) = crate::run::spawn_blocking(move || {
@@ -124,16 +130,21 @@ pub async fn showing(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, ac
     })
     .await??;
     if st.albums.is_none() && !st.seeds.is_empty() {
-        make(app.clone(), serve.clone(), account.to_string());
+        make(cat.clone(), serve.clone(), account.to_string());
     } else {
-        ahead(app.clone(), serve.clone(), account.to_string());
+        ahead(cat.clone(), serve.clone(), account.to_string());
     }
     answered(serve, account, st).await
 }
 
 /// Refresh: on to the next group (the one looked up ahead), shown once made, waiting a few seconds for it.
-pub async fn next(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
-    let Some((_, artists)) = own(app, serve, account).await? else { return Ok(Default::default()) };
+pub async fn next<H: PlayingHost + ?Sized>(app: &Arc<H>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
+    next_in(&app.library().catalogue(), serve, account).await
+}
+
+/// `next`, on the library's catalogue.
+async fn next_in(cat: &Arc<crate::catalogue::Catalogue>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
+    let Some((_, artists)) = own(cat, serve, account).await? else { return Ok(Default::default()) };
     let pool = pool(&artists);
     let (s, a) = (serve.clone(), account.to_string());
     crate::run::spawn_blocking(move || {
@@ -145,7 +156,7 @@ pub async fn next(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, accou
         })
     })
     .await??;
-    make(app.clone(), serve.clone(), account.to_string());
+    make(cat.clone(), serve.clone(), account.to_string());
     let until = tokio::time::Instant::now() + WAIT;
     loop {
         let (s, a) = (serve.clone(), account.to_string());
@@ -175,7 +186,7 @@ pub fn suggestions(serve: &crate::serve::Serve, account: &str) -> Result<Vec<Sug
 
 /// The group showing made in the background (after the look ahead, which asks for the same seeds), and kept; then the
 /// next group looked up ahead.
-fn make(app: Arc<super::App>, serve: Arc<crate::serve::Serve>, account: String) {
+fn make(cat: Arc<crate::catalogue::Catalogue>, serve: Arc<crate::serve::Serve>, account: String) {
     if !claim(&MAKING, &account) {
         return;
     }
@@ -184,21 +195,21 @@ fn make(app: Arc<super::App>, serve: Arc<crate::serve::Serve>, account: String) 
         while busy(&AHEAD, &account) && tokio::time::Instant::now() < until {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        if let Err(e) = make_now(&app, &serve, &account).await {
+        if let Err(e) = make_now(&cat, &serve, &account).await {
             tracing::info!("discover: around artists not made: {e:#}");
         }
         release(&MAKING, &account);
-        ahead(app, serve, account);
+        ahead(cat, serve, account);
     });
 }
 
-async fn make_now(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<()> {
+async fn make_now(cat: &Arc<crate::catalogue::Catalogue>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<()> {
     let (s, a) = (serve.clone(), account.to_string());
     let seeds = crate::run::spawn_blocking(move || kept(&s, &a)).await??.seeds;
     if seeds.is_empty() {
         return Ok(());
     }
-    let Some((have, _)) = own(app, serve, account).await? else { return Ok(()) };
+    let Some((have, _)) = own(cat, serve, account).await? else { return Ok(()) };
     let candidates = super::discover::from_related(serve, &super::discover::http()?, &seeds, &|_, _, _| {}).await;
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     let (answered, no_artists, everywhere) = crate::run::spawn_blocking(move || super::discover::leaves_out(&ud, &a)).await??;
@@ -220,13 +231,13 @@ async fn make_now(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, accou
 
 /// The group after the one showing picked and looked up in the background (its related artists and their albums kept,
 /// so making it later asks nothing).
-fn ahead(app: Arc<super::App>, serve: Arc<crate::serve::Serve>, account: String) {
+fn ahead(cat: Arc<crate::catalogue::Catalogue>, serve: Arc<crate::serve::Serve>, account: String) {
     if busy(&MAKING, &account) || !claim(&AHEAD, &account) {
         return;
     }
     crate::run::spawn(async move {
         let looked = async {
-            let Some((_, artists)) = own(&app, &serve, &account).await? else { return Ok(()) };
+            let Some((_, artists)) = own(&cat, &serve, &account).await? else { return Ok(()) };
             let pool = pool(&artists);
             let (s, a) = (serve.clone(), account.clone());
             let (st, _) = crate::run::spawn_blocking(move || {

@@ -78,7 +78,7 @@ async fn find(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String, i6
 /// The Incoming album at this place, as Incoming knows it: (server, the server's album id, its library). Cratarr's own says
 /// where it lies; another server's is known by its path's end.
 async fn in_incoming(serve: &Serve, folder: i64, dir: &str) -> Option<(String, String, Option<String>)> {
-    let incoming = serve.incoming()?;
+    let incoming = crate::app::IncomingService::held_by(serve)?;
     let view = incoming.list(None).await;
     let tail = format!("/{}", dir.trim_matches('/'));
     let here = |a: &&crate::source::Album| match a.copies.first() {
@@ -114,7 +114,7 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str, to: Option<Str
     if in_main(&serve, folder) {
         return fail(StatusCode::CONFLICT, format!("{name} is in the library, not in Incoming"));
     }
-    let Some(incoming) = serve.incoming().cloned() else { return fail(StatusCode::SERVICE_UNAVAILABLE, "Incoming is not ready yet") };
+    let Some(incoming) = crate::app::IncomingService::held_by(&serve) else { return fail(StatusCode::SERVICE_UNAVAILABLE, "Incoming is not ready yet") };
     let Some((source, server_album, library)) = in_incoming(&serve, folder, &dir).await else {
         return fail(StatusCode::CONFLICT, format!("{name} is not in Incoming"));
     };
@@ -167,7 +167,7 @@ async fn unreview(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Re
         }
         Err(e) => return failed(e),
     };
-    let Some(incoming) = serve.incoming().cloned() else { return fail(StatusCode::SERVICE_UNAVAILABLE, "Incoming is not ready yet") };
+    let Some(incoming) = crate::app::IncomingService::held_by(&serve) else { return fail(StatusCode::SERVICE_UNAVAILABLE, "Incoming is not ready yet") };
     let still = || fail(StatusCode::CONFLICT, format!("{} is still being converted; take it back once it is done", done.name));
     let key = match done.undo.as_deref() {
         // A queued Keep: its job has the undo key once done.

@@ -20,18 +20,18 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use super::{App, ToggleError};
+use super::ToggleError;
 use crate::source;
 
 /// Jump back in, by kind: how far back (days) and how many at most.
-const ALBUMS_BACK: (i64, usize) = (14, 4);
-const PLAYLISTS_BACK: (i64, usize) = (30, 3);
-const QUEUES_BACK: (i64, usize) = (3, 2);
+pub const ALBUMS_BACK: (i64, usize) = (14, 4);
+pub const PLAYLISTS_BACK: (i64, usize) = (30, 3);
+pub const QUEUES_BACK: (i64, usize) = (3, 2);
 /// A queue is an album's when it holds at least this share of the album's tracks and nothing else.
 const ALBUM_SHARE: f64 = 0.9;
 /// Sounds like your week's crate, and how many of its rows are read for its mosaic.
-const WEEK: &str = "like:week";
-const WEEK_ROWS: usize = 40;
+pub const WEEK: &str = "like:week";
+pub const WEEK_ROWS: usize = 40;
 /// How long one asker's Jump back in is kept (0.12.3: Home's Jump back in asked dozens of times a minute, 2026-10-31:
 /// up to 59 a minute, two pages often in the same second, each build 1.3 to 3 seconds and the memory 256 to 408 MB).
 /// What it shows changes as albums are played, minutes apart.
@@ -53,7 +53,7 @@ pub enum Back {
 }
 
 impl Back {
-    fn at(&self) -> i64 {
+    pub fn at(&self) -> i64 {
         match self {
             Back::Album { at, .. } | Back::Playlist { at, .. } | Back::Queue { at, .. } => *at,
         }
@@ -71,12 +71,12 @@ pub struct WeekCover {
 pub const CRATE_COVERS: usize = 6;
 /// Rows read at a time while a crate's covers are gathered, and the most read: a crate in its own order comes a record
 /// at a time, so its first page can hold two records.
-const COVER_ROWS: usize = 50;
-const COVER_ROWS_AT_MOST: usize = 500;
+pub const COVER_ROWS: usize = 50;
+pub const COVER_ROWS_AT_MOST: usize = 500;
 
 /// These rows' records added to `out` (their first playable track's cover), each once, none without a cover, until it
 /// holds `n`.
-fn pick_covers(rows: &[super::playlists::PlaylistRow], coverless: &HashSet<String>, seen: &mut HashSet<String>, out: &mut Vec<WeekCover>, n: usize) {
+pub fn pick_covers(rows: &[super::playlists::PlaylistRow], coverless: &HashSet<String>, seen: &mut HashSet<String>, out: &mut Vec<WeekCover>, n: usize) {
     for r in rows {
         if out.len() >= n {
             return;
@@ -103,25 +103,25 @@ pub struct Week {
     pub covers: Vec<WeekCover>,
 }
 
-fn now() -> i64 {
+pub fn now() -> i64 {
     super::moment::now_secs()
 }
 
 /// The albums without a cover, of Cratarr's own library (Home shows none of them).
-async fn coverless(served: Option<&crate::serve::Serve>) -> HashSet<String> {
+pub async fn coverless(served: Option<&crate::serve::Serve>) -> HashSet<String> {
     let Some(served) = served else { return HashSet::new() };
     let lib = served.library.clone();
     crate::run::spawn_blocking(move || lib.coverless()).await.ok().and_then(Result::ok).unwrap_or_default()
 }
 
 /// New for you's albums (`picks`, by id) from `albums`, in the picks' order; one `albums` lacks is left out.
-fn shelf_of(picks: &[String], albums: impl IntoIterator<Item = source::Album>) -> Vec<source::Album> {
+pub fn shelf_of(picks: &[String], albums: impl IntoIterator<Item = source::Album>) -> Vec<source::Album> {
     let mut by_id: HashMap<String, source::Album> = albums.into_iter().map(|a| (a.id.clone(), a)).collect();
     picks.iter().filter_map(|id| by_id.remove(id)).collect()
 }
 
 /// The newest `most` within `days`, the latest first.
-fn latest(mut list: Vec<Back>, (days, most): (i64, usize), now: i64) -> Vec<Back> {
+pub fn latest(mut list: Vec<Back>, (days, most): (i64, usize), now: i64) -> Vec<Back> {
     list.retain(|b| b.at() > now - days * 86_400);
     list.sort_by_key(|b| std::cmp::Reverse(b.at()));
     list.truncate(most);
@@ -133,7 +133,7 @@ fn latest(mut list: Vec<Back>, (days, most): (i64, usize), now: i64) -> Vec<Back
 /// then its other libraries'. Only what Jump back in reads of that list, without what it adds (classical facts,
 /// verdicts, what may be deleted) or a copy of every album (0.12.3: Home's Jump back in asked dozens of times a
 /// minute, 2026-10-31).
-fn listed<'a>(music: &[(&'a str, &'a [source::Album])], other: &[(&'a str, &'a [source::Album])]) -> Vec<(&'a str, Vec<&'a source::Album>)> {
+pub fn listed<'a>(music: &[(&'a str, &'a [source::Album])], other: &[(&'a str, &'a [source::Album])]) -> Vec<(&'a str, Vec<&'a source::Album>)> {
     let mut ids: Vec<&'a str> = music.iter().map(|(id, _)| *id).collect();
     for (id, _) in other {
         if !ids.contains(id) {
@@ -153,19 +153,19 @@ fn listed<'a>(music: &[(&'a str, &'a [source::Album])], other: &[(&'a str, &'a [
 
 /// Who Jump back in is built for: the asking account, whether it asks from away from home (the players it reaches,
 /// `PlayOn::left_queues`), and the asking player.
-type BackKey = (Option<String>, bool, Option<String>);
+pub type BackKey = (Option<String>, bool, Option<String>);
 
 /// One asker's Jump back in as last built, and when.
 type BackSlot = tokio::sync::Mutex<Option<(Instant, Arc<Vec<Back>>)>>;
 
 /// Jump back in, built once for those asking at once and kept a while for each asker (0.12.3: Home's Jump back in
 /// asked dozens of times a minute, 2026-10-31), as `import::Matcher::library_albums` keeps the library's albums.
-struct BackKeep {
+pub struct BackKeep {
     keep: Duration,
     slots: std::sync::Mutex<BTreeMap<BackKey, Arc<BackSlot>>>,
 }
 
-static BACK: BackKeep = BackKeep::new(BACK_KEEP);
+pub static BACK: BackKeep = BackKeep::new(BACK_KEEP);
 
 impl BackKeep {
     const fn new(keep: Duration) -> Self {
@@ -175,7 +175,7 @@ impl BackKeep {
     /// `key`'s answer while it is young enough, else `build`'s, kept. The asker's slot is held while building, so those
     /// asking the same meanwhile wait and share the one answer; other askers build alongside. One that fails is not
     /// kept.
-    async fn kept_or_built<F, Fut>(&self, key: BackKey, build: F) -> Result<Arc<Vec<Back>>, ToggleError>
+    pub async fn kept_or_built<F, Fut>(&self, key: BackKey, build: F) -> Result<Arc<Vec<Back>>, ToggleError>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Vec<Back>, ToggleError>>,
@@ -201,20 +201,20 @@ impl BackKeep {
     }
 
     /// `account`'s answers built again at their next ask (a play of theirs reported).
-    fn forget(&self, account: Option<&str>) {
+    pub fn forget(&self, account: Option<&str>) {
         self.slots.lock().unwrap_or_else(|p| p.into_inner()).retain(|(a, _, _), _| a.as_deref() != account);
     }
 }
 
 /// The running request's asker of Jump back in (`BackKey`).
-fn back_key(served: Option<&crate::serve::Serve>, player: Option<&str>) -> BackKey {
+pub fn back_key(served: Option<&crate::serve::Serve>, player: Option<&str>) -> BackKey {
     let away = crate::serve::who::current().is_some_and(|w| !w.home);
     (served.and_then(|s| s.current_user()), away, player.map(str::to_string))
 }
 
 /// The album a queue's tracks are, when they are (nine in ten of its tracks or more, and nothing else): (id, title,
 /// artist).
-fn album_of_queue(tracks: &[(String, String)], albums_of: &HashMap<String, String>, albums: &HashMap<String, crate::serve::api::Album>) -> Option<(String, String, String)> {
+pub fn album_of_queue(tracks: &[(String, String)], albums_of: &HashMap<String, String>, albums: &HashMap<String, crate::serve::api::Album>) -> Option<(String, String, String)> {
     let own = crate::source::cratarr::KIND.id;
     if tracks.is_empty() || tracks.iter().any(|(s, _)| s != own) {
         return None;
@@ -227,156 +227,6 @@ fn album_of_queue(tracks: &[(String, String)], albums_of: &HashMap<String, Strin
     let album = albums.get(first)?;
     let distinct: HashSet<&String> = tracks.iter().map(|(_, id)| id).collect();
     (distinct.len() as f64 >= ALBUM_SHARE * f64::from(album.song_count)).then(|| (album.id.clone(), album.name.clone(), album.artist.clone()))
-}
-
-impl App {
-    /// Home's New for you: its crate's albums (`PlaylistService::new_for_you`), in its order, as Cratarr's own album
-    /// lists have them; one the lists have not read yet, as the library has it.
-    pub async fn home_new(&self) -> Result<Vec<NewAlbum>, ToggleError> {
-        let picks = self.playlists.new_for_you().await?;
-        if picks.is_empty() {
-            return Ok(Vec::new());
-        }
-        let own = crate::source::cratarr::KIND.id;
-        let listed: Vec<source::Album> = self.albums(Some(own)).await.sources.into_iter().flat_map(|s| s.albums).collect();
-        let unlisted: Vec<String> = picks.iter().filter(|id| !listed.iter().any(|a| &a.id == *id)).cloned().collect();
-        let late: Vec<source::Album> = match (&self.served, unlisted.is_empty()) {
-            (Some(served), false) => {
-                let lib = served.library.clone();
-                let found = crate::run::spawn_blocking(move || lib.albums_by_id(&unlisted)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-                found.into_iter().map(crate::source::cratarr::card).collect()
-            }
-            _ => Vec::new(),
-        };
-        Ok(shelf_of(&picks, listed.into_iter().chain(late)).into_iter().map(|album| NewAlbum { source: own.to_string(), album }).collect())
-    }
-
-    /// Home's Jump back in, for the asking `player` (its queues): built once for those asking at once, kept 20 seconds
-    /// for each account and player (0.12.3: Home's Jump back in asked dozens of times a minute, 2026-10-31).
-    pub async fn home_back(&self, player: Option<&str>) -> Result<Vec<Back>, ToggleError> {
-        let key = back_key(self.served.as_deref(), player);
-        let answer = BACK.kept_or_built(key, || self.build_back(player)).await?;
-        Ok((*answer).clone())
-    }
-
-    /// A play of the running request's account was reported: its Jump back in is built again at the next ask.
-    pub fn home_back_heard(&self) {
-        BACK.forget(self.served.as_deref().and_then(|s| s.current_user()).as_deref());
-    }
-
-    /// Jump back in, built.
-    async fn build_back(&self, player: Option<&str>) -> Result<Vec<Back>, ToggleError> {
-        let at = now();
-        let own = crate::source::cratarr::KIND.id;
-        let coverless = coverless(self.served.as_deref()).await;
-        // The Library's one list's servers and albums, read from Music's and the other libraries' kept lists without
-        // making that whole list (`listed`; 0.12.3: Home's Jump back in asked dozens of times a minute, 2026-10-31).
-        let (collection, incoming) = tokio::join!(self.collection.list(None), self.incoming.list(None));
-        let music: Vec<(&str, &[source::Album])> = collection.sources.iter().map(|s| (s.id.as_str(), s.albums.as_slice())).collect();
-        let other: Vec<(&str, &[source::Album])> = incoming.sources.iter().map(|s| (s.id.as_str(), s.albums.as_slice())).collect();
-        // The albums played last, each server's plays.
-        let mut albums: Vec<Back> = Vec::new();
-        for (server, list) in listed(&music, &other) {
-            let Ok(uses) = self.playing.album_uses(server).await else { continue };
-            for a in list {
-                if server == own && coverless.contains(&a.id) {
-                    continue;
-                }
-                if let Some(played) = uses.get(&a.id).and_then(|u| u.played) {
-                    albums.push(Back::Album { at: played, source: server.to_string(), id: a.id.clone(), title: a.title.clone(), by: a.artist.clone() });
-                }
-            }
-        }
-        // The playlists played last.
-        let stats = self.playlists.playlist_stats().await?;
-        let lists: Vec<Back> = self
-            .playlists
-            .view(None)
-            .await
-            .map_err(ToggleError::from)?
-            .into_iter()
-            .filter_map(|p| Some(Back::Playlist { at: stats.get(&p.id)?.last_played?, id: p.id, title: p.name }))
-            .collect();
-        // The queues left; one that is an album's tracks is that album.
-        let left = player.map(|p| self.play_on.left_queues(p)).unwrap_or_default();
-        let mut queues: Vec<Back> = Vec::new();
-        if !left.is_empty() {
-            let ids: Vec<String> = left.iter().flat_map(|(_, t)| t.iter().filter(|(s, _)| s == own).map(|(_, id)| id.clone())).collect();
-            let found = match self.served.clone() {
-                Some(served) => {
-                    let lib = served.library.clone();
-                    crate::run::spawn_blocking(move || -> anyhow::Result<_> {
-                        let albums_of = lib.albums_of(&ids)?;
-                        let album_ids: Vec<String> = albums_of.values().cloned().collect::<HashSet<_>>().into_iter().collect();
-                        let albums: HashMap<String, crate::serve::api::Album> = lib.albums_by_id(&album_ids)?.into_iter().map(|a| (a.id.clone(), a)).collect();
-                        Ok((albums_of, albums))
-                    })
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                }
-                None => None,
-            };
-            for (q, tracks) in left {
-                let at = q.updated as i64;
-                match found.as_ref().and_then(|(of, albums)| album_of_queue(&tracks, of, albums)) {
-                    Some((id, title, by)) if !coverless.contains(&id) => {
-                        albums.push(Back::Album { at, source: own.to_string(), id, title, by: Some(by) });
-                    }
-                    Some(_) => {}
-                    None => queues.push(Back::Queue { at, id: q.id, title: q.name, tracks: q.tracks, from: q.from }),
-                }
-            }
-        }
-        // An album once, at its latest.
-        albums.sort_by_key(|b| std::cmp::Reverse(b.at()));
-        let mut seen = HashSet::new();
-        albums.retain(|b| match b {
-            Back::Album { source, id, .. } => seen.insert((source.clone(), id.clone())),
-            _ => true,
-        });
-        let mut out = [latest(albums, ALBUMS_BACK, at), latest(lists, PLAYLISTS_BACK, at), latest(queues, QUEUES_BACK, at)].concat();
-        out.sort_by_key(|b| std::cmp::Reverse(b.at()));
-        Ok(out)
-    }
-
-    /// Home's Sounds like your week, of the libraries switched on (`without`); none while it has no tracks.
-    pub async fn home_week(&self, want: Option<&str>, without: Vec<String>) -> Result<Option<Week>, ToggleError> {
-        let def = self.playlists.crate_def(WEEK).await?;
-        let played = def
-            .conditions
-            .iter()
-            .find_map(|c| match &c.value {
-                crate::crates::Value::Like { of, weights, .. } => Some(of.iter().enumerate().filter(|(i, _)| weights.get(*i).copied().unwrap_or(1.0) > 0.0).count()),
-                _ => None,
-            })
-            .unwrap_or(0);
-        let look = super::CrateLook { without, ..Default::default() };
-        let page = self.playlists.crate_rows(WEEK, want, 0, WEEK_ROWS, &look).await?;
-        if page.total == 0 {
-            return Ok(None);
-        }
-        let coverless = coverless(self.served.as_deref()).await;
-        let mut covers = Vec::new();
-        pick_covers(&page.rows, &coverless, &mut HashSet::new(), &mut covers, 4);
-        Ok(Some(Week { name: def.name, source: page.source, total: page.total, genres: page.genres.into_iter().take(4).collect(), played, covers }))
-    }
-
-    /// The first `n` records of a crate not saved (the search crate card's, 0.13) in `look`'s order, each by its first
-    /// playable track: read a page at a time until they are found, so the card asks only the tracks it shows.
-    pub async fn crate_covers(&self, conditions: &[crate::crates::Condition], want: Option<&str>, look: &super::CrateLook, n: usize) -> Result<Vec<WeekCover>, ToggleError> {
-        let (source, lines) = self.playlists.crate_lines_in_order(conditions, want, look).await?;
-        let coverless = coverless(self.served.as_deref()).await;
-        let (mut seen, mut covers) = (HashSet::new(), Vec::new());
-        for page in lines.chunks(COVER_ROWS).take(COVER_ROWS_AT_MOST / COVER_ROWS) {
-            let rows = self.playlists.rows_of(page.to_vec(), &source).await?;
-            pick_covers(&rows, &coverless, &mut seen, &mut covers, n);
-            if covers.len() >= n {
-                break;
-            }
-        }
-        Ok(covers)
-    }
 }
 
 #[cfg(test)]

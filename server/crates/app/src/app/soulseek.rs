@@ -2675,7 +2675,7 @@ where
             why.insert(name, "It is not in slskd's folder".into());
             continue;
         };
-        let turn = super::analysis_pass::HEAVY.acquire().await.expect("the turn is never closed");
+        let turn = super::heavy_base::HEAVY.acquire().await.expect("the turn is never closed");
         let heard = gate(path.clone(), track.clone()).await;
         drop(turn);
         match heard {
@@ -5826,7 +5826,7 @@ mod tests {
                 Box::pin(async move {
                     let batch = file.parent().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let held = super::super::analysis_pass::HEAVY.try_acquire().map(drop).is_err();
+                    let held = super::super::heavy_base::HEAVY.try_acquire().map(drop).is_err();
                     if me.at_once.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
                         me.violations.lock().unwrap().push(format!("two files heard at once: {name}"));
                     }
@@ -5958,7 +5958,7 @@ mod tests {
         let (ours, client) = (ours("ss-sk13-"), slskd.client());
         start_downloads(&ours, &client, &d, &Look::roomy()).await;
         let (b1, b2, b3, b4) = (batch_of(ids[0]), batch_of(ids[1]), batch_of(ids[2]), batch_of(ids[3]));
-        let heavy = super::super::analysis_pass::HEAVY.acquire().await.unwrap();
+        let heavy = super::super::heavy_base::HEAVY.acquire().await.unwrap();
         slskd.release(&b2);
         follow_round(&ours, &client, &d).await;
         tokio::time::sleep(Duration::from_millis(5)).await;

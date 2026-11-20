@@ -16,10 +16,13 @@ pub mod artists;
 pub use cratarr_gate::app::audiomuse;
 pub mod beat_this;
 pub mod capabilities;
+mod app_served;
 mod app_base;
 mod app_records;
 pub mod changes;
 pub mod analysis_pass;
+pub mod analysis_pass_base;
+pub mod heavy_base;
 pub mod analysis_import;
 mod collection;
 use cratarr_gate::app::error;
@@ -29,21 +32,30 @@ mod first_start;
 pub mod step_017;
 mod follow;
 pub mod health;
+pub mod health_base;
+mod app_health;
 pub mod length_fixes;
 pub mod backup_list;
 mod incoming;
+mod incoming_served;
 mod insights;
 pub mod kept;
 mod kodi;
 mod library;
 mod playing;
+pub mod playing_host;
+mod app_playing;
 pub mod play;
 mod playlists;
+mod playlists_served;
+mod app_playlists;
 mod playon;
+mod playon_served;
 mod plays;
 mod queue;
 pub mod history;
 pub mod home;
+mod app_home;
 pub mod import;
 pub mod import_files;
 pub mod discover;
@@ -76,10 +88,14 @@ pub mod track_fetch;
 pub mod track_intake;
 pub mod soulseek;
 pub mod runtime;
+pub mod runtime_base;
 pub mod discogs_facts;
 pub mod resume;
 pub mod lastfm;
 pub mod listening;
+#[cfg(test)]
+mod served_tests_listening;
+pub mod queues_listening;
 pub mod scrobble;
 pub mod tasks;
 pub mod listenbrainz;
@@ -87,14 +103,22 @@ pub use cratarr_gate::app::moment;
 pub mod refind;
 pub mod related;
 pub mod search;
+pub mod features_host;
+mod app_features;
 pub mod requests;
+#[cfg(test)]
+mod served_tests_requests;
 // What counts against each user's room (AL01).
 pub mod room;
 // Records not had that nobody sees, forgotten (RT01).
 pub mod retention;
+pub mod retention_base;
 pub mod queue_requests;
 pub mod spotify;
 pub mod radio;
+// The proof that moving the rules changes no answer (decision 0101 point 27), above every area it reads.
+#[cfg(test)]
+mod radio_proof;
 pub mod similar;
 pub mod taste;
 pub mod tempo;
@@ -222,6 +246,10 @@ pub struct App {
 
 impl App {
     pub async fn new(cfg: Config, saved: Saved, origin: Origin, served: Option<Arc<crate::serve::Serve>>) -> Result<Arc<Self>> {
+        // What the crates' facts take from the app, before anything can read them (`serve::services::FactsFrom`).
+        if let Some(s) = &served {
+            s.set_facts_from(Arc::new(app_served::AppFacts));
+        }
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
         // The playlists are kept in Cratarr's own library's user data (decision 0101); a test without one keeps them in
         // memory.
@@ -252,6 +280,7 @@ impl App {
         incoming.listen();
         incoming.work();
         let playing = PlayingService::new(library.clone(), playlists.clone());
+        playing.set_file_facts(Arc::new(app_playing::AppFileFacts));
         let settings = SettingsService::new(
             library.clone(),
             files,

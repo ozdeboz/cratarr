@@ -63,40 +63,20 @@ impl BandWaves {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Keep,
-    All,
-    Off,
-}
-
-impl Mode {
-    pub fn from_env(v: Option<&str>) -> Self {
-        match v.map(|v| v.trim().to_lowercase()).as_deref() {
-            Some("all") => Mode::All,
-            Some("off") => Mode::Off,
-            _ => Mode::Keep,
-        }
-    }
-}
-
-/// Whether this server hears new music's beats itself (`CRATARR_BEAT_THIS`: `on`; off by default, see the top).
-pub fn hears_beats(v: Option<&str>) -> bool {
-    v.is_some_and(|v| matches!(v.trim().to_lowercase().as_str(), "on" | "1" | "true" | "yes"))
-}
+pub use super::analysis_pass_base::{Mode, hears_beats};
 
 /// A rest with nothing to do, cut short when Settings changes the pass (`app::runtime`).
 async fn rest_idle() {
     tokio::select! {
         () = tokio::time::sleep(IDLE) => {}
-        () = super::runtime::CHANGED.notified() => {}
+        () = super::runtime_base::CHANGED.notified() => {}
     }
 }
 
 /// Runs the pass in the background for as long as Cratarr runs; its mode and Beat this! as Settings has them now
 /// (`app::runtime`, 0.9.8: the environment's until saved), looked at each round.
 pub fn run(cat: Arc<Catalogue>) {
-    if super::runtime::now().analysis == Mode::Off {
+    if super::runtime_base::now().analysis == Mode::Off {
         tracing::info!("analysis: the pass is off (Settings, or CRATARR_ANALYSIS=off)");
     }
     crate::run::spawn(async move {
@@ -109,7 +89,7 @@ pub fn run(cat: Arc<Catalogue>) {
         let mut banding = BandWaves::default();
         let mut waiting_said = false;
         loop {
-            let settings = super::runtime::now();
+            let settings = super::runtime_base::now();
             let (mode, hear_beats) = (settings.analysis, settings.beat_this);
             if mode == Mode::Off {
                 rest_idle().await;
@@ -295,8 +275,7 @@ async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): 
     }
 }
 
-/// The one decode at a time (see the top). A turn moves into the blocking work and ends with it.
-pub(crate) static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+pub(crate) use super::heavy_base::HEAVY;
 
 /// Winding's own turns (Tape rewind, a wind, decision 0074), apart from [`HEAVY`]: a wind decodes a few seconds of a
 /// file at a time (a few MB), so it never waits behind a whole file's decode, which takes about half a gigabyte for a

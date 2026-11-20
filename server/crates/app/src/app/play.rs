@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::{App, QueueTrack, ToggleError};
+use super::playing_host::PlayingHost;
+use super::{QueueTrack, ToggleError};
 use crate::crates::Favourites;
 use crate::source::{self, PlayHow};
 
@@ -172,8 +173,21 @@ pub struct Chosen {
 /// Play, a voice assistant's play by name): the collection's playable tracks, then the rules' pick (cratarr-rules), at
 /// most `most` (at most [`QUEUE_MOST`]). `want`: the server to use, else the first connected; `owner`: whose favourites
 /// and exclusions.
-pub async fn choose(
-    app: &Arc<App>,
+pub async fn choose<H: PlayingHost>(
+    app: &Arc<H>,
+    want: Option<&str>,
+    what: &Collection,
+    how: How,
+    start: Option<Start>,
+    most: usize,
+    owner: Option<&str>,
+) -> Result<Chosen, ToggleError> {
+    choose_with(&**app, want, what, how, start, most, owner).await
+}
+
+/// `choose`, on its host.
+pub async fn choose_with(
+    app: &dyn PlayingHost,
     want: Option<&str>,
     what: &Collection,
     how: How,
@@ -208,10 +222,15 @@ pub async fn choose(
 }
 
 /// Plays a collection (see the module's notes). `want`: the server to use (the page's), else the first connected.
-pub async fn play(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Played, ToggleError> {
-    let owner = app.served.as_ref().and_then(|s| s.current_user());
+pub async fn play<H: PlayingHost>(app: &Arc<H>, want: Option<&str>, r: Request) -> Result<Played, ToggleError> {
+    play_with(&**app, want, r).await
+}
+
+/// `play`, on its host.
+async fn play_with(app: &dyn PlayingHost, want: Option<&str>, r: Request) -> Result<Played, ToggleError> {
+    let owner = app.served().as_ref().and_then(|s| s.current_user());
     let most = r.limit.unwrap_or(QUEUE_MOST);
-    let c = choose(app, want, &r.what, r.how, r.from.map(Start::Track), most, owner.as_deref()).await?;
+    let c = choose_with(app, want, &r.what, r.how, r.from.map(Start::Track), most, owner.as_deref()).await?;
     let how = one_now(r.how, c.total);
     let player = match r.on {
         None => None,
@@ -231,11 +250,16 @@ pub fn one_now(how: How, total: usize) -> How {
 }
 
 /// A playlist played on the server's player (`POST /api/playlists/{id}/play`), through [`choose`] as every play.
-pub async fn play_playlist(app: &Arc<App>, id: &str, how: How, want: Option<&str>) -> Result<super::PlayResult, ToggleError> {
-    let c = match choose(app, want, &Collection::Playlist { id: id.to_string() }, how, None, QUEUE_MOST, None).await {
+pub async fn play_playlist<H: PlayingHost>(app: &Arc<H>, id: &str, how: How, want: Option<&str>) -> Result<super::PlayResult, ToggleError> {
+    play_playlist_with(&**app, id, how, want).await
+}
+
+/// `play_playlist`, on its host.
+async fn play_playlist_with(app: &dyn PlayingHost, id: &str, how: How, want: Option<&str>) -> Result<super::PlayResult, ToggleError> {
+    let c = match choose_with(app, want, &Collection::Playlist { id: id.to_string() }, how, None, QUEUE_MOST, None).await {
         Ok(c) => c,
         // Usually the catalogue is still matching files to the server (a first fill takes minutes): say so.
-        Err(ToggleError::CannotPlay(_)) => return Err(ToggleError::CannotPlay(app.playlists.why_none(want).await?)),
+        Err(ToggleError::CannotPlay(_)) => return Err(ToggleError::CannotPlay(app.playlists().why_none(want).await?)),
         Err(e) => return Err(e),
     };
     let (player, sent) = on_server(app, &c.source, &c.tracks, c.index, one_now(how, c.total)).await?;
@@ -245,11 +269,16 @@ pub async fn play_playlist(app: &Arc<App>, id: &str, how: How, want: Option<&str
 /// The playlist meant by what was said, as its tracks' ids on a server (decision 0015; `GET /api/playlists/by-name`):
 /// the voice assistant plays them itself. At most `limit` (1 to [`super::playlists::PLAY_MAX`]: a Jellyfin player holds
 /// no more), through [`choose`].
-pub async fn by_name(app: &Arc<App>, said: &str, shuffled: bool, limit: usize, want: Option<&str>) -> Result<super::ByName, ToggleError> {
-    let Some(id) = app.playlists.spoken(said).await? else { return Ok(super::ByName { playlist: None, tracks: Vec::new() }) };
+pub async fn by_name<H: PlayingHost>(app: &Arc<H>, said: &str, shuffled: bool, limit: usize, want: Option<&str>) -> Result<super::ByName, ToggleError> {
+    by_name_with(&**app, said, shuffled, limit, want).await
+}
+
+/// `by_name`, on its host.
+async fn by_name_with(app: &dyn PlayingHost, said: &str, shuffled: bool, limit: usize, want: Option<&str>) -> Result<super::ByName, ToggleError> {
+    let Some(id) = app.playlists().spoken(said).await? else { return Ok(super::ByName { playlist: None, tracks: Vec::new() }) };
     let how = if shuffled { How::Shuffle } else { How::Play };
     let most = limit.clamp(1, super::playlists::PLAY_MAX);
-    let tracks = match choose(app, want, &Collection::Playlist { id: id.clone() }, how, None, most, None).await {
+    let tracks = match choose_with(app, want, &Collection::Playlist { id: id.clone() }, how, None, most, None).await {
         Ok(c) => c.tracks.into_iter().map(|t| t.id).collect(),
         Err(ToggleError::CannotPlay(_)) => Vec::new(),
         Err(e) => return Err(e),
@@ -281,14 +310,19 @@ pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
 
 /// The songs of Cratarr's own library a collection holds, in its order, read as a play reads them: what Radio and
 /// Autoplay stay inside (decision 0094). `owner`: whose favourites and exclusions.
-pub async fn own_songs(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Vec<String>, ToggleError> {
+pub async fn own_songs<H: PlayingHost>(app: &Arc<H>, what: &Collection, owner: Option<&str>) -> Result<Vec<String>, ToggleError> {
+    own_songs_with(&**app, what, owner).await
+}
+
+/// `own_songs`, on its host.
+pub async fn own_songs_with(app: &dyn PlayingHost, what: &Collection, owner: Option<&str>) -> Result<Vec<String>, ToggleError> {
     Ok(candidates(app, Some(source::cratarr::KIND.id), what, owner).await?.ids)
 }
 
 /// The favourites of `owner`, or all of Cratarr's own library, less what `owner` excluded from automatic picks.
-async fn own_candidates(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
-    let Some(served) = app.served.clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
-    let excluded = app.playlists.excluded_songs_of(owner).await?;
+async fn own_candidates(app: &dyn PlayingHost, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
+    let Some(served) = app.served().clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+    let excluded = app.playlists().excluded_songs_of(owner).await?;
     let favourites = matches!(what, Collection::Favourites);
     let owner = owner.map(str::to_string);
     let mut ids = blocking(move || {
@@ -305,12 +339,12 @@ async fn own_candidates(app: &Arc<App>, what: &Collection, owner: Option<&str>) 
     Ok(Candidates { own: true, ..Candidates::of(source::cratarr::KIND.id.to_string(), ids, name) })
 }
 
-async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
-    let cat = app.library.catalogue();
+async fn candidates(app: &dyn PlayingHost, want: Option<&str>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
+    let cat = app.library().catalogue();
     match what {
         Collection::Favourites | Collection::Library => own_candidates(app, what, owner).await,
         Collection::Crate { id, favourites, favourite_albums, without, filter, order, down } => {
-            let name = app.playlists.crate_def(id).await?.name;
+            let name = app.playlists().crate_def(id).await?.name;
             let look = super::CrateLook {
                 favourites: *favourites,
                 favourite_albums: *favourite_albums,
@@ -321,8 +355,8 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
                 down: *down,
                 ..Default::default()
             };
-            let shown = app.playlists.crate_shown(id, &look).await?;
-            let (source, lines) = app.playlists.crate_lines_in_order(&shown, want, &look).await?;
+            let shown = app.playlists().crate_shown(id, &look).await?;
+            let (source, lines) = app.playlists().crate_lines_in_order(&shown, want, &look).await?;
             let sid = source.clone();
             // A crate's lines are the libraries' files as the catalogue has them: there is no missing one to leave out.
             let (ids, lines): (Vec<String>, Vec<String>) = blocking(move || {
@@ -333,9 +367,9 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             Ok(Candidates { lines: Some(lines), ..Candidates::of(source, ids, Some(name)) })
         }
         Collection::Playlist { id } => {
-            let r = app.playlists.reach(id)?;
+            let r = app.playlists().reach(id)?;
             let entries = r.store.led_entries(&r.name).await?;
-            let (source, _) = app.playlists.source_of(want)?;
+            let (source, _) = app.playlists().source_of(want)?;
             let sid = source.clone();
             let count = entries.len();
             // As its view plays it: the lines whose file is there and known to the server.
@@ -375,7 +409,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             Ok(Candidates { named: Some(named), ..Candidates::of(v.source, ids, Some(v.title)) })
         }
         Collection::Artist { source, name, id, without } => {
-            let v = app.playing.artist_view(source, name, id.as_deref(), without).await?;
+            let v = app.playing().artist_view(source, name, id.as_deref(), without).await?;
             let named: Vec<QueueTrack> = v
                 .rows
                 .into_iter()
@@ -404,21 +438,21 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
 }
 
 /// An album's view, following one that left Incoming to where it is now (as the album panel does).
-async fn album_view(app: &Arc<App>, source: &str, id: &str) -> Result<super::AlbumView, ToggleError> {
-    let failed = match app.playing.album_view(source, id).await {
+async fn album_view(app: &dyn PlayingHost, source: &str, id: &str) -> Result<super::AlbumView, ToggleError> {
+    let failed = match app.playing().album_view(source, id).await {
         Ok(v) if !v.rows.is_empty() => return Ok(v),
         Ok(v) => Ok(v),
         Err(e) => Err(e),
     };
-    match app.incoming.album_fate(source, id).await {
-        Some(super::AlbumFate::Moved(now)) if now != id => app.playing.album_view(source, &now).await,
+    match app.album_moved_to(source, id).await {
+        Some(now) if now != id => app.playing().album_view(source, &now).await,
         _ => failed,
     }
 }
 
 /// The chosen tracks with their names, and the first one's place among them (a track that cannot be named any more is
 /// left out).
-async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usize) -> Result<(Vec<QueueTrack>, usize), ToggleError> {
+async fn tracks_of(app: &dyn PlayingHost, c: &Candidates, chosen: &[usize], index: usize) -> Result<(Vec<QueueTrack>, usize), ToggleError> {
     let numbered = |mut t: QueueTrack, at: usize| {
         t.n = u32::try_from(at).ok();
         t
@@ -426,13 +460,13 @@ async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usiz
     let found: Vec<Option<QueueTrack>> = if let Some(named) = &c.named {
         chosen.iter().map(|&i| Some(numbered(named[i].clone(), i))).collect()
     } else if c.own {
-        let Some(served) = app.served.clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+        let Some(served) = app.served().clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
         let ids: Vec<String> = chosen.iter().map(|&i| c.ids[i].clone()).collect();
         let mut songs: std::collections::HashMap<String, crate::serve::api::Song> =
             blocking(move || served.library.songs_by_id(&ids)).await?.into_iter().map(|s| (s.id.clone(), s)).collect();
         chosen.iter().map(|&i| songs.remove(&c.ids[i]).map(|s| numbered(own_track(s), i))).collect()
     } else if let Some(lines) = &c.lines {
-        let rows = app.playlists.rows_of(chosen.iter().map(|&i| lines[i].clone()).collect(), &c.source).await?;
+        let rows = app.playlists().rows_of(chosen.iter().map(|&i| lines[i].clone()).collect(), &c.source).await?;
         rows.into_iter()
             .zip(chosen)
             .map(|(r, &i)| {
@@ -454,7 +488,7 @@ async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usiz
             .collect()
     } else {
         // Named by their ids: what the catalogue knows of them (a track outside it plays without; the player asks).
-        let (cat, sid, ids) = (app.library.catalogue(), c.source.clone(), chosen.iter().map(|&i| c.ids[i].clone()).collect::<Vec<_>>());
+        let (cat, sid, ids) = (app.library().catalogue(), c.source.clone(), chosen.iter().map(|&i| c.ids[i].clone()).collect::<Vec<_>>());
         let rows = blocking(move || cat.source_rows(&sid, &ids)).await.unwrap_or_default();
         chosen
             .iter()
@@ -485,9 +519,9 @@ async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usiz
 /// Queues them on the server's player: Play and Shuffle replace what it plays (from the first to play), Play next, Add
 /// to queue and Now go to the player that plays (Now with nothing playing: plays them, as Play). A Jellyfin player (Finamp) holds fewer than a queue here: it gets what it
 /// holds. Answers with the player's label and how many it was sent.
-async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index: usize, how: How) -> Result<(String, usize), ToggleError> {
+async fn on_server(app: &dyn PlayingHost, source_id: &str, tracks: &[QueueTrack], index: usize, how: How) -> Result<(String, usize), ToggleError> {
     let (active, s) = app
-        .library
+        .library()
         .connected()
         .into_iter()
         .find(|(a, _)| a.cfg.id == source_id)
@@ -498,9 +532,9 @@ async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index
     let replace = || async { s.play_tracks(&ids, PlayHow::Replace).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}"))) };
     let label = match how {
         How::Play | How::Shuffle => replace().await?,
-        How::Next => app.playing.queue_add(Some(source_id), &ids, PlayHow::Next).await?,
-        How::Last => app.playing.queue_add(Some(source_id), &ids, PlayHow::Last).await?,
-        How::Now => match app.playing.queue_add(Some(source_id), &ids, PlayHow::Now).await {
+        How::Next => app.playing().queue_add(Some(source_id), &ids, PlayHow::Next).await?,
+        How::Last => app.playing().queue_add(Some(source_id), &ids, PlayHow::Last).await?,
+        How::Now => match app.playing().queue_add(Some(source_id), &ids, PlayHow::Now).await {
             Err(ToggleError::NothingPlaying) => replace().await?,
             r => r?,
         },
@@ -509,7 +543,7 @@ async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index
 }
 
 /// Queues them on one of Cratarr's players (Play On): a new queue under the collection's name, or added by hand.
-async fn on_player(app: &Arc<App>, name: &str, tracks: Vec<QueueTrack>, index: usize, how: How, queue_name: Option<String>) -> Result<(), ToggleError> {
+async fn on_player(app: &dyn PlayingHost, name: &str, tracks: Vec<QueueTrack>, index: usize, how: How, queue_name: Option<String>) -> Result<(), ToggleError> {
     use super::PlayOnCommand as Command;
     let command = match how {
         How::Play | How::Shuffle => Command::Play {
@@ -531,7 +565,7 @@ async fn on_player(app: &Arc<App>, name: &str, tracks: Vec<QueueTrack>, index: u
             now: how == How::Now,
         },
     };
-    app.play_on.command(name, command).await
+    app.play_on().command(name, command).await
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ToggleError> {
