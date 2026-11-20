@@ -32,6 +32,8 @@ pub mod step_017;
 mod follow;
 pub mod health;
 pub mod health_base;
+pub mod health_findings;
+pub mod health_requests;
 mod app_health;
 pub mod length_fixes;
 pub mod backup_list;

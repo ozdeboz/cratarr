@@ -2426,7 +2426,7 @@ pub(crate) mod tests {
         fetcher_said_at(FETCHER, false, 2_000);
         let not_yet = fetchers_down(1_000 + DOWN_FOR);
         let down = fetchers_down(1_001 + DOWN_FOR);
-        let f = crate::app::health::fetchers_down(&down, 1_001 + DOWN_FOR).unwrap();
+        let f = crate::app::health_requests::fetchers_down(&down, 1_001 + DOWN_FOR).unwrap();
         fetcher_said_at(FETCHER, true, 9_000);
         let reached = fetchers_down(99_999);
         if let Some(at) = was {
@@ -3232,7 +3232,7 @@ pub(crate) mod tests {
     async fn a_label_named_request_asks_lidarr_with_its_discography_records_group() {
         let d = std::env::temp_dir().join(format!("cratarr-requests-label-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
-        crate::fixtures::data_0_16(&d).unwrap();
+        crate::catalogue::records::data_0_16(&d).unwrap();
         let serve = Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music")]).unwrap()));
         super::super::step_017::run(serve.catalogue(), &serve.userdata, &[], &crate::catalogue::Rules::default()).unwrap();
@@ -4032,7 +4032,7 @@ pub(crate) mod tests {
         assert_eq!(strict.wanted(), [G], "handed: Lidarr asked once");
         assert!(row.fetched.as_deref().is_some_and(|f| f.contains("Lidarr is looking for it") && f.contains(SOULSEEK_SEARCHES)), "and Soulseek woken: {row:?}");
         assert!(waiting(&serve).unwrap().is_empty(), "none waits for an answer");
-        let health = crate::app::health::check_requests(Some(serve.as_ref())).unwrap();
+        let health = crate::app::health_requests::check_requests(Some(serve.as_ref())).unwrap();
         assert!(!health.iter().any(|f| f.key == "requests:waiting"), "Health: no requests waiting");
         let again = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
         assert_eq!((again.id, strict.wanted().len()), (asked.id, 1), "asked again: the same request, Lidarr not asked twice");
@@ -4220,7 +4220,7 @@ pub(crate) mod tests {
     fn upgraded(tag: &str, more: &str) -> (Arc<Serve>, std::path::PathBuf) {
         let d = std::env::temp_dir().join(format!("cratarr-requests-{tag}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
-        crate::fixtures::data_0_16(&d).unwrap();
+        crate::catalogue::records::data_0_16(&d).unwrap();
         rusqlite::Connection::open(d.join("userdata.sqlite")).unwrap().execute_batch(more).unwrap();
         let serve = Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music")]).unwrap()));

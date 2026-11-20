@@ -945,7 +945,7 @@ pub(crate) mod tests {
         assert_eq!(row().fetched.as_deref(), Some(WAITS_FOR_SPACE), "her Want waits on, for space now");
         assert_eq!(request_state(&row(), Holding::None, None, None), RequestState::WaitingForSpace);
         assert!(strict.wanted().is_empty(), "Lidarr asked nothing while short");
-        let f = crate::app::health::short_of_space(&serve, &stand).expect("Health says it");
+        let f = crate::app::health_requests::short_of_space(&serve, &stand).expect("Health says it");
         let detail = f.detail.clone().unwrap_or_default();
         assert!(detail.contains("195 GB free, below the floor of 200 GB") && detail.contains("The trash holds 20 GB: emptying it frees that"), "{detail}");
         // The purge: the trash emptied, the disk 20 GB freer, its rows gone at the next pass.
@@ -957,7 +957,7 @@ pub(crate) mod tests {
         round_with(&h, &serve, crate::app::moment::now_secs()).await.unwrap();
         assert_eq!(strict.wanted(), [G], "her Want goes at the round");
         assert!(row().fetched.as_deref().is_some_and(|f| f.contains("Lidarr is looking for it")), "{:?}", row());
-        assert!(crate::app::health::short_of_space(&serve, &stand).is_none(), "Health says nothing of space");
+        assert!(crate::app::health_requests::short_of_space(&serve, &stand).is_none(), "Health says nothing of space");
         assert!(strict.violations().is_empty(), "{:?}", strict.violations());
     }
 

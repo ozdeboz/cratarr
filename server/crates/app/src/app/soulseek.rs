@@ -4341,7 +4341,7 @@ mod tests {
         let i = item(id).unwrap();
         assert!(i.why.as_deref().is_some_and(|w| w.starts_with("It could not be placed")), "{:?}", i.why);
         let held = cant_place_in(std::slice::from_ref(&i), now());
-        let f = super::super::health::soulseek_cant_place(&held).expect("Health says so");
+        let f = super::super::health_requests::soulseek_cant_place(&held).expect("Health says so");
         assert_eq!((f.title.as_str(), f.detail.as_deref(), f.items.len()), ("Soulseek can't place albums", i.why.as_deref(), 1));
         assert!(cant_place_in(std::slice::from_ref(&i), i.due).is_empty(), "its day over: no more");
         std::fs::remove_dir_all(&d).ok();
@@ -4491,7 +4491,7 @@ mod tests {
         let i = item(id).unwrap();
         assert!(i.why.as_deref().is_some_and(|w| w.contains("Could not find a part of the path")), "{:?}", i.why);
         let held = cant_store_in(std::slice::from_ref(&i), now());
-        let f = super::super::health::soulseek_cant_store(&held).expect("Health says so");
+        let f = super::super::health_requests::soulseek_cant_store(&held).expect("Health says so");
         assert_eq!((f.title.as_str(), f.detail.as_deref(), f.items.len()), ("Soulseek can't store files", i.why.as_deref(), 1));
         std::fs::remove_dir_all(&d).ok();
     }
@@ -4520,7 +4520,7 @@ mod tests {
         let i = item(id).unwrap();
         assert!(i.why.as_deref().is_some_and(|w| w.contains("No space left on device")), "{:?}", i.why);
         let held = cant_store_in(std::slice::from_ref(&i), now());
-        let f = super::super::health::soulseek_cant_store(&held).expect("Health says so");
+        let f = super::super::health_requests::soulseek_cant_store(&held).expect("Health says so");
         assert_eq!((f.title.as_str(), f.detail.as_deref(), f.items.len()), ("Soulseek can't store files", i.why.as_deref(), 1));
         assert!(cant_store_in(std::slice::from_ref(&i), i.due).is_empty(), "its day over: no more");
         std::fs::remove_dir_all(&d).ok();

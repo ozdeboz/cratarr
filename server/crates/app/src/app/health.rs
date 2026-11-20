@@ -10,110 +10,15 @@ use serde::Serialize;
 
 use super::features_host::FeaturesHost;
 pub use super::health_base::{SHORT_SLACK_MS, clock, name_of, short_cause};
-
-/// How much it asks of the owner, most first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Level {
-    /// Broken or blind (the owner, 2026-11-04, for 0.16): the music can't play right, or Cratarr can't see (called
-    /// "needs you" until the owner renamed it, 2026-10-23; "the owner has to act" until 0.16).
-    Critical,
-    /// Something is wrong but the music plays: data that is incomplete, what retries by itself, a decision waiting on
-    /// the owner.
-    Warning,
-    /// Worth knowing.
-    Info,
-}
-
-/// Where a finding is dealt with: a page, and the switch to turn on there (the Library's `upgrades`). `connections`: Settings'
-/// Connections list itself, where the switches of every service are (G9: background reading).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Open {
-    pub page: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub switch: Option<&'static str>,
-    /// The thing on that page it opens (a connection in Settings: `musicbrainz`, `discogs`, `lastfm`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thing: Option<&'static str>,
-}
-
-/// What a check finds.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Finding {
-    pub domain: &'static str,
-    /// Stable while the same thing is found (its first sight is kept by it).
-    pub key: String,
-    /// A short name for it, a noun phrase in title case (0.9.6, the owner: the panel's breadcrumb): "Missing covers".
-    pub name: String,
-    pub title: String,
-    /// Health's row, in two parts (0.13, the owner): what it is about and how it is, read "{thing} · {count} {state}"
-    /// ("Covers · 3 missing"). `None` where no such pair fits; the page falls back on the name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thing: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    pub count: u64,
-    /// Of how many, where it is a share (AudioMuse's tracks heard).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub of: Option<u64>,
-    pub level: Level,
-    /// When it was first found (epoch s).
-    pub since: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub open: Option<Open>,
-    /// What it is about, one by one (the owner, 2026-10-23: "more deeper information"): the albums waiting, the
-    /// playlists and their missing tracks, the pages that answered slowly; each item opens where it is, when it is a
-    /// thing of its own.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub items: Vec<Item>,
-}
-
-/// One thing a finding is about.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct Item {
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub line: Option<String>,
-    /// An album it opens: (server, album id); its cover shows.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album: Option<(String, String)>,
-    /// That record's type, as the Library list serves it (GOTO.S1): its Go to names it (F31.1).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub album_type: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub album_secondary: Vec<String>,
-    /// A playlist it opens (on its Repair tab).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub playlist: Option<String>,
-    /// The files it is about, by name (a folder's tracks AudioMuse has not heard), at most `FILES`: its own page lists
-    /// them (the owner, 2026-10-24: the third level).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-    /// An album's missing tracks (0.9.7, `library:incomplete`): "06 · Title", "Disc 2 · 03 · Title".
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub missing: Vec<String>,
-    /// Its release group, for "Ask for the full album" (a request, as Discover's Want), and the request already out.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub release_group: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<super::requests::Mark>,
-    /// The track it is about (0.9.14, `files:short-*`): its song id, for replacing it on its own (the album's single
-    /// track replacement).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub track: Option<String>,
-    /// Since when it stands so (epoch s, `library:missing`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub since: Option<i64>,
-}
+pub use super::health_findings::{Finding, Item, Level, Open};
+use super::health_findings::{ITEMS, finding, n, thousands};
+#[cfg(test)]
+use super::health_findings::label_of;
+pub use super::health_requests::{fetchers_down, soulseek_cant_place, soulseek_cant_store, soulseek_queue};
+use super::health_requests::{check_requests, short_of_space};
 
 /// At most this many files an item names.
 const FILES: usize = 30;
-
-/// At most this many items a finding lists. Its check finds them all, the report keeps the first: a record's own are
-/// looked for among all (`record_health`).
-const ITEMS: usize = 100;
 
 /// Health's Missing list (A4): what Cratarr knows of and has no file for, none of it forgotten by itself. A library out of use, and the
 /// tracks with no file to play: those with files gone a while, and of those retired, the ones `held` says an account has something on,
@@ -216,84 +121,6 @@ fn now() -> i64 {
 
 /// When each finding (by key) was first found; those no longer found are forgotten.
 static FIRST_SEEN: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
-
-/// A finding as a check makes it; its time is set by the report.
-fn finding(domain: &'static str, key: impl Into<String>, level: Level, count: u64, title: impl Into<String>) -> Finding {
-    let key = key.into();
-    let (thing, state) = label_of(&key).map_or((None, None), |(t, s)| (Some(t.to_string()), Some(s.to_string())));
-    Finding { domain, name: name_of(&key).into(), key, title: title.into(), thing, state, detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
-}
-
-/// A finding's row, by its key: what it is about (a plural noun, Records where it counts records) and how it is (the
-/// owner's table, 2026-11-01). An unreachable server's thing is its own name, set where it is found.
-fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
-    Some(match key {
-        "library:cover" => ("Covers", "missing"),
-        "library:year" => ("Years", "missing"),
-        "library:genre" => ("Genres", "missing"),
-        "library:album-artist" => ("Album artists", "missing"),
-        "library:musicbrainz" => ("MusicBrainz ids", "missing"),
-        "library:track-numbers" => ("Track numbers", "off"),
-        "library:discs" => ("Disc numbers", "off"),
-        "library:incomplete" => ("Tracks", "missing"),
-        "library:references" => ("References", "missing"),
-        "library:missing" => ("Music", "missing"),
-        "library:rules" => ("Names", "set by a rule"),
-        "files:broken" => ("Files", "unreadable"),
-        "files:cut-short" => ("Files", "cut off"),
-        "files:damaged_tag" => ("Tags", "damaged"),
-        "files:no_tags" => ("Tags", "missing"),
-        "files:no_length" => ("Lengths", "missing"),
-        "files:length-misread" => ("Lengths", "read wrong"),
-        "files:length-guessed" => ("Lengths", "guessed"),
-        "files:sound-breaks" => ("Sound", "breaking off"),
-        "incoming:upgrades" => ("Replacements", "better"),
-        "incoming:duplicates" => ("Duplicates", "found"),
-        "incoming:failed" => ("Conversions", "failed"),
-        "incoming:arrived" => ("Records", "arrived"),
-        "requests:fetcher-down" => ("Fetchers", "down"),
-        "playlists:missing" => ("Playlist tracks", "missing"),
-        "analysis:audiomuse" => ("Analysis", "to do"),
-        "sign-in:refused" => ("Sign-ins", "refused"),
-        "sign-in:throttled" => ("Sign-ins", "throttled"),
-        "server:runaway" => ("Clients", "running away"),
-        "server:slow" => ("Responses", "slow"),
-        "server:settings-file" => ("Settings file", "unreadable"),
-        "server:short-of-space" => ("Disk space", "short"),
-        "servers:lidarr" => ("Lidarr", "unreachable"),
-        "library:ids-lost" => ("Track ids", "lost"),
-        "requests:waiting" => ("Requests", "waiting"),
-        "requests:soulseek-set-aside" => ("Soulseek queue", "set aside"),
-        "requests:soulseek-frozen" => ("Soulseek queue", "not kept"),
-        "words:genre" => ("Genres", "differ in the files"),
-        "words:style" => ("Styles", "differ in the files"),
-        "words:mood" => ("Moods", "differ in the files"),
-        "words:tag" => ("Tags", "differ in the files"),
-        k if k.starts_with("servers:") => ("Server", "unreachable"),
-        // A player's own (the owner, 2026-11-01: "The player as the thing"): named where it is found.
-        k if k.starts_with("players:held:") => ("Player", "play held"),
-        k if k.starts_with("players:away:") => ("Player", "silent"),
-        k if k.ends_with(":check") => ("Checks", "failed"),
-        _ => return None,
-    })
-}
-
-fn n(count: u64, one: &str, many: &str) -> String {
-    format!("{} {}", thousands(count), if count == 1 { one } else { many })
-}
-
-/// A count with its thousands apart, as the page shows numbers ("22,729").
-fn thousands(count: u64) -> String {
-    let digits = count.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
 
 /// A check's answer: its findings, or the one that says it could not look: critical, as Cratarr is blind there (the
 /// owner, 2026-11-04: a library that could not be checked is no warning).
@@ -601,106 +428,6 @@ pub fn track_ids(lost: bool) -> Option<Finding> {
             .into(),
     );
     Some(f)
-}
-
-/// The fetchers out of reach for over an hour (X1: a dead fetcher raises an alert), each named with since when. None, no finding.
-/// Pure.
-pub fn fetchers_down(down: &[(&'static str, i64)], now: i64) -> Option<Finding> {
-    if down.is_empty() {
-        return None;
-    }
-    let name = |f: &str| if f == "lidarr" { "Lidarr" } else { "Soulseek (slskd)" };
-    let count = down.len() as u64;
-    let mut f = finding("requests", "requests:fetcher-down", Level::Warning, count, n(count, "fetcher can't be reached", "fetchers can't be reached"));
-    f.items = down.iter().map(|(fetcher, since)| Item { title: name(fetcher).to_string(), line: Some(match (now - since) / 60 {
-                m if m < 120 => format!("for {m} min"),
-                m => format!("for {} hours", m / 60),
-            }), ..Item::default() }).collect();
-    Some(f)
-}
-
-/// Soulseek's records held a day for its own disk's trouble (Y9): slskd could not store their files three times in a row (its disk
-/// full or read-only, its folder not writable or gone: U1), so their users are not asked again every five minutes. `held` as `soulseek::cant_store`
-/// gives them, the latest held first: its why is the detail. None held, no finding. Pure.
-pub fn soulseek_cant_store(held: &[(String, String)]) -> Option<Finding> {
-    soulseek_held("requests:soulseek-store", "can't store files", held)
-}
-
-/// Soulseek's records held a day because their placing failed three times in a row (Y12): the Incoming library gone or not writable,
-/// a name it cannot take, every folder another record's. `held` as `soulseek::cant_place` gives them, the latest held first: its
-/// why is the detail. None held, no finding. Pure.
-pub fn soulseek_cant_place(held: &[(String, String)]) -> Option<Finding> {
-    soulseek_held("requests:soulseek-place", "can't place albums", held)
-}
-
-/// Soulseek's records held a day for one trouble (Y9, Y12): "Soulseek {state}", a warning, as it tries again by itself; the latest
-/// held record's why as its detail, and each held record listed. None held, no finding. Pure.
-fn soulseek_held(key: &str, state: &str, held: &[(String, String)]) -> Option<Finding> {
-    let (_, why) = held.first()?;
-    let count = held.len() as u64;
-    let mut f = finding("requests", key, Level::Warning, count, format!("Soulseek {state}"));
-    f.name = "Soulseek".to_string();
-    (f.thing, f.state) = (Some(f.name.clone()), Some(state.into()));
-    f.detail = Some(why.clone());
-    f.items = held.iter().map(|(record, _)| Item { title: record.clone(), line: Some("held a day".into()), ..Item::default() }).collect();
-    Some(f)
-}
-
-/// Soulseek's queue as the starts left it (P7, W7; said in the log alone before): one that could not be read and was set aside,
-/// read from the data folder (`soulseek::queues_set_aside`), so it is said after a restart too, until the file set aside is put back or
-/// removed: a warning, its detail how to put it back. And one that could be neither read nor set aside at this start (`frozen`),
-/// to which nothing is written: critical. Blocking.
-pub fn soulseek_queue(data: &std::path::Path, frozen: bool) -> Vec<Finding> {
-    let mut out = Vec::new();
-    if frozen {
-        // No count: it is kept or not ("Soulseek queue · not kept").
-        let mut f = finding("requests", "requests:soulseek-frozen", Level::Critical, 0, "Soulseek's queue can't be kept");
-        f.detail = Some(
-            "soulseek.json in the data folder could not be read nor set aside, so Cratarr writes nothing to it, and the queue is not \
-             kept over a restart. Make the data folder writable, or move the file out of it, and start Cratarr again."
-                .into(),
-        );
-        out.push(f);
-    }
-    let aside = super::soulseek::queues_set_aside(data);
-    if let Some((latest, _)) = aside.first() {
-        let count = aside.len() as u64;
-        let mut f = finding("requests", "requests:soulseek-set-aside", Level::Warning, count, "Soulseek's queue was set aside");
-        f.detail = Some(format!(
-            "It could not be read at a start, so Cratarr set it aside as {latest} and began an empty queue. To put it back: stop \
-             Cratarr, rename {latest} in the data folder to soulseek.json, and start Cratarr. Or remove {latest}."
-        ));
-        f.items = aside.iter().map(|(name, at)| Item { title: name.clone(), line: Some("set aside".into()), since: *at, ..Item::default() }).collect();
-        out.push(f);
-    }
-    out
-}
-
-/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; the fetchers out of reach (X1);
-/// Soulseek's records held for its own disk's trouble (Y9), or for their placing failing (Y12); and Soulseek's queue set aside or
-/// not kept (P7).
-pub(super) fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
-    let now = super::moment::now_secs();
-    let queue = served.and_then(|s| s.data_dir.as_deref()).map(|d| soulseek_queue(d, super::soulseek::frozen())).unwrap_or_default();
-    let down: Vec<Finding> = fetchers_down(&super::requests::fetchers_down(now), now)
-        .into_iter()
-        .chain(soulseek_cant_store(&super::soulseek::cant_store(now)))
-        .chain(soulseek_cant_place(&super::soulseek::cant_place(now)))
-        .chain(queue)
-        .collect();
-    let Some(serve) = served else { return Ok(down.into_iter().collect()) };
-    // Those whose state says they wait for an answer (W5): one whose album the library has meanwhile waits for no one. Each by its
-    // record's names (C49b): a label's "Artist - Title" is the artist's title.
-    let mut waiting = super::requests::waiting(serve)?;
-    if waiting.is_empty() {
-        return Ok(down.into_iter().collect());
-    }
-    let count = waiting.len() as u64;
-    waiting.truncate(ITEMS);
-    let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
-    f.open = Some(Open { page: "requests", switch: None, thing: None });
-    f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();
-    Ok(std::iter::once(f).chain(down).collect())
 }
 
 /// A record's files' own problems, of every copy, each by its kind: a file wrong in one copy is that record's, whichever
@@ -1237,35 +964,6 @@ fn check_server(at: i64, served: Option<&crate::serve::Serve>) -> anyhow::Result
         out.push(f);
     }
     Ok(out)
-}
-
-/// The disk floor (AL03; Q6, OQ-F5): the server short of space, one warning for the whole server, never one per user: its detail the
-/// free space where users' music lands, the floor, and what the trash there holds, as emptying it frees that; opening Settings. None
-/// while it is not short. What cratarr-ha reads is `/api/health`'s flag; Cratarr calls no one. Blocking.
-pub(crate) fn short_of_space(served: &crate::serve::Serve, disks: &dyn super::room::Disks) -> Option<Finding> {
-    use super::room::{MARGIN, size_text};
-    let space = super::room::space_on(served, disks);
-    if !space.short {
-        return None;
-    }
-    // No count: it is short or not ("Disk space · short").
-    let mut f = finding("server", "server:short-of-space", Level::Warning, 0, "The server is short of space");
-    let mut detail = format!(
-        "{} free, below the floor of {}. Users' new Wants wait until {} is free.",
-        size_text(space.free.unwrap_or(0)),
-        size_text(space.floor),
-        size_text(space.floor.saturating_add(MARGIN))
-    );
-    let trash = super::room::in_the_trash(served).unwrap_or_else(|e| {
-        tracing::warn!(target: "room", reason = %format!("{e:#}"), "what the trash holds was not read");
-        0
-    });
-    if trash > 0 {
-        detail.push_str(&format!(" The trash holds {}: emptying it frees that.", size_text(trash)));
-    }
-    f.detail = Some(detail);
-    f.open = Some(Open { page: "settings", switch: None, thing: None });
-    Some(f)
 }
 
 #[cfg(test)]
