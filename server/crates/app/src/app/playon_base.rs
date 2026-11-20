@@ -2,10 +2,15 @@
 //! player as Home Assistant and the pages see it (`PlayerView`), with the parts they hold. Base's describe and Cratarr's
 //! own source name them; `playon` re-exports them.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
+
 use serde::{Deserialize, Serialize};
 
 use cratarr_rules::radio::{Mode as RadioMode, RadioBy};
 
+use super::ToggleError;
 use super::along_base::FollowTarget;
 use super::queue_base::{PlayedOn, Repeat};
 use super::radio_base::{AutoMode, AutoplayMode, Within};
@@ -762,4 +767,26 @@ pub struct QueueItem {
     pub playing: bool,
     /// Where it was heard, oldest first.
     pub played_on: Vec<PlayedOn>,
+}
+
+/// What Cratarr's own source asks of the players (Play On, decision 0031), below them: a player's view, the one it
+/// follows, a line of them all, and a command. Play On implements it (`playon_players`) and sets itself as the one, as it
+/// sets its own instance.
+pub trait Players: Send + Sync {
+    fn get(&self, name: &str) -> Option<PlayerView>;
+    fn followed(&self) -> Option<PlayerView>;
+    fn summary(&self) -> String;
+    fn command<'a>(&'a self, name: &'a str, command: Command) -> Pin<Box<dyn Future<Output = Result<(), ToggleError>> + Send + 'a>>;
+}
+
+static PLAYERS: OnceLock<Arc<dyn Players>> = OnceLock::new();
+
+/// The players, once Play On runs (`PlayOn::instance`, as base sees it).
+pub fn players() -> Option<Arc<dyn Players>> {
+    PLAYERS.get().cloned()
+}
+
+/// Play On as it starts: the players there are, the first one set (as `PlayOn::instance` keeps its first).
+pub(super) fn set_players(on: Arc<dyn Players>) {
+    let _ = PLAYERS.set(on);
 }

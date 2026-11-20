@@ -961,6 +961,7 @@ impl PlayOn {
         me.clone().keep_queues();
         me.start_kodis();
         let _ = INSTANCE.set(me.clone());
+        super::playon_base::set_players(me.clone());
         me
     }
 
