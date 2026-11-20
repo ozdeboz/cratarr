@@ -22,7 +22,7 @@ use crate::serve::Serve;
 use crate::serve::users::Permissions;
 use crate::userdata::Request;
 
-pub use super::requests_base::{Mark, Marks, mark_of, requested};
+pub use super::requests_base::{Album, Fetching, Mark, Marks, RequestState, View, mark_of, requested};
 
 pub const PENDING: &str = "pending";
 pub const APPROVED: &str = "approved";
@@ -40,77 +40,6 @@ const REJECTED_WHY: &str = "Rejected";
 const LIST: usize = 200;
 /// The most albums of Lidarr's Wanted the page shows.
 const WATCHED: usize = 50;
-
-/// An album's own state beside its request's (decision 0070): asked for and not handed over yet, looked for, being
-/// fetched (how far), in Incoming, partly there, in the library; or not known to the fetcher (it is not connected,
-/// or did not answer).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum Album {
-    Requested,
-    Looking,
-    Fetching { done: f32 },
-    InIncoming,
-    PartlyThere { tracks: u32, of: u32 },
-    InLibrary,
-    Unknown,
-}
-
-/// A request as the pages show it: as kept, its state (W5, `request_state`: the one every view reads), and whether Hand over
-/// again is open for it; and its album's state as the page has read it so far (decision 0070), from that one state.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct View {
-    #[serde(flatten)]
-    pub request: Request,
-    pub state: RequestState,
-    pub album_state: Album,
-    pub hand_over_again: bool,
-}
-
-/// A request's state, the one every view reads (W5, G1): its status as kept first (waiting for approval, declined, cancelled,
-/// rejected), then how its record is held (W4: done, arrived, partly there), then what the fetchers say of one wanted: Lidarr's
-/// progress, and Soulseek's item (searching, found and waiting for the tick, fetching and how far, or waiting and why). A
-/// request's `fetched` stays the hand-over's words; its state is worked out at each read.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum RequestState {
-    WaitingForApproval,
-    /// Its asker is over their room (AL02.2): handed to no fetcher and copied from nothing till they are under. Their room's
-    /// numbers, in bytes, where a view read them (`views_of`).
-    WaitingForRoom {
-        used: u64,
-        room: u64,
-    },
-    /// The server is short of space (AL03): a user's Want handed to no fetcher, or told to stop, till there is space.
-    WaitingForSpace,
-    Declined,
-    Cancelled,
-    Rejected,
-    /// Done in a library for its asker, and closed ((c), AL02.8).
-    Delivered,
-    Wanted {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        lidarr: Option<Fetching>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        soulseek: Option<super::soulseek::Word>,
-    },
-    PartlyThere {
-        has: u32,
-        of: u32,
-    },
-    Arrived,
-    Done,
-}
-
-/// What Lidarr says of a request it was handed (W5): looking for it, or fetching it and how far (0 to 1).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum Fetching {
-    Looking,
-    Fetching { done: f32 },
-    /// Its grab failed or stalls (X1): Soulseek's turn.
-    Stuck,
-}
 
 /// A request's state (W5): `RequestState`, from the request as kept, how its record is held for its asker (`holding`), Lidarr's
 /// progress for its group, and Soulseek's word of its item. A request of an album the asker has, or that arrived, reads so whatever

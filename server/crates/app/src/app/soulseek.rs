@@ -889,27 +889,8 @@ fn search_again(i: &mut Item) {
     }
 }
 
-/// What Soulseek says of a request's record (W5): its item's state, as the request reads it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum Word {
-    /// Being searched now.
-    Searching,
-    /// Folders found, waiting for the administrator's tick.
-    Found,
-    /// Ticked and fetched (how far, 0 to 100), or its files checked and placed.
-    Fetching { percent: f64 },
-    /// To be searched, again where a search found nothing: why, where it says.
-    Waiting {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        why: Option<String>,
-    },
-    /// Something it cannot get past by itself (no list to judge it by), and why.
-    Stuck {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        why: Option<String>,
-    },
-}
+/// What Soulseek says of a request's record: in base, as a request's state holds it (`soulseek_base`).
+pub use super::soulseek_base::Word;
 
 /// What Soulseek says of these requests (W5), each given with its record: its item's word (`item_of`), by the request's id.
 pub fn item_words(requests: &[(i64, Option<i64>)]) -> std::collections::HashMap<i64, Word> {

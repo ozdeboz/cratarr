@@ -163,6 +163,7 @@ pub mod radio_base;
 mod along_base;
 pub mod renumber_base;
 pub mod requests_base;
+pub mod soulseek_base;
 pub mod search_base;
 pub mod track_fetch_records;
 
