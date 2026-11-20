@@ -310,7 +310,7 @@
             <Group title={g.title}>
               {#snippet tail()}{#if g.states.includes('placed')}<button class="tailact" onclick={() => void clearPlaced()}>Clear</button>{/if}{/snippet}
               {#each these as i (i.id)}
-                <ReleaseRow cover={recordOf(i) ? albumCoverUrl('cratarr', recordOf(i)!) : null} title={i.record.album} line={itemLine(i)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
+                <ReleaseRow cover={recordOf(i) ? albumCoverUrl('cratarr', recordOf(i)!) : null} title={i.record.album} line={itemLine(i, undefined, slskItems)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
                   {#if tickable(i)}
                     {@const on = slskTicks.has(i.id)}
                     <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.record.album}`} onclick={() => slskTick(i.id)}

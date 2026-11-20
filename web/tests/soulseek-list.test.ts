@@ -71,3 +71,17 @@ test("the fetchers' lists show where each is connected; Soulseek's to administra
   assert.deepEqual(ids(false, false, ['lidarr', 'soulseek']), ['mine', 'lidarr']);
   assert.deepEqual(ids(true, true, []), ['waiting', 'mine']);
 });
+
+test('a found record waiting for room or space says so; one picked by Cratarr reads as any picked one', () => {
+  const f = { user: 'peer-a', dir: 'Music\peer-a\Tide Tables', format: 'flac', lossless: true, free_slot: true, queue: 0, speed: 1_500_000, extra: 0 };
+  const glass = { record: 11, artist: 'Glass Harbour', album: 'Tide Tables', year: 2012, request: 7 };
+  assert.equal(itemLine(item('1', 'found', { record: glass, why: 'Waits for space', folders: [f], chosen: null })), 'Glass Harbour · 2012 · FLAC · free slot · 1.5 MB/s · peer-a · Waits for space');
+  assert.equal(itemLine(item('1', 'found', { record: glass, why: 'Waits for room', folders: [f], chosen: null })), 'Glass Harbour · 2012 · FLAC · free slot · 1.5 MB/s · peer-a · Waits for room');
+  assert.ok(tickable(item('1', 'found', { why: 'Waits for room', folders: [f] })), 'an administrator may still pick it');
+  // Picked by Cratarr (`auto`): the words of any picked record; waiting for its user's other record, said from the list.
+  const picked = item('2', 'approved', { record: glass, folders: [f], chosen: 0, auto: true });
+  const other = item('3', 'fetching', { folders: [f], chosen: 0, percent: 42 });
+  assert.equal(itemLine(picked), 'Glass Harbour · 2012 · To be fetched');
+  assert.equal(itemLine(picked, 0, [picked, other]), "Glass Harbour · 2012 · Waiting for peer-a's other record");
+  assert.equal(itemLine(item('4', 'fetching', { record: glass, folders: [f], chosen: 0, percent: 42, auto: true })), 'Glass Harbour · 2012 · Fetching · 42%');
+});
