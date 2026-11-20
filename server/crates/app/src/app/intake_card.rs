@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 pub use super::intake_card_base::{Heard, HeardTrack};
+use super::requests_host::RequestsHost;
 
 /// The task that hears records (`app::tasks`).
 pub const KIND: &str = "intake:hear";
@@ -258,7 +259,7 @@ fn reference_check(matched: Option<&super::matching::Match>, looking: bool, disc
 /// Where the record came from: Bandcamp where its files say so (Bandcamp's own comment, "Visit https://….bandcamp.com"),
 /// the Soulseek user its files were downloaded from (slskd's transfers), Lidarr where it imported its folder; else a
 /// folder.
-async fn from_of(app: &super::App, files: &[String], folder: &str, tags: &[crate::catalogue::tags::FileTags]) -> From {
+async fn from_of(app: &dyn RequestsHost, files: &[String], folder: &str, tags: &[crate::catalogue::tags::FileTags]) -> From {
     let bandcamp = tags.iter().any(|t| t.items.iter().any(|(k, _, v)| k.to_ascii_lowercase().contains("comm") && v.contains(".bandcamp.com")));
     if bandcamp {
         return From { kind: "bandcamp", user: None, said: "Bandcamp".into() };
@@ -292,14 +293,14 @@ async fn slskd_downloads() -> Option<Arc<Vec<(String, Vec<String>)>>> {
 }
 
 /// The folders Lidarr imported lately, asked at most once a minute.
-async fn lidarr_folders(app: &super::App) -> Option<Arc<Vec<String>>> {
+async fn lidarr_folders(app: &dyn RequestsHost) -> Option<Arc<Vec<String>>> {
     static KEPT: std::sync::Mutex<Option<(std::time::Instant, Arc<Vec<String>>)>> = std::sync::Mutex::new(None);
     if let Some((at, f)) = KEPT.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
         && at.elapsed() < ASKED_FOR
     {
         return Some(f.clone());
     }
-    let f = Arc::new(super::discover::lidarr(app)?.imported_folders().await.ok()?);
+    let f = Arc::new(app.lidarr()?.imported_folders().await.ok()?);
     *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), f.clone()));
     Some(f)
 }
@@ -353,8 +354,13 @@ fn in_library(kept: Option<(bool, String, &str)>, edition: Option<String>) -> Ch
 
 /// A record's card. `album`: Cratarr's own album id; `at`: its copy waiting, as (catalogue folder, folder in it), which is what
 /// the card reads and hears, whichever copy plays; `library`: Incoming's for it. The hearing is started where it was never done.
-pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>, library: Option<String>) -> Result<Card> {
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
+pub async fn card<H: RequestsHost>(app: &Arc<H>, album: &str, at: Option<(i64, String)>, library: Option<String>) -> Result<Card> {
+    card_on(&**app, album, at, library).await
+}
+
+/// [`card`], on its host.
+async fn card_on(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>, library: Option<String>) -> Result<Card> {
+    let served = app.serve().clone().context("Cratarr's own library is not open")?;
     let a = album.to_string();
     let (s, a2, at2) = (served.clone(), a.clone(), at.clone());
     #[allow(clippy::type_complexity)]
@@ -386,10 +392,10 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
         checks.push(Check { key: "one_user", state: "green", said: format!("From one Soulseek user's folder: {}", from.user.clone().unwrap_or_default()) });
     }
     let (kept, edition) = {
-        let (s, a, at, mains) = (served.clone(), album.to_string(), at.clone(), app.library.main_folders());
+        let (s, a, at, mains) = (served.clone(), album.to_string(), at.clone(), app.main_folders());
         crate::run::spawn_blocking(move || stands_of(&s, &a, at.as_ref(), &mains)).await??
     };
-    let name = |folder: i64| app.incoming.library_name(crate::source::cratarr::KIND.id, folder);
+    let name = |folder: i64| app.library_name(crate::source::cratarr::KIND.id, folder);
     checks.push(in_library(kept.as_ref().map(|(better, folder, why)| (*better, name(*folder), why.as_str())), edition.map(name)));
     let suggested = suggested(&checks);
     let year = tags.iter().find_map(|t| t.items.iter().find(|(_, n, _)| *n == Some("date")).and_then(|(_, _, v)| v.get(..4)?.parse().ok()));
@@ -443,57 +449,15 @@ pub struct Waiting {
 
 /// Every record waiting in an Incoming library of Cratarr's own, as Incoming lists them: no card worked out (a card is
 /// asked for one record; 0.14's preview.2: working out the cards of every Incoming library's records, 800 in one,
-/// took minutes).
-pub async fn waiting(app: &super::App) -> Vec<Waiting> {
-    let view = app.incoming.list(None).await;
-    let mut out = Vec::new();
-    let mut places = Vec::new();
-    for s in view.sources.iter().filter(|s| s.id == crate::source::cratarr::KIND.id) {
-        if let Some(e) = &s.error {
-            tracing::warn!(target: "library", reason = %e, "records waiting not listed");
-        }
-        for a in &s.albums {
-            places.push((a.id.clone(), a.copies.first().map(|c| (c.folder, c.dir.clone()))));
-            out.push(Waiting { source: s.id.clone(), album: a.id.clone(), title: a.title.clone(), artist: a.artist.clone().unwrap_or_default(), library: a.library.clone(), verdict: None });
-        }
-    }
-    // Each one's stand against a copy kept elsewhere (C37a; RF2: another record's, paired track for track): an upgrade where Replace
-    // would take it, else in two libraries.
-    if let Some(served) = app.served.clone() {
-        use crate::serve::copies::replaces;
-        let mains = app.library.main_folders();
-        let stands = crate::run::spawn_blocking(move || {
-            let found: Vec<Option<(String, crate::serve::copies::Copy)>> = places
-                .iter()
-                .map(|(id, at)| {
-                    let c = served.library.copies_of(id).ok()?.into_iter().find(|c| at.as_ref().is_some_and(|(f, d)| c.folder == *f && &c.dir == d))?;
-                    Some((id.clone(), c))
-                })
-                .collect();
-            let asked: Vec<(String, crate::serve::copies::Copy)> = found.iter().flatten().cloned().collect();
-            let mut stood = served.stands_of(&asked, &mains).unwrap_or_else(|e| {
-                tracing::warn!(target: "library", reason = %format!("{e:#}"), "how records waiting stand not read");
-                vec![None; asked.len()]
-            });
-            stood.reverse();
-            found
-                .iter()
-                .map(|f| f.as_ref().and_then(|_| stood.pop().flatten()).map(|(better, kept)| if replaces(better, kept.kind) { "upgrade" } else { "duplicate" }))
-                .collect::<Vec<_>>()
-        })
-        .await
-        .unwrap_or_default();
-        for (w, v) in out.iter_mut().zip(stands) {
-            w.verdict = v;
-        }
-    }
-    out
+/// took minutes). Read from Incoming's list, by the app (`app_requests`).
+pub async fn waiting<H: RequestsHost>(app: &Arc<H>) -> Vec<Waiting> {
+    app.intake_waiting().await
 }
 
 /// Hears a record's copy in the background, once (one task at a time for the account; another asked meanwhile waits for its
 /// next card): each track decoded whole and its recordings asked of AcoustID, kept under that copy.
-pub fn hear(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>) {
-    let Some(served) = app.served.clone() else { return };
+pub fn hear(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>) {
+    let Some(served) = app.serve().clone() else { return };
     let Some(account) = served.current_user() else { return };
     if super::tasks::tasks().of(&account).iter().any(|t| t.kind == KIND && t.finished.is_none()) {
         return;

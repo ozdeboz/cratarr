@@ -54,6 +54,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::track_fetch::{NotAsked, ReleaseTrack};
+use super::requests_host::RequestsHost;
 use super::turn::Failure;
 use crate::lidarr::Progress;
 use crate::slskd::{Answer, Offered, Slskd};
@@ -817,7 +818,7 @@ pub struct View {
     pub library: Option<String>,
 }
 
-pub fn view(app: &Arc<super::App>) -> View {
+pub fn view<H: RequestsHost>(app: &Arc<H>) -> View {
     start(app);
     View { items: kept(|k| k.items.clone()), library: library().ok().map(|p| p.display().to_string()) }
 }
@@ -840,7 +841,7 @@ pub const SOURCE_GONE: &str = "That source is gone; look again";
 
 /// These records approved, each with the folder given (else the best); the queue as it is now. A tick naming a source no longer at
 /// its place is refused (`SOURCE_GONE`), and nothing is ticked.
-pub fn approve(app: &Arc<super::App>, picked: &[Pick]) -> Result<View> {
+pub fn approve<H: RequestsHost>(app: &Arc<H>, picked: &[Pick]) -> Result<View> {
     kept(|k| approve_in(&mut k.items, picked))?;
     wake();
     Ok(view(app))
@@ -871,7 +872,7 @@ fn approve_in(items: &mut [Item], picked: &[Pick]) -> Result<()> {
 }
 
 /// A record searched now, whatever its wait (and from the ladder's first rung).
-pub fn search_now(app: &Arc<super::App>, id: &str) -> View {
+pub fn search_now<H: RequestsHost>(app: &Arc<H>, id: &str) -> View {
     with_item(id, search_again);
     wake();
     view(app)
@@ -1176,7 +1177,7 @@ pub fn failed_for_tests(id: &str, user: &str) {
 /// A record taken off the list: its Request is not taken in again, and nobody is blamed. One under way stops (OQ-SK2 (a), the owner:
 /// "Out of the list" also stops a transfer under way): its transfers dropped in slskd, what it fetched or checked removed, and any
 /// record waiting for its user goes.
-pub async fn drop_item(app: &Arc<super::App>, id: &str) -> View {
+pub async fn drop_item<H: RequestsHost>(app: &Arc<H>, id: &str) -> View {
     if let Some(it) = dropped(id)
         && let Ok((slskd, folder)) = super::track_fetch::slskd_ready().await
     {
@@ -1203,7 +1204,7 @@ fn dropped(id: &str) -> Option<Item> {
 }
 
 /// The placed records cleared from the list.
-pub fn clear_placed(app: &Arc<super::App>) -> View {
+pub fn clear_placed<H: RequestsHost>(app: &Arc<H>) -> View {
     kept(|k| k.items.retain(|i| i.state != State::Placed));
     view(app)
 }
@@ -1252,7 +1253,12 @@ pub async fn connected() -> bool {
 
 /// The workers started, once: one searches (one search at a time); one starts downloads, every picked record at once (never two of
 /// one user), each followed by its own follower; one checks and places them, one at a time (SK1).
-pub fn start(app: &Arc<super::App>) {
+pub fn start<H: RequestsHost>(app: &Arc<H>) {
+    start_on(app.clone())
+}
+
+/// [`start`], on its host.
+fn start_on(app: Arc<dyn RequestsHost>) {
     static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let Some(served) = crate::serve::instance() else { return };
     let Some(dir) = served.data_dir.clone() else { return };
@@ -1271,7 +1277,7 @@ pub fn start(app: &Arc<super::App>) {
                 continue;
             }
             // The approved Requests, read each round (they are Cratarr's own: no service asked).
-            if let Err(e) = read_requests(&served, &app).await {
+            if let Err(e) = read_requests(&served, &*app).await {
                 tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "the approved Requests not read");
             }
             match next_search() {
@@ -1341,7 +1347,7 @@ fn sweep_hidden(lib: &Path, items: &[Item]) -> Vec<PathBuf> {
 /// The approved Requests taken in (decision 0099's amendment: Soulseek never reads Lidarr's Wanted), each by its record
 /// (C51b, `requests::records_of`): one whose record is not on the list yet is added, waiting to be searched; one no longer
 /// approved (cancelled, declined) goes unless it is placed, a fetch, a check or a placing under way cancelled (Y2).
-async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>) -> Result<()> {
+async fn read_requests(served: &Arc<crate::serve::Serve>, app: &dyn RequestsHost) -> Result<()> {
     // Folders set aside past their 14 days, looked for hourly (X4).
     static SWEPT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
     if let Some(data) = served.data_dir.clone()
@@ -1377,7 +1383,7 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
     }
     // The owner's 6 November order (X1): Lidarr first, Soulseek five minutes after, or at once where Lidarr is not connected or did
     // not take it; an album not out yet waits for its release.
-    let lidarr = super::requests::fetcher(&**app);
+    let lidarr = super::requests::fetcher(app);
     let firsts = firsts_of(&approved, &of, lidarr.is_some());
     *NOT_BEFORE.lock().unwrap_or_else(|e| e.into_inner()) = approved.iter().map(|r| r.id).zip(firsts.iter().copied()).collect();
     // The first arrival stops the other (X1), and a request that left takes its item with it (Y2): a fetch, a check or a placing

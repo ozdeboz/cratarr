@@ -29,6 +29,7 @@ use super::musicbrainz::Asked as _;
 use crate::slskd::{Candidate, Slskd};
 
 pub use super::track_fetch_records::{Have, ReleaseTrack, ReleaseView, release_by_id};
+use super::requests_host::RequestsHost;
 use super::track_fetch_records::release_of;
 
 /// Where the connection's choices are kept (user data's server choices, as Discogs' key).
@@ -993,7 +994,12 @@ fn undo_file(id: &str) -> Result<PathBuf> {
 /// Adds a passed fetch to its album as a run on the one path (decision 0092's writers' map, 0.14: the copy chosen after
 /// Cratarr's check is the yes): "Missing tracks · Album", or "Better copy · Album" where it replaces one; its Undo the
 /// run's (the new track to the trash, the one it replaced back).
-pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super::file_runs_base::Status> {
+pub async fn add<H: RequestsHost>(app: &Arc<H>, fetch: &str) -> Result<super::file_runs_base::Status> {
+    add_on(app.clone(), fetch).await
+}
+
+/// [`add`], on its host.
+async fn add_on(app: Arc<dyn RequestsHost>, fetch: &str) -> Result<super::file_runs_base::Status> {
     let (wanted, staged) = jobs(|j| {
         let f = j.fetches.get(fetch)?;
         (f.view.state == Fetching::Passed).then(|| (f.wanted.clone(), f.staged.clone()))
@@ -1001,7 +1007,7 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
     .context("That track has not passed the check")?;
     let staged = staged.context("That track is not staged")?;
     let s = served()?;
-    let status = super::file_runs::made(app, move || {
+    let status = app.made(Box::new(move || {
         let (_, artist, title) = s.library.album_names(&wanted.album)?.context("No such album in Cratarr's own library")?;
         let replaced = match &wanted.replace {
             Some(id) => super::renumber::tracks_of(&wanted.album)?.0.into_iter().find(|t| &t.id == id).map(|t| t.title),
@@ -1025,7 +1031,7 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
             }],
             failed: Vec::new(),
         })
-    })
+    }))
     .await?;
     jobs(|j| {
         if let Some(f) = j.fetches.get_mut(fetch) {
