@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use super::{App, ToggleError};
+use super::ToggleError;
+use super::base_host::BaseHost;
 use crate::userdata::offline::{ChangeKind, Since};
 
 /// The most changes one answer holds; `more` says ask again.
@@ -84,10 +85,10 @@ pub fn kinds_of(asked: Option<&str>) -> Vec<ChangeKind> {
 }
 
 /// The changes the asking account may see since `since`.
-pub async fn read(app: &Arc<App>, serve: Arc<crate::serve::Serve>, since: Option<i64>, kinds: Option<&str>, index_since: Option<i64>) -> Result<Changes, ToggleError> {
+pub async fn read<H: BaseHost + ?Sized>(app: &Arc<H>, serve: Arc<crate::serve::Serve>, since: Option<i64>, kinds: Option<&str>, index_since: Option<i64>) -> Result<Changes, ToggleError> {
     let user = serve.current_user().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
-    let folder = app.playlists.own_folder();
-    let index = if asks_index(kinds) { Some(super::device_index::stands(app, serve.clone(), index_since).await?) } else { None };
+    let folder = app.own_folder();
+    let index = if asks_index(kinds) { Some(super::device_index_base::stands(app.library(), serve.clone(), index_since).await?) } else { None };
     let kinds = kinds_of(kinds);
     let found = crate::run::spawn_blocking(move || serve.userdata.changes_since(since, &user, &folder, &kinds, MOST))
         .await

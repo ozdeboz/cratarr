@@ -16,6 +16,7 @@ pub mod artists;
 pub use cratarr_gate::app::audiomuse;
 pub mod beat_this;
 pub mod capabilities;
+mod app_base;
 pub mod changes;
 pub mod analysis_pass;
 pub mod analysis_import;
@@ -114,6 +115,8 @@ pub use cratarr_gate::app::reach;
 pub mod tracks;
 pub mod visuals;
 // Base's parts of the modules above it, moved down for the split's phase 2 (each named for its origin).
+pub mod base_host;
+pub mod device_index_base;
 pub mod file_facts_base;
 pub mod file_runs_base;
 mod incoming_base;

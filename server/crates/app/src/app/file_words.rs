@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use super::file_runs;
-use super::file_runs_base::{Proposal, flat};
+use super::base_host::BaseHost;
+use super::file_runs_base::{self, Proposal, flat};
 use super::words::store::{Kind, Source};
 use crate::journal::{FileWrite, RunRecord};
 
@@ -155,30 +155,36 @@ fn kind_of(plan: &str) -> Result<Kind> {
 }
 
 /// The review sheet: every record whose files differ (only `albums` where given).
-pub async fn plan(plan: &str, albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
+pub async fn plan(plan: &str, albums: Option<Vec<String>>) -> Result<file_runs_base::PlanView> {
     let kind = kind_of(plan)?;
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let p = crate::run::spawn_blocking(move || proposal(&served, kind, albums.as_deref())).await??;
-    Ok(file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
+    Ok(file_runs_base::view(&p.kind, &p.title, &p.records, &p.files, false))
 }
 
 /// The ticked records written (an administrator's apply on the review sheet), each set aside where it is no longer what
 /// the sheet showed (its stamp): a run on the one path.
-pub async fn apply(app: &Arc<super::App>, plan: &str, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
+pub async fn apply<H: BaseHost + ?Sized>(app: &Arc<H>, plan: &str, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs_base::Status> {
+    let p = ticked_proposal(plan, albums, stamps, &|name| app.run_busy(name)).await?;
+    Ok(app.clone().start_run(p))
+}
+
+/// What `apply` runs: the ticked records' proposal, refused while a run of the same writer waits or writes (`busy`).
+async fn ticked_proposal(plan: &str, albums: Vec<String>, stamps: Option<HashMap<String, String>>, busy: &(dyn Fn(&str) -> bool + Sync)) -> Result<Proposal> {
     let kind = kind_of(plan)?;
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
     let name = format!("{PREFIX}{}", kind.name());
-    anyhow::ensure!(!file_runs::busy(&app.journal, &name), "Already writing");
+    anyhow::ensure!(!busy(&name), "Already writing");
     let p = crate::run::spawn_blocking(move || -> Result<Proposal> {
         if !super::words::catalogue::writes(&served, kind.name()) {
             bail!("Writing {}s into the files is switched off", kind.name());
         }
-        Ok(file_runs::ticked(proposal(&served, kind, Some(&albums))?, &albums, stamps.as_ref()))
+        Ok(file_runs_base::ticked(proposal(&served, kind, Some(&albums))?, &albums, stamps.as_ref()))
     })
     .await??;
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Nothing differs");
-    Ok(file_runs::start(app, p))
+    Ok(p)
 }
 
 #[cfg(test)]
