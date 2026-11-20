@@ -2720,6 +2720,9 @@ export type BeyondAlbum = {
   /** Its page on Discogs, where Discogs found it: Discogs' data is shown with its attribution (its terms). */
   discogs_url?: string | null;
   sources: ('musicbrainz' | 'discogs')[];
+  /** Its release type, as its sources say it (album, EP, single…): Find's heading by the record word rule (SB12); none until
+   *  the server sends it, which reads "Records". */
+  type?: string | null;
   /** The record that holds its reference (`al-<n>`, C57); none until it is opened. */
   record?: string | null;
   bandcamp?: string | null;
