@@ -5127,6 +5127,14 @@ async fn around_json(app: &App, serve: &crate::serve::Serve, (seeds, albums, mak
     json!({ "seeds": seeds, "albums": cards, "making": making })
 }
 
+/// A Want refused: a right as `decide()` said it (a 403, CN2), anything else as it is (a 409).
+fn refused_as_said(e: anyhow::Error) -> ToggleError {
+    match e.downcast::<ToggleError>() {
+        Ok(said) => said,
+        Err(e) => ToggleError::Refused(format!("{e:#}")),
+    }
+}
+
 #[derive(Deserialize)]
 struct DiscoverKey {
     key: String,
@@ -5137,7 +5145,7 @@ struct DiscoverKey {
 async fn discover_want(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
-    let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(refused_as_said)?;
     // Where it stands with it (G11), as every view reads it.
     Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
 }
@@ -5182,7 +5190,7 @@ async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_jso
             crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover, page).await
         }
     }
-    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    .map_err(refused_as_said)?;
     // Where it stands with it (G11), as every view reads it.
     Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
 }

@@ -18,6 +18,8 @@ test-support = ["cratarr-core/test-support", "cratarr-media/test-support", "dep:
 cratarr-core.workspace = true
 cratarr-media.workspace = true
 cratarr-rules.workspace = true
+# The pure domain: the one title rule the copies pair by (PAIR01, C4).
+cratarr-domain.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
