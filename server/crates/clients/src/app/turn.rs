@@ -363,14 +363,50 @@ impl Turn {
     /// lengthened. One further off than any limit answer holds (`RETRY_AFTER_MOST`) is the source's own (Bandcamp's day). Until
     /// when it holds.
     pub fn take_up(&self, journal: &Journal) -> Option<i64> {
-        let _ = journal;
-        None
+        let kept = match journal.pause(self.policy.name) {
+            Ok(p) => p?,
+            Err(e) => {
+                tracing::warn!(target: "connections", source = self.policy.name, "a source's kept hold not read: {e:#}");
+                return None;
+            }
+        };
+        let now = super::moment::now_secs();
+        let until = kept.until.min(now + self.policy.longest.as_secs() as i64);
+        if until < kept.until
+            && let Err(e) = journal.set_pause(&Pause { until, ..kept.clone() })
+        {
+            tracing::warn!(target: "connections", source = self.policy.name, "a hold cut to its cap is not kept for a restart: {e:#}");
+        }
+        if until <= now {
+            return None;
+        }
+        let own = kept.own || until - now > RETRY_AFTER_MOST.as_secs() as i64;
+        self.grow(Hold { at: Instant::now() + Duration::from_secs((until - now) as u64), until, own });
+        tracing::info!(target: "connections", source = self.policy.name, until, "a source's hold kept across the restart: its questions wait");
+        Some(until)
     }
 
     /// Its hold's deadline (none: lifted) kept for a restart in its row (R4), in the journal `ud` where given, else where the turn is
     /// kept; nowhere otherwise. A hold only grows: a shorter one leaves the row as it is.
     fn keep_until(&self, ud: Option<&Journal>, until: Option<i64>) {
-        let _ = (ud, until, Pause { source: String::new(), until: 0, why: None, own: false });
+        let kept = self.kept.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let Some(journal) = ud.or(kept.as_deref()) else { return };
+        let own = self.held.lock().unwrap_or_else(|p| p.into_inner()).is_some_and(|h| h.own);
+        let written = match until {
+            Some(until) => journal.keep_pause(&Pause { source: self.policy.name.to_string(), until, why: Some(self.why(own)), own }).map(drop),
+            None => journal.lift_pause(self.policy.name),
+        };
+        if let Err(e) = written {
+            tracing::warn!(target: "connections", source = self.policy.name, "a source's hold is not kept for a restart: {e:#}");
+        }
+    }
+
+    /// Why it holds, as its row says (AC4: the hold's own words): its source asked Cratarr to wait, or Bandcamp's check.
+    fn why(&self, own: bool) -> String {
+        if own && self.policy.name == BANDCAMP.name {
+            return "Bandcamp asked for a browser check".into();
+        }
+        Paused { source: self.policy.name, until: 0 }.to_string()
     }
 
     /// Its source's connection name.

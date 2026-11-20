@@ -22,7 +22,6 @@ use rusqlite::{OptionalExtension, params};
 use crate::journal::Journal;
 
 /// The tables, made when missing: safe to run at every open.
-#[allow(dead_code)] // red: not made yet
 pub(crate) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS intake_items (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, seq INTEGER NOT NULL, state TEXT NOT NULL, asked_by TEXT, item TEXT NOT NULL) WITHOUT ROWID;
@@ -40,7 +39,6 @@ CREATE TABLE IF NOT EXISTS intake_marks (name TEXT PRIMARY KEY, value TEXT NOT N
 
 /// At an open (a start): a check's file being heard when the server stopped reads back cut off (OQ-RN-3 (a): heard whole again);
 /// every other step as it was kept (a fetch is slskd's, followed again by its batch).
-#[allow(dead_code)] // red: not made yet
 pub(crate) const AT_OPEN: &str = "UPDATE intake_steps SET state = 'cut_off' WHERE state = 'running' AND step LIKE 'check:%';";
 
 /// An item of a saved queue.
@@ -109,6 +107,9 @@ pub struct JobRow {
 
 /// The journal's file inside one transaction (`Journal::write`).
 pub struct Tx<'a>(&'a rusqlite::Transaction<'a>);
+
+/// What a step writes in another's transaction, given that one's token (a file run's Undo): R2's "one write with its entry".
+pub type Also = Box<dyn FnOnce(&Tx<'_>, &str) -> Result<()> + Send>;
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {

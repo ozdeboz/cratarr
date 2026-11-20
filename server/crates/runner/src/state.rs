@@ -82,10 +82,6 @@ impl Job {
 /// again, so it fails). Pure.
 pub fn walk(job: Job, e: Event, now: i64, again: Option<i64>) -> Job {
     use State::{Cancelled, Failed, Retrying, Running, Scheduled, Waiting};
-    if job.state.is_final() || job.state != State::Done {
-        let _ = (e, now, again);
-        return job;
-    }
     if job.state.is_final() {
         return job;
     }

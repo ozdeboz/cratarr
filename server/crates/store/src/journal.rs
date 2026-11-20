@@ -407,6 +407,8 @@ impl Journal {
         let conn = crate::db::open(file)?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA).context("creating the journal")?;
+        // DI01's tables (RN): the saved queues, the sources' pauses and the runner's jobs, in this file (R1).
+        conn.execute_batch(crate::intake::SCHEMA).context("creating the saved queues")?;
         for (table, column) in ADDED_COLUMNS {
             let name = column.split_whitespace().next().unwrap_or_default();
             let has: bool = conn
@@ -416,6 +418,7 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
+        conn.execute_batch(crate::intake::AT_OPEN).context("opening the saved queues")?;
         let key = NEXT_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default(), key })
     }

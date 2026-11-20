@@ -238,7 +238,7 @@ impl Runner {
     /// `attach` at `now` (epoch s).
     pub fn attach_at(&self, journal: Arc<Journal>, now: i64) -> anyhow::Result<()> {
         journal.prune_jobs(now - KEPT_SECS)?;
-        let rows: Vec<JobRow> = Vec::new();
+        let rows = journal.jobs()?;
         let mut list = self.list();
         for mut row in rows {
             self.next.fetch_max(row.id.max(0) as u64, Ordering::Relaxed);
@@ -315,7 +315,7 @@ impl Runner {
     /// runs, the second asker is told the first's task to follow (`Err(Ok(task))`); one of a kind runs at a time for an account
     /// (`Err(Err(words))`).
     pub fn begin_keyed(&'static self, kind: &str, key: &str, account: Option<&str>) -> Result<Handle, Result<Task, String>> {
-        if let Some(k) = self.list().iter().find(|k| k.task.kind == kind && k.key.as_deref() == Some(key) && k.ended.is_none() && kind.is_empty()) {
+        if let Some(k) = self.list().iter().find(|k| k.task.kind == kind && k.key.as_deref() == Some(key) && k.ended.is_none()) {
             return Err(Ok(k.task.clone()));
         }
         self.begin_in(kind, Some(key), account, false).map_err(Err)
@@ -410,7 +410,7 @@ impl Runner {
     pub fn prune(&self, now: i64) -> anyhow::Result<usize> {
         self.list().retain(|k| k.ended.is_none_or(|e| now - e < KEPT_SECS));
         match self.journal() {
-            Some(j) => j.prune_jobs(now - KEPT_SECS - 365 * 86_400),
+            Some(j) => j.prune_jobs(now - KEPT_SECS),
             None => Ok(0),
         }
     }
