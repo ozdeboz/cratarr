@@ -102,3 +102,33 @@ kept being refused and the record went back to Found. Only 7 failed for real fau
   asked, and the arrival's intake card in Incoming shows them amber, in the gate's words.
 - **Single-track intake and the bulk intake keep refusing them** (0080): they add into an album in Music with no review,
   the bulk intake by itself.
+
+## Amendment (2026-11-19): automatic when certain
+
+Decided by the owner for 0.17. On 2026-11-19 production's queue (0.16.3) held 18 records found
+and waiting for a tick.
+
+- **A certain record starts by itself.** Cratarr picks its folder as an empty tick would, when all of these hold at
+  that moment:
+  - the folder is the record's best one, lossless first, then bitrate: an MP3 with a free slot never goes before a
+    queued FLAC;
+  - it holds every track of the list the record is judged by, each paired with one file by title and length (within
+    2 s), and no other audio file;
+  - its user had a free slot, by a search within the hour, and has not failed this record;
+  - the record is not had, and its request is still open;
+  - the server is above its disk floor, and the asker within their room.
+- **Only that folder.** Where its user fails, the next folder goes by itself only if it is certain too; else the record
+  goes back to Found, for a tick.
+- **The rest waits for an administrator's tick, as before:** a fuller folder, a folder found by titles alone (no
+  lengths to check), a best folder that is queued, no folder certain. An administrator may tick any found record, a
+  certain one too, and the tick goes as before.
+- **An old answer is searched again first:** a folder found over an hour ago, or one 0.16 found, never starts by itself
+  until a new search finds it.
+- **Lidarr still goes first** (2026-11-06): nothing starts by itself before Lidarr's five minutes, even after Search now.
+- **Below the disk's floor nothing starts by itself,** an administrator's record included; over their room, a user's
+  record waits. Each says so ("Waits for space", "Waits for room"), and starts once there is space or room.
+- **What the tick guarded still holds** (March 2026's unattended batches): every file gated, every arrival into the
+  Incoming library whose fetcher is "soulseek" for the intake card, nothing into Music, nothing kept without a person's
+  Keep. Soulseek switched off starts nothing, and nothing starts by itself while Cratarr cannot read its own requests
+  and records.
+- This replaces "Fetched only with a tick" above: nothing uncertain is fetched without a tick.

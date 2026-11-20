@@ -79,18 +79,18 @@ Keep a copy of the data folder from before the upgrade: going back to 0.16.3 mea
 
 ## Soulseek
 
-<!-- Round 1.3 (SCENARIOS-SK17): check each line against what was built and reviewed before the release. -->
 - **Several downloads at once, never two from one user.** slskd is asked one thing at a time, so its "only one
   concurrent operation" is tried again shortly, never kept on the item and never held against a user. Downloaded
   folders are checked one at a time, in the order they ended, and free space counts every download under way.
 - **Automatic when certain.** A record whose best folder is certain by the usual checks starts by itself: only that
   folder, lossless first, from a search within the hour. The others wait for an administrator's tick, as before. Lidarr
-  still goes first.
+  still goes first. Below the disk's floor nothing starts by itself, an administrator's record included, and a user's
+  record waits while they are over their room. Each says so, and starts once there is space or room.
 - **Out of the list** also stops a transfer under way and removes its partial files; the request stays.
 - **Clipping, a pop at the very end and clicks are notes, not rejections,** for Soulseek's records: they show on the
   arrival's card. Real faults still set a folder aside.
-- **Judged by the record's tracklist from any source:** MusicBrainz, Discogs or Bandcamp. A record with no tracklist
-  anywhere is Stuck, and says why.
+- **Judged by the record's tracklist** from MusicBrainz, Discogs or Bandcamp: no MusicBrainz id is needed. A record with
+  no tracklist anywhere is Stuck, and says why. While a source can't be reached, the record waits.
 - **Disc folders (CD1, CD2) are one album.** A file named as another version (Live, Remix, Instrumental) is not the
   track. A fuller folder is offered for an administrator's tick when no exact one is found.
 - **Placed whole,** through a hidden folder, with the cover beside it. A placement that fails keeps the checked files and
