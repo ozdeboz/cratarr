@@ -574,7 +574,7 @@ impl Index {
                 (recordings > 0).then(|| TopWork { mbid: w.clone(), title: title.clone(), catalogue: catalogue_of(title), composers: composers.clone(), recordings, oldest })
             })
             .collect();
-        out.sort_by(|a, b| b.recordings.cmp(&a.recordings).then_with(|| super::playlists::natural(&a.title, &b.title)).then_with(|| a.mbid.cmp(&b.mbid)));
+        out.sort_by(|a, b| b.recordings.cmp(&a.recordings).then_with(|| super::playlists_base::natural(&a.title, &b.title)).then_with(|| a.mbid.cmp(&b.mbid)));
         out
     }
 
@@ -589,7 +589,7 @@ impl Index {
             .iter()
             .min_by(|a, b| {
                 let (ya, yb) = (year(a.0.as_str(), a.1.as_slice()), year(b.0.as_str(), b.1.as_slice()));
-                (ya.is_none(), ya).cmp(&(yb.is_none(), yb)).then_with(|| super::playlists::natural(&name(a.1.as_slice()), &name(b.1.as_slice())))
+                (ya.is_none(), ya).cmp(&(yb.is_none(), yb)).then_with(|| super::playlists_base::natural(&name(a.1.as_slice()), &name(b.1.as_slice())))
             })
             .map(|a| a.0.clone());
         (albums.len(), oldest)
@@ -632,7 +632,7 @@ impl Index {
                 })
             })
             .collect();
-        recordings.sort_by(|a, b| (a.year.is_none(), a.year).cmp(&(b.year.is_none(), b.year)).then_with(|| super::playlists::natural(&a.album, &b.album)));
+        recordings.sort_by(|a, b| (a.year.is_none(), a.year).cmp(&(b.year.is_none(), b.year)).then_with(|| super::playlists_base::natural(&a.album, &b.album)));
         Some(WorkView { title: title.clone(), composers: composers.clone(), parent, parts, recordings })
     }
 
@@ -995,7 +995,7 @@ pub fn build(i: &Inputs) -> Index {
         list.sort_by(|a, b| {
             let n = |w: &String| index.parent.get(w).and_then(|p| p.1);
             let t = |w: &String| index.works.get(w).map_or("", |x| x.0.as_str());
-            (n(a).is_none(), n(a)).cmp(&(n(b).is_none(), n(b))).then_with(|| super::playlists::natural(t(a), t(b))).then_with(|| a.cmp(b))
+            (n(a).is_none(), n(a)).cmp(&(n(b).is_none(), n(b))).then_with(|| super::playlists_base::natural(t(a), t(b))).then_with(|| a.cmp(b))
         });
     }
     index.parts = parts;
@@ -1018,7 +1018,7 @@ pub fn build(i: &Inputs) -> Index {
     }
     for list in by_composer.values_mut() {
         let t = |w: &String| index.works.get(w).map_or("", |x| x.0.as_str());
-        list.sort_by(|a, b| recorded.get(b).cmp(&recorded.get(a)).then_with(|| super::playlists::natural(t(a), t(b))).then_with(|| a.cmp(b)));
+        list.sort_by(|a, b| recorded.get(b).cmp(&recorded.get(a)).then_with(|| super::playlists_base::natural(t(a), t(b))).then_with(|| a.cmp(b)));
     }
     index.composer_works = by_composer;
     // Search's works (0.12, decision 0086: works reachable).

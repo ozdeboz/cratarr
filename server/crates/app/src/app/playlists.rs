@@ -21,6 +21,8 @@ use crate::sync_state::Kind;
 
 mod ops;
 pub use ops::{OpsAnswer, PlaylistOps};
+#[cfg(test)]
+use super::playlists_base::natural;
 
 /// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
 pub const PLAY_MAX: usize = 100;
@@ -588,12 +590,6 @@ impl CrateOrder {
     pub fn opened() -> Self {
         CrateOrder::BestMatch
     }
-}
-
-/// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
-/// aside (`name_key`), each run of digits as its number. Classical's works are ordered by it too (0.12).
-pub(crate) fn natural(a: &str, b: &str) -> std::cmp::Ordering {
-    natural_keys(&name_key(a), &name_key(b))
 }
 
 /// Rows in an order of the page's list (decision 0060), as lib/PlaylistView orders a playlist's: names by `natural`;

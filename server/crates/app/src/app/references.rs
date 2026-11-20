@@ -119,7 +119,7 @@ pub(crate) fn url_of(r: &Ref) -> Option<String> {
 }
 
 /// MusicBrainz's list of a release, as `track_fetch` reads it: its own titles, lengths and recordings.
-pub fn list_of_release(v: &super::track_fetch::ReleaseView) -> Vec<RefTrack> {
+pub fn list_of_release(v: &super::track_fetch_records::ReleaseView) -> Vec<RefTrack> {
     v.tracks
         .iter()
         .map(|t| RefTrack { disc: t.disc, position: t.position, title: t.title.clone(), length_ms: t.length_ms, recording: Some(t.recording.clone()).filter(|r| !r.is_empty()) })
@@ -128,7 +128,7 @@ pub fn list_of_release(v: &super::track_fetch::ReleaseView) -> Vec<RefTrack> {
 
 /// Discogs' list of a release (its JSON), each of its media in turn, as Renumber reads them; no recordings.
 pub fn list_of_discogs(v: &serde_json::Value) -> Vec<RefTrack> {
-    let release = super::renumber::discogs_release(v);
+    let release = super::renumber_base::discogs_release(v);
     release
         .media
         .iter()
@@ -146,7 +146,7 @@ pub fn list_of_bandcamp(a: &crate::bandcamp::Album) -> Vec<RefTrack> {
 /// has no one list.
 async fn read_list(r: &Ref) -> Result<Option<Vec<RefTrack>>> {
     Ok(match (r.source.as_str(), r.kind.as_str()) {
-        ("musicbrainz", "release") => Some(list_of_release(&super::track_fetch::release_by_id(&r.value).await?)),
+        ("musicbrainz", "release") => Some(list_of_release(&super::track_fetch_records::release_by_id(&r.value).await?)),
         ("discogs", "release") => super::discogs::release_raw(r.value.parse()?).await?.map(|v| list_of_discogs(&v)),
         _ => None,
     })
@@ -703,7 +703,7 @@ impl std::error::Error for SwitchedOff {}
 pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
     let not_found = |e: &anyhow::Error| e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND);
     let release = |id: String| async move {
-        match super::track_fetch::release_by_id(&id).await {
+        match super::track_fetch_records::release_by_id(&id).await {
             Ok(v) => Ok(Some((list_of_release(&v), musicbrainz_more(&v.links)))),
             Err(e) if not_found(&e) => Ok(None),
             Err(e) => Err(e),
@@ -859,7 +859,7 @@ pub async fn lists_pass() -> Result<usize> {
     let cat = served.catalogue().clone();
     let files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> = Arc::new(move |record| files_of(&served, &ids::record(record)));
     let read = |release: String| async move {
-        let read = match super::track_fetch::release_by_id(&release).await {
+        let read = match super::track_fetch_records::release_by_id(&release).await {
             Ok(v) => Ok(Some(list_of_release(&v))),
             // MusicBrainz will not answer for it (no such release, an id it refuses): no list, let go of at once (R7).
             Err(e) if no_such(&e) => Ok(None),
@@ -882,13 +882,13 @@ pub fn work_out(served: &crate::serve::Serve, album: &str) -> Result<Option<Stri
 /// certain match takes its release from another record that only held it by its files or a guess: MusicBrainz matched this
 /// one's tracks to it (one release's files on two records, G1). Its list is kept only where its release is this record's.
 /// Blocking.
-pub fn keep_match(served: &crate::serve::Serve, album: &str, m: &super::matching::Match, list: &[RefTrack], named: bool) -> Result<()> {
+pub fn keep_match(served: &crate::serve::Serve, album: &str, m: &super::matching_base::Match, list: &[RefTrack], named: bool) -> Result<()> {
     let Some(record) = ids::record_number(album) else { return Ok(()) };
     keep_match_in(served.catalogue(), record, album, m, list, named, &files_of(served, album)?)
 }
 
 /// `keep_match`, `files` the record's.
-fn keep_match_in(cat: &Catalogue, record: i64, album: &str, m: &super::matching::Match, list: &[RefTrack], named: bool, files: &[Listed]) -> Result<()> {
+fn keep_match_in(cat: &Catalogue, record: i64, album: &str, m: &super::matching_base::Match, list: &[RefTrack], named: bool, files: &[Listed]) -> Result<()> {
     let how = if named { "files" } else { "search" };
     let release = Ref::new("musicbrainz", "release", &m.release);
     let held = if m.certain { cat.take_reference(album, &release, how)? } else { cat.set_reference(album, &release, how)? };
@@ -964,10 +964,10 @@ struct Kept {
     lists: Vec<(String, Vec<RefTrack>)>,
     row: RecordRow,
     /// Matching's find (`album_matches`): the year it read and why it matched.
-    matched: Option<super::matching::Match>,
+    matched: Option<super::matching_base::Match>,
     /// What Discogs said (`discogs_facts`): its year.
     discogs: Option<super::discogs::AlbumFacts>,
-    heard: Option<super::intake_card::Heard>,
+    heard: Option<super::intake_card_base::Heard>,
     types: HashMap<String, (Option<String>, Vec<String>)>,
     files: Vec<Listed>,
 }

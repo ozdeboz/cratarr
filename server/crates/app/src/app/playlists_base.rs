@@ -1,5 +1,7 @@
 //! `playlists`' telling of the sources, in base: the connected sources told of a playlist file changed, as base's follow
-//! and sync tell them.
+//! and sync tell them; and a name as the page compares names, as records' classical orders its works.
+
+use cratarr_rules::names::{name_key, natural_keys};
 
 use crate::source::{PlaylistChange, PlaylistEvent};
 
@@ -20,4 +22,10 @@ pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>
             }
         });
     }
+}
+
+/// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
+/// aside (`name_key`), each run of digits as its number. Classical's works are ordered by it too (0.12).
+pub(crate) fn natural(a: &str, b: &str) -> std::cmp::Ordering {
+    natural_keys(&name_key(a), &name_key(b))
 }

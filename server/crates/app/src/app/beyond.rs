@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use super::discogs::FoundMaster;
 use super::discover::{FoundAlbum, FoundArtist};
-use super::requests::{Mark, Marks};
+use super::requests_base::{Mark, Marks};
 use crate::catalogue::Catalogue;
 use crate::catalogue::records::{ByReference, Ref};
 use crate::serve::ids;
@@ -184,7 +184,7 @@ fn request_of(marks: Option<&Marks>, record: Option<i64>, release_group: Option<
     let marks = marks?;
     match record {
         Some(r) => marks.of_record(r),
-        None => super::requests::mark_of(marks, release_group, artist, title),
+        None => super::requests_base::mark_of(marks, release_group, artist, title),
     }
 }
 

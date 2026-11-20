@@ -79,8 +79,8 @@ pub async fn fold_albums(lib: &Library, albums: &mut Vec<Album>, off: &[i64]) {
 
 /// Search's Records (F12.1): Cratarr's records among `items` (`album:cratarr/al-<n>`) that are editions of one album, one item,
 /// marked with how many. How many items went.
-pub async fn fold_items(lib: &Library, items: &mut Vec<super::search::Item>, off: &[i64]) -> usize {
-    let record_of = |i: &super::search::Item| i.subject.strip_prefix("album:cratarr/").and_then(ids::record_number);
+pub async fn fold_items(lib: &Library, items: &mut Vec<super::search_base::Item>, off: &[i64]) -> usize {
+    let record_of = |i: &super::search_base::Item| i.subject.strip_prefix("album:cratarr/").and_then(ids::record_number);
     let groups = groups_of(lib, items.iter().filter_map(record_of).collect(), off).await;
     fold(items, record_of, &groups, |i, n| i.editions = Some(n))
 }
