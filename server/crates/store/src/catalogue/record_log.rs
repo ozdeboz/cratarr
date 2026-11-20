@@ -57,7 +57,10 @@ fn triggers() -> String {
     let record = |at: &str, column: &str| owed(&format!("SELECT {at}.{column} AS item"));
     let both = |column: &str| owed(&format!("SELECT OLD.{column} AS item UNION SELECT NEW.{column}"));
     let of_track = |at: &str| owed(&format!("SELECT record AS item FROM tracks WHERE id = {at}.track"));
-    let of_subject = |at: &str| owed(&format!("SELECT CAST(substr({at}.subject, 4) AS INTEGER) AS item WHERE {at}.subject LIKE 'al-%'"));
+    // A record's references (`al-<n>`); an artist's or a label's are no record's.
+    let of_subject = |at: &str| {
+        owed(&format!("SELECT CAST(substr({at}.subject, 4) AS INTEGER) AS item WHERE {at}.subject GLOB 'al-[0-9]*' AND NOT substr({at}.subject, 4) GLOB '*[^0-9]*'"))
+    };
     // A file's tags say its track's title and place: whose record, by its file.
     let of_file = |at: &str| owed(&format!("SELECT t.record AS item FROM files f JOIN tracks t ON t.id = f.track WHERE f.folder = {at}.folder AND f.rel = {at}.rel"));
     let mut out = vec![

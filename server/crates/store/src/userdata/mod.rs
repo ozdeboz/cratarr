@@ -857,7 +857,6 @@ impl UserData {
         // Offline writes (0.12, decision 0087): what is counted and made once, kept 30 days.
         conn.execute_batch(offline::SCHEMA).context("keeping the plays counted and the changes made")?;
         offline::migrate(&conn).context("bringing the change log up to date")?;
-        offline::record_triggers(&conn).context("logging the records' views' changes")?;
         // The playlists (0.16, decision 0101): in the database, their `.m3u` files brought in once by the store.
         conn.execute_batch(playlists::SCHEMA).context("creating the playlists' tables")?;
         // The person's preferences on the account (0.16, decision 0101 point 14).
@@ -878,6 +877,8 @@ impl UserData {
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         week_before_the_log(&conn).context("writing the week before the log from the last plays")?;
+        // Last: the triggers read the tables as every step above leaves them (an older review table gains its folder above).
+        offline::record_triggers(&conn).context("logging the records' views' changes")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default() })
     }
 

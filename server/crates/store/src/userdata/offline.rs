@@ -83,12 +83,18 @@ fn record_logged(at: &str) -> String {
     )
 }
 
+/// Whether the row `at`'s album is a record's id, `al-<n>`: never an album's id from before records (0.15's `al-<hash>`), which
+/// the first start moves off (`albums`).
+fn a_record(at: &str) -> String {
+    format!("({at}.album GLOB 'al-[0-9]*' AND NOT substr({at}.album, 4) GLOB '*[^0-9]*')")
+}
+
 /// The triggers that log a record's view's changes written here (LV1): no writer has to remember. Written again at each opening.
 pub(super) fn record_triggers(conn: &Connection) -> Result<()> {
     let mut sql = String::from("BEGIN;");
     for (table, columns) in RECORD_TABLES {
         let differ = columns.iter().map(|c| format!("OLD.{c} IS NOT NEW.{c}")).collect::<Vec<_>>().join(" OR ");
-        for (on, at, when) in [("INSERT", "NEW", "NEW.album LIKE 'al-%'".to_string()), ("DELETE", "OLD", "OLD.album LIKE 'al-%'".to_string()), ("UPDATE", "NEW", format!("NEW.album LIKE 'al-%' AND ({differ})"))] {
+        for (on, at, when) in [("INSERT", "NEW", a_record("NEW")), ("DELETE", "OLD", a_record("OLD")), ("UPDATE", "NEW", format!("{} AND ({differ})", a_record("NEW")))] {
             let name = format!("record_logged_{table}_{}", on.to_lowercase());
             sql.push_str(&format!("DROP TRIGGER IF EXISTS {name}; CREATE TRIGGER {name} AFTER {on} ON {table} WHEN {when} BEGIN {} END;", record_logged(at)));
         }
