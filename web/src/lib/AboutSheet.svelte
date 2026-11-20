@@ -13,6 +13,7 @@
   import { appInfo, inApp } from './app.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { since } from './settings/editor.svelte';
+  import { loadWhatsNew, openWhatsNew, whatsNew, whatsNewShows } from './whatsNew.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -20,6 +21,21 @@
   getAbout().then(
     (a) => (about = a),
     () => {},
+  );
+  // What's New (UC03): beside the version, lit while something is not seen; a tap opens it (App's sheet) and marks it seen.
+  void loadWhatsNew();
+  const notes = $derived(
+    whatsNew.value?.notes.length
+      ? {
+          icon: 'sparkles' as const,
+          label: "What's new",
+          on: whatsNewShows(),
+          onclick: () => {
+            onclose();
+            openWhatsNew();
+          },
+        }
+      : null,
   );
 
   const THANKS: [string, string][] = [
@@ -62,7 +78,7 @@
   {#each list as [name, v], i (name)}<a href={href(v)} target="_blank" rel="noopener noreferrer">{name}</a>{i < list.length - 1 ? ', ' : ''}{/each}
 {/snippet}
 
-<MenuSheet label="About" title="Cratarr" icon="info" chips={about ? [about.version] : []} {onclose}>
+<MenuSheet label="About" title="Cratarr" icon="info" chips={about ? [about.version] : []} end={notes} {onclose}>
   <dl>
     {#if about}
       <dt>Running since</dt>

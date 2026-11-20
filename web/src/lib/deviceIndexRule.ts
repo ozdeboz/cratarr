@@ -1,6 +1,6 @@
 // Where a page's reads come from, pure, the time handed in (docs/architecture.md's Reads door; the owner's North Star, 2026-11-07:
 // no page ever asks whether it is offline). One decision in one place, and everything that could make a device read itself is
-// an input to it: Cratarr out of reach today, no mobile data in 0.17, a switch later.
+// an input to it: Cratarr out of reach, the device with no network, and Sync's Mobile data set to None while on it (CU13).
 //
 // Out of reach settles first (audit/FINAMP-OFFLINE.md's A1): a request that failed is looked at again seconds later, and only two
 // failed looks move the reads, or a blip would move every page. A device saying it has no network needs no second look. The player
@@ -12,13 +12,18 @@ export type ReadInputs = {
   unreachable: boolean;
   /** The device says it has no network at all: the browser's word, or the app's (Reach.kt is an input here, and decides nothing). */
   noNetwork: boolean;
+  /** The app says it is on mobile data with Sync's Mobile data set to None (CU12, Q4 (a)): Cratarr out of reach there. Only
+   *  the app can tell; a browser never says it. */
+  mobileOff?: boolean;
 };
 
 /** Where reads come from now, and why. Whether the device has an answer is the read's own to say (lib/api's `read`). */
-export type ReadsFrom = { from: 'server' | 'device'; why: 'answers' | 'unreachable' | 'no-network' };
+export type ReadsFrom = { from: 'server' | 'device'; why: 'answers' | 'unreachable' | 'no-network' | 'mobile' };
 
 export function readsFrom(i: ReadInputs): ReadsFrom {
   if (i.noNetwork) return { from: 'device', why: 'no-network' };
+  // No settling either: the person said so (CU13).
+  if (i.mobileOff) return { from: 'device', why: 'mobile' };
   return i.unreachable ? { from: 'device', why: 'unreachable' } : { from: 'server', why: 'answers' };
 }
 

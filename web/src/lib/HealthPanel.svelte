@@ -19,7 +19,7 @@
   import { everywhere } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import MoreInfo from './MoreInfo.svelte';
-  import { albumCoverUrl, freshTrackIds, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
+  import { albumCoverUrl, freshTrackIds, getRecordHealth, missingGone, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
   import { sayWantFailed } from './albums.svelte';
   import { wantOf } from './wantPath';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
@@ -36,7 +36,7 @@
   import { health, loadHealth, problems, recordIn, recordProblem } from './healthReport.svelte';
   import { damagedStops, missingStops, throughKind, throughTotal, type Stop } from './healthThrough';
   import HealthItemTools from './HealthItemTools.svelte';
-  import { LEVEL, fullOf } from './healthTools';
+  import { LEVEL, allGone, fullOf, goneTracks } from './healthTools';
   import { ENTRY_NAME, goToName } from './menuTable';
   import { FIXABLE } from './fixes.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
@@ -338,6 +338,16 @@
   /** The finding the problem is (a files kind's page key `files-<kind>` is its finding `files:<kind>`). */
   const findingKey = $derived(problem.startsWith('files-') ? `files:${problem.slice('files-'.length)}` : problem);
   const fixable = $derived(me.admin && FIXABLE.has(findingKey));
+  /** Missing music's tracks, all let go at once (LS05): asked once more; no word after, the finding leaving says it. */
+  let allGoneAsk = $state(false);
+  async function letAllGo(tracks: string[]) {
+    try {
+      await missingGone(tracks);
+    } catch (e) {
+      toast.fail(e, "They weren't let go");
+    }
+    loadHealth();
+  }
   /** The track ids lost: the fresh start asked, and its report (the tables still naming old tracks, by their words). */
   let freshAsk = $state(false);
   let freshDone = $state<{ from: number; references: [string, number][] } | null>(null);
@@ -561,6 +571,10 @@
       {#if f?.open}
         <Group><Item name={WHERE[f.open.page] ?? 'Open'} onclick={() => f && openFinding(f)} /></Group>
       {/if}
+      <!-- Missing music's tracks all let go at once (LS05), an administrator's word, asked by sheet; no word after. -->
+      {#if f && allGone(f.key, p.items, me.admin)}
+        <Group><Item name="All gone" kind="danger" onclick={() => (allGoneAsk = true)} /></Group>
+      {/if}
       <!-- The track ids lost (decision 0101): an administrator's fresh start, asked by sheet, its report after. -->
       {#if f?.key === 'library:ids-lost' && me.admin}
         <Group><Item name="Start the track ids afresh" onclick={() => (freshAsk = true)} /></Group>
@@ -583,6 +597,16 @@
   </div>
 </div>
 
+{#if allGoneAsk && p}
+  {@const tracks = goneTracks(p.items)}
+  <ConfirmSheet
+    title={`Are all ${tracks.length.toLocaleString()} gone?`}
+    text="They leave the library. Their plays stay, should their files come back."
+    label="All gone"
+    onconfirm={() => void letAllGo(tracks)}
+    onclose={() => (allGoneAsk = false)}
+  />
+{/if}
 {#if freshAsk}
   <ConfirmSheet
     title="Start the track ids afresh?"

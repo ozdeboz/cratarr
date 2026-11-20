@@ -15,7 +15,15 @@ import { homePicture, takeHomePicture } from './localCovers.svelte';
 import { fromSaved, prefs, type Prefs } from './prefs.svelte';
 
 /** Each preference on the account, by its key there: the prefs' field that holds it on this device. */
-const HELD = { hidden_libraries: 'hiddenLibraries', pinned: 'pinned', filters: 'filters', crate_drafts: 'crateDrafts', radio_last: 'radioLast' } as const satisfies Record<string, keyof Prefs>;
+const HELD = {
+  hidden_libraries: 'hiddenLibraries',
+  pinned: 'pinned',
+  filters: 'filters',
+  crate_drafts: 'crateDrafts',
+  radio_last: 'radioLast',
+  // Basic or Advanced in Settings (CU22): one per account, every device the same.
+  settings_advanced: 'settingsAdvanced',
+} as const satisfies Record<string, keyof Prefs>;
 /** Home's picture: on the account like the others, but no field of the prefs (lib/localCovers keeps it). */
 const PICTURE = 'home_picture';
 type Key = keyof typeof HELD | typeof PICTURE;

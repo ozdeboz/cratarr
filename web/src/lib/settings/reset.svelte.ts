@@ -54,8 +54,8 @@ export async function resetOf(items: readonly ResetItem[], section?: string) {
   for (const i of items) if ((section === undefined || i.section === section) && !same(i.now(), i.def)) await i.set(structuredClone(i.def));
 }
 
-/** What part `part`'s Reset would change. */
-export const resetRows = (part: string) => rowsOf(itemsOf(part));
+/** What part `part`'s Reset would change; `shows`, only the items whose rows show (Basic, CU23: Reset lists only what shows). */
+export const resetRows = (part: string, shows?: (name: string) => boolean) => rowsOf(itemsOf(part).filter((i) => !shows || shows(i.name)));
 
-/** Puts back what of part `part` is not at its default. */
-export const runReset = (part: string) => resetOf(itemsOf(part));
+/** Puts back what of part `part` is not at its default (of what shows, given `shows`). */
+export const runReset = (part: string, shows?: (name: string) => boolean) => resetOf(itemsOf(part).filter((i) => !shows || shows(i.name)));

@@ -25,7 +25,7 @@ if (inApp)
     network.online = typeof m.online === 'boolean' ? m.online : null;
     network.validated = typeof m.validated === 'boolean' ? m.validated : null;
     network.kind = typeof m.kind === 'string' ? m.kind : null;
-    networkSaid(network.online !== false);
+    networkSaid(network.online !== false, m.mobileOff === true);
   });
 
 /** Each track on the device (`source/id`), and how many of each album's (`source/album_id`). */

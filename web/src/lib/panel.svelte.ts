@@ -3,14 +3,17 @@
 // an album (`album:<server>/<id>`), or a label (`label:la-<n>`, lib/labelPage).
 // It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (a reload brings
 // it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
-// The panel keeps its own history (its trail, below; the owner, 2026-11-02): beside the page, changing what it shows
-// leaves the page's history as it is, and the page's Back leaves the panel as it is; full screen, over the page, one
-// step of the page's history stands for the trail, so Back (the device's, the browser's) steps back through it.
+// The panel keeps its own history (its trail, below; the owner, 2026-11-02). One step of the page's history stands for the
+// trail, so Back (the device's, the browser's, Android's gesture in the app) steps back through it, closes the panel, and
+// only then moves the page: over the page and beside it alike (BACK, the owner 2026-11-20, in place of 2026-11-02's "the
+// page's Back leaves the beside panel as it is"). Beside the list a page keeps it by (Settings, Health on a roomy window), its
+// first level is the page's own part: Back walks what was opened over it, and then moves the page.
 
 import { leaveOnArrival } from './navStep.svelte';
 import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
 import { prefs } from './prefs.svelte';
 import { LABEL } from './labelPage';
+import type { Moved } from './panelMotion';
 
 export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
@@ -200,17 +203,29 @@ export function placeHere() {
 const steps = $state({ n: 0, how: 'view' as Step['how'] });
 /** How many levels the panel's history has: Back goes to the one before where there is more than one. */
 export const panelDepth = () => steps.n;
-/** Whether the panel shows beside the page (set by App): its history then is its own, out of the page's. */
-const layout = $state({ beside: false });
+/** Whether the panel shows beside the page, and whether it is a page's own beside its list (`split`), both set by App. */
+const layout = $state({ beside: false, split: false });
+/** Levels of the trail Back leaves alone: a split page's own part, which its page fills again (BACK). */
+const floor = () => (layout.beside && layout.split ? 1 : 0);
 /** A panel shows beside the page (not over it): the page's search is the one in sight. */
 export const panelBeside = () => layout.beside && panel.viewed !== null;
 /** A panel covers the page (full screen, over it): the page says nothing about itself meanwhile (decision 0095: a
  *  page's "nothing" over a panel pointed at a list out of sight). */
 export const pageCovered = () => !layout.beside && panel.viewed !== null;
-export function setBeside(beside: boolean) {
-  if (layout.beside === beside) return;
+export function setBeside(beside: boolean, split = false) {
+  if (layout.beside === beside && layout.split === split) return;
   layout.beside = beside;
+  layout.split = split;
   guard();
+}
+
+/** How the panel itself last came or went (BACK, lib/panelMotion): opened by a view's open, closed by Back or its ✕, and when;
+ *  none for anything else (a page gone to, a page's own part, a breadcrumb's page). Read as its motion starts. */
+const moved: Moved = { how: null, at: 0 };
+export const panelMoved = (): Moved => moved;
+function didMove(how: Moved['how']) {
+  moved.how = how;
+  moved.at = Date.now();
 }
 
 /** What follows the address with the panel, in the same step (App's page): a page and its panel change together, never
@@ -238,13 +253,13 @@ function show() {
   guard();
 }
 
-// Full screen, one step of the page's history (`panelGuard`, the trail with it) stands for the trail while it has a
-// level: Back takes it, and the panel goes back one level (another guard then for the rest); Back to it from a page
-// gone to over the panel (its Home) brings the trail back. Beside the page, none; one left from full
-// screen is taken back, quietly.
+// One step of the page's history (`panelGuard`, the trail with it) stands for the trail while it has a level Back may take: Back
+// takes it, and the panel goes back one level (another guard then for the rest), closing at the last; Back to it from a page
+// gone to over the panel (its Home) brings the trail back. Beside the page too (BACK): a tablet's Back walks its side panel
+// first, as a phone's does. A split page's own part takes none (`floor`); one left is taken back, quietly.
 let dropping: (() => void)[] | null = null;
 function guard() {
-  const want = !layout.beside && trail.length > 0;
+  const want = trail.length > floor();
   const has = !!history.state?.panelGuard;
   if (want && !has) {
     at = key();
@@ -310,16 +325,17 @@ function onAddress() {
     for (const f of then) f();
     return;
   }
-  if (!history.state.panelGuard && !layout.beside && trail.length) {
-    // Back over the guard: the panel's own Back, to the step before at its place (F25.5 (b)).
+  if (!history.state.panelGuard && trail.length > floor()) {
+    // Back over the guard: the panel's own Back, to the step before at its place (F25.5 (b)), or the panel closed (BACK).
     leave();
     trail = trail.slice(0, -1);
     reached = 'back';
+    if (!trail.length) didMove('close');
     show();
     return;
   }
   // Back to the guard from a page gone to over the panel: the trail comes back, its places with it (F25.5 (c)).
-  if (history.state.panelGuard && !layout.beside && !trail.length && Array.isArray(history.state.trail)) (trail = history.state.trail), (reached = 'back');
+  if (history.state.panelGuard && !trail.length && Array.isArray(history.state.trail)) (trail = history.state.trail), (reached = 'back');
   for (const f of alongside) f();
   show();
 }
@@ -330,9 +346,10 @@ history.replaceState({ ...(history.state ?? {}), pk: at }, '', location.href);
 fromAddress();
 show();
 
-/** A level onto the trail. */
+/** A level onto the trail; the first opens the panel (its motion, BACK). */
 function step(names: string[], tab: Tab, how: Step['how'] = 'view') {
   leave();
+  if (!trail.length) didMove('open');
   trail = [...trail, { names, tab, how }];
   reached = 'forward';
   show();
@@ -447,6 +464,7 @@ export const isStep = () => steps.how === 'thing' && steps.n > 1;
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
   leave();
+  if (trail.length) didMove('close');
   trail = [];
   reached = 'forward';
   show();
@@ -461,6 +479,8 @@ export function upToPage(page: PageId) {
   closePlaylist(() => {
     if (pageHere() !== page) location.hash = hrefOf(page);
   });
+  // A page gone to: no panel's motion (BACK: page to page stays instant).
+  didMove(null);
 }
 
 /** A renamed playlist stays viewed under its new name; a deleted one leaves the selection. */

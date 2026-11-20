@@ -5,7 +5,7 @@
   // directory never gives); their devices (each plays only on its own) and their sign-ins, each to end. Acts at once.
   // Their Spotify (decision 0073; the owner, 2026-10-27: each connects here): a row opening its own page
   // (`thing`: `spotify`, lib/settings/SpotifyPart).
-  import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
+  import { changeOwnPassword, endMySession, pairCode, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
   import { downloads, inApp } from '../app.svelte';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -19,6 +19,9 @@
   import { openThing } from '../panel.svelte';
   import { loadSpotify, spotify } from '../spotify.svelte';
   import SpotifyPart from './SpotifyPart.svelte';
+  import PairPage from './PairPage.svelte';
+  import { typedCode } from '../pairing';
+  import { pairs } from '../pairs.svelte';
 
   let { thing = null }: { thing?: string | null } = $props();
   loadSpotify(true);
@@ -82,6 +85,28 @@
     }
   }
 
+  // Pair an app (QR04): the password again (OQ-B2 (a)), then its own page, the QR and the code.
+  let pairing = $state(false);
+  async function pair() {
+    busy = true;
+    error = null;
+    try {
+      pairs.code = (await pairCode(current)).code;
+      pairing = false;
+      openThing('account', 'pair');
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+      current = '';
+    }
+  }
+  // Allow a device (QR07.5): a browser's code typed, upper case as typed; one that cannot be a code is never sent. Then the Allow
+  // sheet, as the QR's link opens it.
+  let allowing = $state(false);
+  let typed = $state('');
+  const typedNow = $derived(typedCode(typed));
+
   async function remove(d: OwnDevice) {
     try {
       await removeMyDevice(d.id);
@@ -94,6 +119,8 @@
 
 {#if thing === 'spotify'}
   <SpotifyPart />
+{:else if thing === 'pair'}
+  <PairPage />
 {:else}
 <Group>
   {#if me.name}<Item name={me.name} line={me.admin ? 'Administrator' : 'User'} />{:else}<Item name={me.admin ? 'Administrator' : 'User'} />{/if}
@@ -114,13 +141,18 @@
   <Item name="Spotify" line={spotifyLine} onclick={() => openThing('account', 'spotify')} />
 </Group>
 
-{#if me.devices?.length}
+{#if me.devices?.length || me.name}
   <Group title="Devices">
-    {#each me.devices as d (d.id)}
+    {#each me.devices ?? [] as d (d.id)}
       <Item lead={d.online ? 'on' : 'off'} name={d.name} line={`${d.kind} · ${d.online ? 'online' : d.last_seen ? when(d.last_seen) : 'offline'}`}>
         {#if removable(d)}<button onclick={() => remove(d)}>Remove</button>{/if}
       </Item>
     {/each}
+    {#if me.name}
+      <!-- QR07.5: a browser that asks, allowed by its code; QR04: the app paired, the last row. -->
+      <Item name="Allow a device" kind="add" onclick={() => ((typed = ''), (allowing = true))} />
+      <Item name="Pair an app" kind="add" onclick={() => ((error = null), (current = ''), (pairing = true))} />
+    {/if}
   </Group>
 {/if}
 
@@ -149,6 +181,18 @@
     <!-- svelte-ignore a11y_autofocus -->
     <label>Current password<input type="password" bind:value={current} autocomplete="current-password" autofocus /></label>
     <label>New password<input type="password" bind:value={next} autocomplete="new-password" /></label>
+  </FormSheet>
+{/if}
+{#if pairing}
+  <FormSheet title="Pair an app" submitLabel="Pair" canSubmit={!!current} {busy} {error} onsubmit={pair} onclose={() => ((pairing = false), (current = ''), (error = null))}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Your password<input type="password" bind:value={current} autocomplete="current-password" autofocus /></label>
+  </FormSheet>
+{/if}
+{#if allowing}
+  <FormSheet title="Allow a device" submitLabel="Next" canSubmit={!!typedNow.code} onsubmit={() => ((pairs.allow = typedNow.code), (allowing = false))} onclose={() => (allowing = false)}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Code<input value={typedNow.shown} oninput={(e) => (typed = e.currentTarget.value)} autocomplete="off" autocapitalize="characters" spellcheck="false" autofocus /></label>
   </FormSheet>
 {/if}
 {#if setting}
