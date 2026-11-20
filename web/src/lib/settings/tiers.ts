@@ -23,7 +23,7 @@ const A: Tier = 'advanced';
 
 /** The other tiered parts' rows, by the name each shows (a Reset's item by the name it resets, where no row has it). */
 export const ROWS: Partial<Record<SettingsSection, Readonly<Record<string, Tier>>>> = {
-  account: { Password: B, 'App password': A, 'Sign out': B, Spotify: B },
+  account: { Password: B, 'App password': A, 'Sign out': B, Spotify: B, 'Allow a device': B, 'Pair an app': B },
   taste: { Analysed: A, 'Your profile': A, Everywhere: B, Artists: B, Discover: B },
   tracking: { 'Keep play history': B, 'Delete play history': B, 'Scrobble from': A, 'User token': A, 'API key': A, 'Shared secret': A },
   device: {

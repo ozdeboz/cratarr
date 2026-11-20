@@ -1476,6 +1476,15 @@ export const getCapabilities = () => quietly<import('./generated/Capabilities').
 /** Ends one of one's own sign-ins, or takes one of one's own devices away. */
 export const endMySession = (id: string) => request<void>(`/api/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** Pairing an app (QR01, QR02; QR04): a code for this account, its password asked again (OQ-B2 (a)); what became of it (lib/pairing
+ *  PairState); its QR, the code's owner's alone. */
+export const pairCode = (password: string) => post<{ code: string }>('/api/pair', { password });
+export const pairState = () => quietly<import('./pairing').PairState>('/api/pair');
+export const PAIR_QR = '/api/pair/qr';
+/** A browser asking to be signed in (QR06; QR07): what asked, by its code; Allow, the password asked again; Refuse. */
+export const pairAsk = (code: string) => request<import('./pairing').PairAsk>(`/api/pair/allow/${encodeURIComponent(code)}`);
+export const pairAllow = (code: string, password: string) => post<unknown>('/api/pair/allow', { code, password });
+export const pairRefuse = (code: string) => post<unknown>('/api/pair/refuse', { code });
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
 /** About Cratarr: its version, since when it runs, its licence (SPDX) and where its source is. */
 export const getAbout = () => quietly<{ version: string; started: number; licence?: string; source?: string }>('/api/about');

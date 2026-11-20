@@ -40,6 +40,9 @@
   import Crates from './Crates.svelte';
   import AboutSheet, { about } from './lib/AboutSheet.svelte';
   import WhatsNewSheet from './lib/WhatsNewSheet.svelte';
+  import PairAllowSheet from './lib/PairAllowSheet.svelte';
+  import { allowCodeIn } from './lib/pairing';
+  import { pairs } from './lib/pairs.svelte';
   import { whatsNew } from './lib/whatsNew.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
@@ -832,6 +835,15 @@
   // Autoplay's) for this page's player while nothing plays (in the app, the app's player keeps its own).
   loadMe();
   loadMine().then((c) => c && !inApp && startWith(c));
+  // A browser's QR, opened (QR07.1; QR06.9: the server sends the page here, signed in first): its Allow sheet, the address made
+  // the page's own again so a reload asks nothing.
+  {
+    const asking = allowCodeIn(location.pathname, location.search);
+    if (asking) {
+      pairs.allow = asking;
+      history.replaceState(history.state, '', `/${location.hash}`);
+    }
+  }
 
   // The conversion queue, followed on every page: its count on the Incoming tab, a toast when an album is done (an
   // administrator's of every one; a user's of their own, W13).
@@ -1279,6 +1291,7 @@
 
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
   {#if whatsNew.open}<WhatsNewSheet onclose={() => (whatsNew.open = false)} />{/if}
+  {#if pairs.allow}{#key pairs.allow}<PairAllowSheet code={pairs.allow} onclose={() => (pairs.allow = null)} />{/key}{/if}
 
   {#if moreOpen}
     <!-- The page under the bar grown with the other pages dims; a tap there closes it. -->
