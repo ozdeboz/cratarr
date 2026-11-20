@@ -45,6 +45,9 @@ impl Default for Encoding {
 impl Encoding {
     /// Refused (OQ-GEN-21, GEN.63): "&" among the genre separators, or in one of them.
     pub fn check(&self) -> Result<(), &'static str> {
+        if self.genre_separators.iter().any(|s| s.contains('&')) {
+            return Err(AMPERSAND);
+        }
         Ok(())
     }
 
@@ -98,8 +101,7 @@ impl FolderRules {
 
     /// The encoding of the files in catalogue folder `folder`: its library's, else the default.
     pub fn encoding(&self, folder: i64) -> &Encoding {
-        let _ = folder;
-        &self.install.encoding
+        self.folders.get(&folder).unwrap_or(&self.install.encoding)
     }
 
     /// The values of one field of a file in `folder`, split and cleaned by its library's encoding and the install's

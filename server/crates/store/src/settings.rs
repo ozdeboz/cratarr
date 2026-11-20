@@ -96,7 +96,13 @@ impl LibrarySetting {
 /// that sent none kept them), else a copy of `default` as it stands now, so a later change of the default leaves it as it
 /// was (GEN.63).
 pub fn fill_tag_rules(sources: &mut [SourceConfig], saved: &[SourceConfig], default: &crate::catalogue::Encoding) {
-    let _ = (sources, saved, default);
+    for s in sources.iter_mut() {
+        let before = saved.iter().find(|x| x.id == s.id && x.kind == s.kind);
+        for l in s.libraries.0.iter_mut().filter(|l| l.tag_rules.is_none()) {
+            let kept = before.and_then(|b| b.libraries.get(&l.id)).and_then(|b| b.tag_rules.clone());
+            l.tag_rules = Some(kept.unwrap_or_else(|| default.clone()));
+        }
+    }
 }
 
 /// What a library is (0101 point 1). The settings' list holds main and Incoming libraries; each account's own music
@@ -431,9 +437,10 @@ pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<
     };
     let json: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
     if json.get("version").is_some() {
-        let f: File = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
+        let mut f: File = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
         // 0.18's step (GEN.62): each library a copy of the install's one set, which stays the default, the aliases with it.
         // Nothing reads differently by it; read again, there is nothing left to copy.
+        fill_tag_rules(&mut f.sources, &[], &f.tag_rules.encoding);
         return Ok(Some(Saved {
             sources: f.sources,
             music_folder: f.music_folder,

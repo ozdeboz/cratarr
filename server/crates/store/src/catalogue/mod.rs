@@ -2019,20 +2019,20 @@ impl Catalogue {
                 let mut listed: Vec<String> = Vec::new();
                 // The file's genres, moods, styles and grouping (0.9.7, the library's words), each value split by the one
                 // split, by its library's encoding (GEN.5: the four fields alike, the owner's exceptions first).
-                let _ = rules;
+                let encoding = rules.encoding(place.0);
                 let (mut file_moods, mut file_styles, mut file_tags): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
                 for (n, v) in &tags {
-                    let (into, parts): (&mut Vec<String>, Vec<&str>) = match n.as_str() {
-                        "genre" => (&mut genres, vec![v.as_str()]),
+                    let (into, parts): (&mut Vec<String>, Vec<String>) = match n.as_str() {
+                        "genre" => (&mut genres, encoding.words(v)),
                         // A compilation's album artist is no artist (as the radio has it).
-                        "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, vec![v.as_str()]),
-                        "artists" if !crate::crates::various(v) => (&mut listed, vec![v.as_str()]),
-                        "mood" => (&mut file_moods, v.split([';', ',', '/']).collect()),
-                        "style" => (&mut file_styles, v.split([';', ',', '/']).collect()),
-                        "grouping" => (&mut file_tags, v.split([';', ',', '/']).collect()),
+                        "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, vec![v.clone()]),
+                        "artists" if !crate::crates::various(v) => (&mut listed, vec![v.clone()]),
+                        "mood" => (&mut file_moods, encoding.words(v)),
+                        "style" => (&mut file_styles, encoding.words(v)),
+                        "grouping" => (&mut file_tags, encoding.words(v)),
                         _ => continue,
                     };
-                    for p in parts.into_iter().map(str::trim).filter(|p| !p.is_empty()) {
+                    for p in parts.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
                         if !into.iter().any(|g| g.eq_ignore_ascii_case(p)) {
                             into.push(p.to_string());
                         }

@@ -512,8 +512,15 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     let libraries = &report["parts"]["libraries"];
     assert_eq!((libraries["tables"][0]["before"].as_u64(), libraries["tables"][2]["after"].as_u64()), (Some(1), Some(1)), "{libraries}");
     assert_eq!(libraries["unmatched"][1]["count"].as_u64(), Some(0), "{libraries}");
+    // And 0.18's step (GEN.62): the library a copy of the install's tag rules (here the defaults, as the file set none), the
+    // file 0.18's.
+    let rules = &report["parts"]["tag_rules"];
+    assert_eq!(rules["tables"][0]["after"].as_u64(), Some(1), "{rules}");
+    let copied = json!({ "artist_separators": ["/", ";"], "genre_separators": ["/", ";", ","], "artist_keep": [], "genre_keep": [] });
+    assert_eq!(rules["copied"], copied);
     let file: serde_json::Value = serde_json::from_slice(&std::fs::read(data.join("settings.json")).unwrap()).unwrap();
-    assert_eq!((file["version"].as_u64(), file["sources"][0]["libraries"].clone()), (Some(4), json!([{ "id": folder, "kind": "main" }])));
+    assert_eq!((file["version"].as_u64(), file["sources"][0]["libraries"].clone()), (Some(5), json!([{ "id": folder, "kind": "main", "tag_rules": copied }])));
+    assert_eq!(file["tag_rules"]["genre_separators"], copied["genre_separators"], "the default for new libraries and own music the same");
     s.stop();
 
     // Started again: nothing is brought in twice.

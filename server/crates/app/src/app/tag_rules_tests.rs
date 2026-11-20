@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::app::library::folder_rules_of;
 use crate::catalogue::normalise::{AMPERSAND, Alias};
-use crate::catalogue::{Catalogue, Encoding, FolderRules, InUse, Rules, ServedRow};
+use crate::catalogue::{Catalogue, Encoding, FolderRules, InUse, Rules};
 use crate::serve::Serve;
 use crate::serve::copies::Kind;
 use crate::serve::library::{FolderRows, Library as Served};
@@ -184,34 +184,32 @@ fn folder_rules_pick_each_rows_library_and_the_default_for_the_rest() {
     // A value of no file (a request's artist): the default.
     assert_eq!(rules.install().values("albumartist", &s(&["A / B; C"])), ["A", "B", "C"]);
 
-    // Serve holds them where it held the one set, and the readers built from it follow: a change of ARCHIVE's rules
-    // changes ARCHIVE's reading alone.
+    // Serve holds them where it held the one set, and its check builds the served library by them (which the device index
+    // and OpenSubsonic read): a change of ARCHIVE's rules changes ARCHIVE's reading alone, at the next check.
+    cat.pretend_read_for_tests();
+    for (n, p) in all.iter().enumerate() {
+        let track = n as i64 + 1;
+        cat.writer_for_tests().execute("INSERT INTO tracks (id, born) VALUES (?1, 5)", [track]).unwrap();
+        cat.give_track_for_tests(id(p), "A/01.flac", track);
+        let album = format!("Record {n}");
+        cat.tag_for_tests(id(p), "A/01.flac", &[("title", "One"), ("artist", "The Band"), ("album", album.as_str()), ("genre", value[0].as_str())]);
+    }
     let serve = Serve::open(None, install.clone(), &|_| None).unwrap();
+    let kinds = [Kind::Main, Kind::Incoming, Kind::Main, Kind::Own, Kind::Main];
+    serve.library.set_kinds(all.iter().zip(kinds).map(|(p, k)| (id(p), k)).collect());
     serve.attach_catalogue(cat.clone());
     serve.set_rules(rules.clone());
     assert_eq!(serve.rules(), rules);
     assert_eq!(cat.folder_rules(), rules, "the crates' facts read by them too");
-    let rows: Vec<FolderRows> = all
-        .iter()
-        .enumerate()
-        .map(|(n, p)| FolderRows {
-            folder: id(p),
-            root: path(p),
-            rows: vec![ServedRow {
-                rel: format!("{n}/01.flac"),
-                track: Some(n as i64 + 1),
-                tags: vec![("title".into(), "One".into()), ("artist".into(), "The Band".into()), ("album".into(), format!("Record {n}")), ("genre".into(), value[0].clone())],
-                ..ServedRow::default()
-            }],
-        })
-        .collect();
     let in_folder = |genre: &str, p: &Path| serve.library.songs_by_genre(genre, 10, 0, Some(id(p))).unwrap().len();
-    serve.library.refresh(&rows, &serve.rules()).unwrap();
+    assert!(serve.refresh().unwrap());
     assert_eq!((in_folder("Drum", &all[0]), in_folder("Funk / Soul", &all[1]), in_folder("Drum/Bass", &all[2]), in_folder("Drum", &all[2])), (1, 1, 1, 0));
+    assert_eq!(in_folder("Bass; Hip-Hop, Funk", &all[3]), 1, "own music by the default");
     let archive_slash = Encoding { genre_separators: s(&[";", "/"]), ..Encoding::default() };
     serve.set_rules(folder_rules_of(install, [(&music, paths[0].as_slice()), (&incoming, paths[1].as_slice()), (&archive_slash, paths[2].as_slice())], &in_use));
-    serve.library.refresh(&rows, &serve.rules()).unwrap();
+    assert!(serve.refresh().unwrap(), "other rules: built again");
     assert_eq!((in_folder("Drum", &all[0]), in_folder("Funk / Soul", &all[1]), in_folder("Drum/Bass", &all[2]), in_folder("Drum", &all[2])), (1, 1, 0, 1), "ARCHIVE's alone changed");
+    assert_eq!(in_folder("Bass; Hip-Hop, Funk", &all[3]), 1);
     std::fs::remove_dir_all(&root).ok();
 }
 
