@@ -26,7 +26,7 @@ pub struct Decision {
 
 impl Decision {
     /// Nothing to write: no change, and the record would stay as it is.
-    pub(super) fn is_nothing(&self, last: Option<&Imported>) -> bool {
+    pub fn is_nothing(&self, last: Option<&Imported>) -> bool {
         self.add_plays == 0 && self.played.is_none() && self.star.is_none() && self.rating.is_none() && last == Some(&self.now)
     }
 }
