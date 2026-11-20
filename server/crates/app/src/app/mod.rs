@@ -12,12 +12,15 @@
 //! - `settings`: the Settings page.
 
 mod albums;
+mod app_albums;
 pub mod artists;
 pub use cratarr_gate::app::audiomuse;
 pub mod beat_this;
 pub mod capabilities;
 mod app_served;
 mod app_base;
+mod app_protected;
+mod app_records;
 pub mod changes;
 pub mod analysis_pass;
 pub mod analysis_pass_base;
@@ -39,6 +42,8 @@ pub mod length_fixes;
 pub mod backup_list;
 mod incoming;
 mod incoming_served;
+pub mod incoming_host;
+mod app_incoming;
 mod insights;
 pub mod kept;
 mod kodi;
@@ -65,6 +70,7 @@ pub mod beyond;
 pub mod labels;
 pub use cratarr_gate::app::excluded_artists;
 pub mod around;
+pub mod around_records;
 pub mod words;
 pub mod harvest;
 pub mod fixes;
@@ -77,6 +83,12 @@ mod backup_list_tests;
 mod file_words_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod references_playing_tests;
+#[cfg(test)]
+mod discover_playing_tests;
+#[cfg(test)]
+mod labels_playing_tests;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
@@ -111,6 +123,9 @@ pub mod requests_host;
 mod app_requests;
 #[cfg(test)]
 mod served_tests_requests;
+// Incoming's tests that run the one path on the whole app, moved up (the app split's phase 2).
+#[cfg(test)]
+mod incoming_tests_top;
 // What counts against each user's room (AL01).
 pub mod room;
 // Records not had that nobody sees, forgotten (RT01).
@@ -170,6 +185,10 @@ pub mod requests_base;
 pub mod soulseek_base;
 pub mod search_base;
 pub mod track_fetch_records;
+mod insights_records;
+mod playlists_insights;
+pub mod records_host;
+pub mod retention_protected;
 
 use std::sync::Arc;
 
@@ -253,6 +272,7 @@ impl App {
         // What the crates' facts take from the app, before anything can read them (`serve::services::FactsFrom`).
         if let Some(s) = &served {
             s.set_facts_from(Arc::new(app_served::AppFacts));
+            s.set_protected(Arc::new(app_protected::AppProtected));
         }
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
         // The playlists are kept in Cratarr's own library's user data (decision 0101); a test without one keeps them in

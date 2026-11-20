@@ -526,14 +526,19 @@ pub async fn plan(account: &str, album: &str) -> Result<super::file_runs::PlanVi
 
 /// The numbers as the sheet showed them written (an administrator's yes): a run on the one path, set aside where the
 /// files changed since (its stamp).
-pub async fn apply_plan(app: &std::sync::Arc<super::App>, account: &str, album: &str, stamps: Option<std::collections::HashMap<String, String>>) -> Result<super::file_runs::Status> {
+pub async fn apply_plan<H: super::incoming_host::IncomingHost>(app: &std::sync::Arc<H>, account: &str, album: &str, stamps: Option<std::collections::HashMap<String, String>>) -> Result<super::file_runs::Status> {
+    apply_plan_on(app.clone(), account, album, stamps).await
+}
+
+/// `apply_plan`, on its host.
+async fn apply_plan_on(app: std::sync::Arc<dyn super::incoming_host::IncomingHost>, account: &str, album: &str, stamps: Option<std::collections::HashMap<String, String>>) -> Result<super::file_runs::Status> {
     let kind = format!("{KIND}:{album}");
-    anyhow::ensure!(!super::file_runs::busy(&app.journal, &kind), "Already writing");
+    anyhow::ensure!(!super::file_runs::busy(app.journal(), &kind), "Already writing");
     let preview = looked(account, album)?.context("The release is still being looked up")?;
     let (a, served) = (album.to_string(), crate::serve::instance().context("Cratarr's own library is not open")?);
     let p = crate::run::spawn_blocking(move || -> Result<super::file_runs::Proposal> { Ok(super::file_runs::ticked(proposal(&served, &a, &preview)?, &[a.clone()], stamps.as_ref())) }).await??;
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Its numbers are as the release has them already");
-    Ok(super::file_runs::start(app, p))
+    Ok(super::file_runs::start_on(app, p))
 }
 
 /// What is off in an album's discs (0.13, for the owner's review with an assistant: albums that lost their disc

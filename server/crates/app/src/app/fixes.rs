@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
+use super::incoming_host::IncomingHost;
+
 /// A fix as the page shows it, its JSON kept stable (the page builds on it).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Fix {
@@ -109,9 +111,9 @@ fn track_paths(served: &crate::serve::Serve, album: &str, at: Option<&(i64, Stri
 
 /// The fixes of a finding (`library:year`, `library:genre`, `library:album-artist`, `library:musicbrainz`), for each of
 /// its albums that has one, the certain first. Blocking parts apart.
-pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
+pub async fn of_finding(app: &dyn IncomingHost, key: &str) -> Result<Vec<Fix>> {
     // Tracks shorter than their length (0.9.14): a fix a track.
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
+    let served = app.served().clone().context("Cratarr's own library is not open")?;
     if key.starts_with("files:") {
         let k = key.to_string();
         return crate::run::spawn_blocking(move || super::length_fixes::of_finding(&served, &k)).await?;
@@ -311,15 +313,15 @@ fn names(sources: &[String]) -> String {
 /// year, a genre, the album artist and MusicBrainz ids from a match, a cover where it has none (the first the cover
 /// look finds; certain from the Cover Art Archive). And whether its match is still being looked for. `at`: the copy they are
 /// for, as (catalogue folder, folder in it): what it lacks and its files alone, as the "Before adding" sheet says (Q20).
-pub async fn of_album(app: &super::App, album: &str, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
+pub async fn of_album(app: &dyn IncomingHost, album: &str, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
     of_album_only(app, album, None, at).await
 }
 
 /// `of_album`, only the fields named (`year`, `genre`, `rule`, `albumartist`, `musicbrainz`, `cover`); all of them for
 /// none.
-async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
+async fn of_album_only(app: &dyn IncomingHost, album: &str, fields: Option<&[&str]>, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
     let wants = |f: &str| fields.is_none_or(|fs| fs.contains(&f));
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
+    let served = app.served().clone().context("Cratarr's own library is not open")?;
     let (s, a, place) = (served.clone(), album.to_string(), at.clone());
     let (rule, year, genre) = (wants("rule"), wants("year"), wants("genre"));
     let lacks = crate::run::spawn_blocking(move || match &place {

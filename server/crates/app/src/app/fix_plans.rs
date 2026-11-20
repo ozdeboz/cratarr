@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use super::file_runs::{self, FieldOption, PlanView, Proposal};
 use super::fixes::Fix;
+use super::incoming_host::IncomingHost;
 use crate::journal::{FileWrite, RunRecord};
 
 /// A finding's fixes (`fix:<finding>`).
@@ -53,15 +54,15 @@ fn title_of(kind: &str) -> String {
 
 /// The copy an intake's plan is about, as (catalogue folder, folder in it): in library `from`, else the record's copy waiting.
 /// With one id for every copy, the record's rows would be the kept copy's files. None for any other plan.
-async fn copy_of(app: &super::App, kind: &str, from: Option<&str>) -> Result<Option<(i64, String)>> {
+async fn copy_of(app: &dyn IncomingHost, kind: &str, from: Option<&str>) -> Result<Option<(i64, String)>> {
     let Some((INTAKE, album)) = kind.split_once(':') else { return Ok(None) };
-    let (served, album, from) = (app.served.clone().context("Cratarr's own library is not open")?, album.to_string(), from.map(str::to_string));
+    let (served, album, from) = (app.served().clone().context("Cratarr's own library is not open")?, album.to_string(), from.map(str::to_string));
     crate::run::spawn_blocking(move || served.waiting_copy(&album, from.as_deref())).await?
 }
 
 /// The fixes a plan proposes (`at`: for this copy alone), and whether more are still being looked for (a match with
 /// MusicBrainz).
-async fn fixes_of(app: &super::App, kind: &str, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
+async fn fixes_of(app: &dyn IncomingHost, kind: &str, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
     let (k, rest) = kind.split_once(':').context("Not a plan")?;
     let (fixes, making) = match k {
         FIX => {
@@ -183,10 +184,15 @@ pub(super) fn proposal(served: &crate::serve::Serve, kind: &str, fixes: &[Fix], 
 
 /// The review sheet of a plan: its records' fields, how sure each is, a genre's choices; `making` while a match is still
 /// looked for (the sheet asks again).
-pub async fn plan(app: &super::App, kind: &str, from: Option<&str>) -> Result<PlanView> {
+pub async fn plan<H: IncomingHost>(app: &Arc<H>, kind: &str, from: Option<&str>) -> Result<PlanView> {
+    plan_on(&**app, kind, from).await
+}
+
+/// `plan`, on its host.
+async fn plan_on(app: &dyn IncomingHost, kind: &str, from: Option<&str>) -> Result<PlanView> {
     let at = copy_of(app, kind, from).await?;
     let (fixes, making) = fixes_of(app, kind, at.clone()).await?;
-    let (k, served) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?);
+    let (k, served) = (kind.to_string(), app.served().clone().context("Cratarr's own library is not open")?);
     let (p, notes) = crate::run::spawn_blocking(move || proposal(&served, &k, &fixes, at.as_ref())).await??;
     let mut view = file_runs::view(&p.kind, &p.title, &p.records, &p.files, false);
     for r in &mut view.records {
@@ -203,11 +209,16 @@ pub async fn plan(app: &super::App, kind: &str, from: Option<&str>) -> Result<Pl
 
 /// The ticked records written (an administrator's yes on the sheet): only the fields ticked of each, a genre as chosen,
 /// each record set aside where it is no longer what the sheet showed (its stamp). A run on the one path.
-pub async fn apply(app: &Arc<super::App>, kind: &str, from: Option<&str>, albums: Vec<String>, stamps: Option<HashMap<String, String>>, chosen: Chosen) -> Result<file_runs::Status> {
+pub async fn apply<H: IncomingHost>(app: &Arc<H>, kind: &str, from: Option<&str>, albums: Vec<String>, stamps: Option<HashMap<String, String>>, chosen: Chosen) -> Result<file_runs::Status> {
+    apply_on(app.clone(), kind, from, albums, stamps, chosen).await
+}
+
+/// `apply`, on its host.
+async fn apply_on(app: Arc<dyn IncomingHost>, kind: &str, from: Option<&str>, albums: Vec<String>, stamps: Option<HashMap<String, String>>, chosen: Chosen) -> Result<file_runs::Status> {
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
-    anyhow::ensure!(!file_runs::busy(&app.journal, kind), "Already writing");
-    let at = copy_of(app, kind, from).await?;
-    let (fixes, _) = fixes_of(app, kind, at.clone()).await?;
+    anyhow::ensure!(!file_runs::busy(app.journal(), kind), "Already writing");
+    let at = copy_of(&*app, kind, from).await?;
+    let (fixes, _) = fixes_of(&*app, kind, at.clone()).await?;
     // A genre's words, each among those its fix offered.
     for (album, words) in &chosen.genres {
         let offered: Vec<&str> =
@@ -216,7 +227,7 @@ pub async fn apply(app: &Arc<super::App>, kind: &str, from: Option<&str>, albums
             anyhow::bail!("{w} was not found for it");
         }
     }
-    let (k, served, copy) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?, at.clone());
+    let (k, served, copy) = (kind.to_string(), app.served().clone().context("Cratarr's own library is not open")?, at.clone());
     let s = served.clone();
     let p = crate::run::spawn_blocking(move || -> Result<Proposal> {
         let (p, _) = proposal(&s, &k, &fixes, copy.as_ref())?;
@@ -254,7 +265,7 @@ pub async fn apply(app: &Arc<super::App>, kind: &str, from: Option<&str>, albums
     p.files.retain(|f| !set_aside.iter().any(|x| x.album == f.album && f.whole.as_ref().is_some_and(|w| w.op == "cover")));
     p.failed.extend(set_aside);
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Nothing to fix: look again");
-    Ok(file_runs::start(app, p))
+    Ok(file_runs::start_on(app, p))
 }
 
 /// The sheet's choices kept to: a record's fields ticked (the rest left as the file has them), a genre's chosen words.

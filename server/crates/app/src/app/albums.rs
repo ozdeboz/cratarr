@@ -3,10 +3,12 @@
 //! and refresh themselves; this only puts them together.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde::Serialize;
 
-use super::{App, JobView, KeepPreview, KeepResult, ToggleError};
+use super::incoming_host::IncomingHost;
+use super::{JobView, KeepPreview, KeepResult, ToggleError};
 use super::library::{Active, epoch_now};
 use crate::serve::copies::{Copy, Viewer, against, copy_for, in_order, judged, replace_offers, replaces, replacing_copy, why};
 use crate::settings::{LibraryKind, Quality, YOUR_MUSIC};
@@ -153,7 +155,25 @@ fn own_to_be(a: &Active, id: String, name: String, owner: String, mine: bool) ->
     LibraryView { id, name, kind: "own", fetcher: None, owner: Some(owner), mine, colour, quality: LibraryKind::Own.quality(), seen: true, seen_why: None, naming: None }
 }
 
-impl App {
+/// The Library page's one list and the album actions, on the app that hosts them (`IncomingHost`): the app answers its
+/// `albums`, `delete_album` and the rest by them (`app_albums`). What they read of the host is held by the names the app
+/// holds it by.
+pub struct Albums<'a> {
+    library: &'a Arc<super::library::Library>,
+    collection: &'a Arc<super::collection::CollectionService>,
+    incoming: &'a Arc<super::incoming::IncomingService>,
+    journal: &'a Arc<crate::journal::Journal>,
+    served: &'a Option<Arc<crate::serve::Serve>>,
+    host: &'a dyn IncomingHost,
+}
+
+impl<'a> Albums<'a> {
+    pub fn of(host: &'a dyn IncomingHost) -> Self {
+        Self { library: host.library(), collection: host.collection(), incoming: host.incoming(), journal: host.journal(), served: host.served(), host }
+    }
+}
+
+impl Albums<'_> {
     /// Whether `account` is one here, not removed (0101 point 7: its own music stays, ownerless and no target).
     fn account_on(&self, account: &str) -> bool {
         self.served.as_ref().is_none_or(|s| s.users.get(account).is_some_and(|u| u.active))
@@ -586,7 +606,7 @@ fn fold(listed: Vec<source::Album>, orders: &HashMap<String, PlayOrder>) -> Vec<
         .collect()
 }
 
-impl App {
+impl Albums<'_> {
     /// The records listed more than once, each with how its listed copies stand for `viewer` (`PlayOrder`).
     async fn play_orders(&self, albums: &[source::Album], viewer: Option<&str>) -> HashMap<String, PlayOrder> {
         let Some(served) = self.served.clone() else { return HashMap::new() };
@@ -718,7 +738,7 @@ impl App {
             let closing = super::requests::closed_by(arrived, crate::serve::access::administering(), served.current_user().as_deref());
             let id = done.undo.parse::<crate::journal::EventId>().ok();
             let soulseek = super::soulseek::connected().await;
-            let goes_on = super::requests::deleted(super::requests::fetcher(self).as_deref(), soulseek, served, &closing, open, copy.as_ref(), id.map(|id| (self.journal.as_ref(), id))).await;
+            let goes_on = super::requests::deleted(self.host.request_fetcher().as_deref(), soulseek, served, &closing, open, copy.as_ref(), id.map(|id| (self.journal.as_ref(), id))).await;
             if goes_on && let Some(id) = id {
                 self.incoming.keep_fetching(id, &done.title).await;
             }
