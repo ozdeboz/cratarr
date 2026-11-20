@@ -1,6 +1,6 @@
 # 0098: Modes per server — a Jellyfin or a Subsonic server in the app
 
-- Status: accepted (the owner, 2026-11-03, by question set in 632's session); for 0.15.
+- Status: accepted (the owner, 2026-11-03, by question set); for 0.15.
 - Date: 2026-11-03
 - Builds on: 0052 (local mode: a mode of its own, never mixed, each with its own queue), 0085 (offline first), 0091
   (scrobbling from the device, and its switch per server), docs/plans.md (External library; modes only, settled

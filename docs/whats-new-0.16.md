@@ -88,7 +88,7 @@ own sign-in, on the network its downloads may use. The queue stays.
 - **Administrators only:** reviewing Incoming, an album's tags, sharing playlists in a batch. An app password signs in
   to no page.
 
-<!-- From the commits since v0.15.0 on 632/own-music at 3a3b948d3 (2026-11-08): D21, P4's Sounds like and favourites,
+<!-- From the commits since v0.15.0 on the own-music branch at 3a3b948d3 (2026-11-08): D21, P4's Sounds like and favourites,
      the offline review's six findings and the fresh start included. D22's tablet numbers, if they change anything,
      come after. -->
 

@@ -1,7 +1,7 @@
 # 0099: Soulseek in Cratarr — whole records fetched by their release, on a tick
 
 - Status: accepted (the owner, 2026-11-02: "Cratarr does Soulseek, Lidarr stays", in 0.15; the choices below by question
-  set in a5's session, 2026-11-03)
+  set, 2026-11-03)
 - Date: 2026-11-03
 - Builds on: 0080 (single-track intake and its gate; its amendment, the bulk intake), 0034 (Incoming), 0096 (a library's
   fetcher is a setting), 0092 (one way to change files: the intake card), docs/plans.md (Soulseek in Cratarr, not through
@@ -48,7 +48,7 @@ the next candidate by the same tick, a file that fails the gate set aside with w
 - soularr is stopped when this is deployed, and the NAS gives Cratarr a writable folder for the new library (a NAS
   change, on the owner's go).
 - The page lists Lidarr's Wanted with each record's state, folders and set-asides, ticks many at once, and offers
-  Search now (632).
+  Search now.
 - Not planned: other sources (Usenet, streaming). With each user's own music (0084, 0.16): the intake per library.
 
 ## Amendment (2026-11-03): the fetchers are siblings
@@ -69,8 +69,7 @@ configuration that Lidarr abstracts for our app. But they are still siblings fro
   each its own page (Lidarr: its address and key; Soulseek: slskd's address, key and folder). An Incoming library's
   "Fetched by" names its fetcher (0096: one Incoming library per fetcher).
 - This replaces the decision's "What is wanted" above (Lidarr's Wanted, read every six hours) for Soulseek.
-- The server's part (Soulseek's wanted list from Cratarr's Requests, a library's fetcher "lidarr" beside "soulseek")
-  is a5's; the page's 632's.
+- The server's part: Soulseek's wanted list from Cratarr's Requests, a library's fetcher "lidarr" beside "soulseek".
 
 
 ## Amendment (2026-11-06): what could not be asked is no verdict

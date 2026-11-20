@@ -3,8 +3,8 @@
 - Status: accepted (the owner, 2026-10-31: "do we now have a properly unified path of file+tag handling? I want a
   clean and coherent architecture!", "Not scattered, but logical please", "we should probably think of our rules,
   wherever we have appropriate ones, to decide how this all should be presented to our users"; by question set: draft
-  it now, before types into files is merged; always asked; files follow Cratarr; the server's parts reviewed by a5 the
-  same day). For 0.13. The server's parts are a5's to build, the page's 632's.
+  it now, before types into files is merged; always asked; files follow Cratarr; the server's parts reviewed the
+  same day). For 0.13.
 - Date: 2026-10-31
 - Builds on: 0008 (the catalogue: tags read in two layers), 0011 and 0026 (the journal, the app's one undo journal),
   0013 (Keep and Replace: moves all or none), 0053 (tags without touching the audio), Health's fixes (0.9.7: core facts
@@ -64,7 +64,7 @@ Everything around the writing is each writer's own:
 
 **How the page shows it: three pieces, the same for every writer** (the owner, 2026-11-01, on the second round of
 mockups: "Yes, this is a lot better"; learned from Picard's original and new values, Lidarr's Preview Retag and
-Activity, beets' diff, MediaMonkey's tag sync; mockups at https://claude.ai/artifact/3tfcXWgYpuTbe799uRQgTL):
+Activity, beets' diff, MediaMonkey's tag sync):
 
 - **Before: the review sheet.** One panel page for every plan: its title says what proposes it ("Types into files",
   "Renumber · the 1998 CD release", "Missing years"); the records, each with a tick where there are several; under each,

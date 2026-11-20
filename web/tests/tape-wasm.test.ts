@@ -1,4 +1,4 @@
-// The tape head's two WebAssembly modules as the page calls them (decision 0102, as amended; a5's builds): decode.wasm
+// The tape head's two WebAssembly modules as the page calls them (decision 0102, as amended): decode.wasm
 // through lib/tape/decoder (a file's bytes in, any stretch read out, on from the last or sought), and tape.wasm's
 // motions as the worklet calls them (a steady speed, a hold doubling to its top, a let-go braking to a stand).
 import { test } from 'node:test';

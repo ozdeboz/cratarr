@@ -223,7 +223,7 @@ export function searchNone(without: () => Without | null | false | 0 | undefined
   });
 }
 
-/** What hides part of a list (the owner, 2026-11-02, claude-db's proposal: "33 of 36 tracks hidden by [Search ✕]
+/** What hides part of a list (the owner, 2026-11-02, on a proposal: "33 of 36 tracks hidden by [Search ✕]
  *  [Favourites only ✕]"; a long-press on the lit magnifier or funnel shows it): its line and each cause that keeps one
  *  out, as 0095's popover says nothing. Asked only then (the filter's explain is a request). */
 export type Hidden = { said: string; chips: { label: string; onclear?: () => void; onopen?: () => void }[] };

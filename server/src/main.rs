@@ -338,7 +338,7 @@ async fn main() -> Result<()> {
     let linker = app.clone();
     tokio::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
 
-    // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
+    // Decision 0035: the NAS keeps the analysis up to date (after a PC's first pass, or all of it).
     memwatch::start();
     app::analysis_pass::run(app.library.catalogue());
     // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).

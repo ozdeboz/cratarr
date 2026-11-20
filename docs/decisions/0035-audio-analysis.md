@@ -229,18 +229,18 @@ files' own BPM tags, of unknown origin and quality: worse than the public sets' 
 
 ## Where the first pass runs (the owner, 2026-10-16)
 
-**The one-time pass over the whole library runs on the ThinkBook**; the NAS then keeps up with new and replaced files.
-The NAS could do it alone overnight (about 6.5 h of work at the lowest priority, measured above), so the ThinkBook is
-a speed-up, and the NAS's own pass is the fallback when the ThinkBook is not at hand.
+**The one-time pass over the whole library runs on the PC**; the NAS then keeps up with new and replaced files.
+The NAS could do it alone overnight (about 6.5 h of work at the lowest priority, measured above), so the PC is
+a speed-up, and the NAS's own pass is the fallback when the PC is not at hand.
 
 - The same code as a mode of the server's binary (`cratarr-server --analyse <folder> --out <file>`), run on the
-  ThinkBook over the Music share (SMB), every core busy.
+  PC over the Music share (SMB), every core busy.
 - Its results are keyed by the file (its path in the library, its size and modification time) and imported into
   Cratarr's table on the NAS, which analyses only what is not there or has changed since.
 
 ## Consequences
 
-- The ThinkBook does the one-time pass (the NAS overnight when it cannot), then the NAS a little work per new track.
+- The PC does the one-time pass (the NAS overnight when it cannot), then the NAS a little work per new track.
 - The seekbar, a populated BPM axis in crates, and levelling come with no work on the phone.
 - **Offline:** the app fetches each download's waveform with it and keeps it in its store, or the seekbar would be
   blank in airplane mode.
@@ -271,7 +271,7 @@ against the track's strong beats). A track without a tempo has none, kept as non
 
 - **Kept** in `analysis_shape.beats` (a column added at start): five bytes a beat, its time in milliseconds (u32,
   little-endian) then its strength (0–255): about 3 KB for a five-minute track at 120 BPM. NULL: not worked out (an
-  analysis from before); an empty value: none. In an analysis' JSON line (the ThinkBook's pass, the import), base64.
+  analysis from before); an empty value: none. In an analysis' JSON line (the PC's pass, the import), base64.
 - **No version change,** so nothing is analysed again in bulk. The NAS's pass keeps beats for what it analyses from
   now on; an older analysis gets them when they are first asked for: decoded at once (one at a time, a turn of at most
   20 s, a decode of at most 60 s) and kept beside the analysis, which stays as it is, while the file is as it was. A

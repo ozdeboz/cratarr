@@ -1,4 +1,4 @@
-//! A track's analysis (decision 0035): worked out once from its sound, kept by the pass (the ThinkBook's first pass,
+//! A track's analysis (decision 0035): worked out once from its sound, kept by the pass (a PC's first pass,
 //! then the NAS for new files) and served from there. One decode gives everything:
 //! - **Loudness**: EBU R128 integrated loudness, ReplayGain 2.0's track gain (-18 LUFS reference) and the sample peak;
 //!   the gating blocks (400 ms every 100 ms) kept as a histogram, so an album's gain is worked out exactly from its

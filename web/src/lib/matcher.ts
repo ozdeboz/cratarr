@@ -11,7 +11,7 @@ export type Hit = { i: number; score: number; how: How };
 /** A name to be found, with the other names it goes by. */
 export type MatchName = { text: string; aliases?: readonly string[] };
 
-/** A text as the matcher reads it (a5's contract, 2026-10-30): compatibility-decomposed, its marks dropped, lower case,
+/** A text as the matcher reads it (the server's contract, 2026-10-30): compatibility-decomposed, its marks dropped, lower case,
  *  as the server folds in the crate. The WebAssembly has no Unicode tables of its own for this; every text it is
  *  given, names and query alike, is folded here first. */
 export const fold = (text: string): string => text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();

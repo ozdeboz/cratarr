@@ -6,7 +6,7 @@
 - Builds on: 0031 (the Android app, thin at first), 0033 (a page is a player while it is open), 0.9.8 (Downloads in
   the installed page)
 - Amended 2026-11-04 (the owner): the app carries its own copy of the page (0085, step 1), and it is built and installed
-  locally, never published ("not GitHub pages, local only"); the desktop app is the ThinkPad session's since that day.
+  locally, never published ("not GitHub pages, local only").
   See the two amendments below.
 
 ## Context
@@ -39,7 +39,7 @@ updates itself.**
   Android's: Vite's fingerprinted files are the app's wherever it has them, and with the server's copy chosen but
   out of reach (no answer, an error page), the app's opens: a blank window never. What the page stores is kept for
   good (the shell asks `navigator.storage.persist()` and grants it).*
-  *Amended 2026-11-08 (the owner's offline test on the ThinkPad): out of reach has a bound. A network gone silent
+  *Amended 2026-11-08 (the owner's offline test on a laptop): out of reach has a bound. A network gone silent
   answers nothing and refuses nothing, and the window stayed blank 2 min 14 s, until the connection gave up. Now the
   server gets 3 s to begin its answer for its page, and a proxy's refusal in front of it (403, 502 to 504) counts as
   no answer; after that it counts as out of reach for a minute, or until it answers anything, and the page's files are

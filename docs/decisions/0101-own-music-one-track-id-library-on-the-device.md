@@ -1,7 +1,7 @@
 # 0101: 0.16 — each user's own music, one track id, and the library on the device
 
-- Status: accepted (the owner, 2026-11-03, by question sets in 632's session: nine questions one by one, then four
-  groups of what they had left out; the last three groups on 632's recommendations, the owner: "Yes but go with your
+- Status: accepted (the owner, 2026-11-03, by question sets: nine questions one by one, then four
+  groups of what they had left out; the last three groups on the recommendations, the owner: "Yes but go with your
   recommendations"); for 0.16.
 - Date: 2026-11-03
 - Builds on: 0051 (several users), 0070 (requests), 0084 (each user's own music), 0085 (offline first), 0091
@@ -9,7 +9,7 @@
   (Cratarr's own records)
 - Changes: 0084 (where a user's request lands, uploads land in an Incoming, who may Keep, a user who leaves), 0085's
   step 5 (Radio's picker joins the rules crate)
-- Settled: where 632's recommendations met earlier decisions (deferred 2026-11-03, settled by the owner 2026-11-04 by
+- Settled: where the recommendations met earlier decisions (deferred 2026-11-03, settled by the owner 2026-11-04 by
   question set; the last section). Changes 0084 there too (own music in the off-site backup).
 
 ## Context
@@ -212,7 +212,7 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
 
 ## Settled: where the recommendations met earlier decisions
 
-The owner, 2026-11-03: "Defer conflicts for later". 632's recommendations for the last three groups were made without
+The owner, 2026-11-03: "Defer conflicts for later". The recommendations for the last three groups were made without
 0084, 0085 and 0091 at hand. Both sides stood here until the owner settled them, by question set, on 2026-11-04.
 
 - **Approval.** 0084: a user's want goes in by itself while they have room in their allocation, with no approval. This
@@ -247,7 +247,7 @@ The owner, 2026-11-03: "Defer conflicts for later". 632's recommendations for th
     the sending device scrobbles it then.
   - Settled: **as 0091 has it.** Only the player scrobbles: such a play counts in Cratarr but is not scrobbled, unless
     that account scrobbles through the server.
-- **How the app runs the rules crate.** *Settled 2026-11-03 (the owner, in claude-db's session): as 0085 has it.*
+- **How the app runs the rules crate.** *Settled 2026-11-03 (the owner): as 0085 has it.*
   - 0085: natively, through UniFFI (the desktop app natively).
   - The recommendation: one WebAssembly build for the page and the app, native only if it misses the budget.
   - Settled: UniFFI, native. The rules crate is built for Android and called from Kotlin, as 0.11's Spike B does
@@ -263,14 +263,14 @@ memory, with the engine's arithmetic in the rules crate. So:
 - **27's move:** the tape engine's arithmetic joins the rules crate after Radio's picker, proved the same way, on the
   server's tests.
 
-## Amended 2026-11-04: a track is the record's track (the owner, in a5's session)
+## Amended 2026-11-04: a track is the record's track (the owner)
 
 11's "a track's key" with 0100's copies: **one id per track of the record, whichever copy plays.** Playlists, plays,
 favourites and every other reference point at the record's track; a copy (Music, someone's own music, an Incoming
 upgrade) is only files of it, the best one playing. So the id never splits between copies, and Replace keeps it by
 handing the record's track a new file.
 
-## Amended 2026-11-04: how a record's copies behave (the owner, by question, in 632's session)
+## Amended 2026-11-04: how a record's copies behave (the owner, by question)
 
 - **The same record is the same tracks.** Two folders are one record only when their tracklists match. A deluxe edition
   with bonus tracks is a record of its own.
@@ -288,7 +288,7 @@ handing the record's track a new file.
   Soulseek without MusicBrainz, as well as records and copies.
 - **An artist's id is for life** (2026-11-05), like a record's, given in the same migration: the name's hash goes.
 
-## Amended 2026-11-04: what point 11 meets in the code (a5's survey, trunk 96ed26062)
+## Amended 2026-11-04: what point 11 meets in the code (a survey, trunk 96ed26062)
 
 - **Songs are served by the catalogue's own track id already** (`tr-<tracks.id>`, since 0030). Keep, Move, Cratarr's tag
   edits, conversions, Delete's Undo and Replace keep it. So songs' served ids do not switch in 0.16; what changes:
@@ -309,7 +309,7 @@ handing the record's track a new file.
     and a new folder takes an id never given before. Today's positions became the ids, so no data moved. The served
     album ids, Subsonic's music folders, the journal's Undo and queued conversions keep naming the same folder whatever
     is added or removed; a folder's id says nothing of its kind (main, own, Incoming go by what the library is).
-- **Playlists and crates name tracks by path lines:** playlists become tracks in 632's stage 2 (point 12); crates' left
+- **Playlists and crates name tracks by path lines:** playlists become tracks in stage 2 (point 12); crates' left
   out and excluded lines the same way.
 - **The migration** (21) rewrites album ids to records, library positions to their ids and lines to tracks, in one
   transaction with its report; songs' ids stay as they are.
