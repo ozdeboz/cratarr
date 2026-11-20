@@ -6,7 +6,8 @@
 //!   Hip Hop; "R'n'B" is R&B). Any other word a caller names a genre or a style is a style, the rest are tags: that sort
 //!   is the words store's.
 //! - **The one split** ([`Genres::split`]): every words field (GENRE, STYLE, MOOD, Grouping) and every service's stored
-//!   word, on every path.
+//!   word, on every path. The exceptions first, then a library's keep list, then "/", ";" and ","; never "&", and a
+//!   part's leading "&" or "and" dropped.
 //! - **The links** ([`Genres::links`]): the genres a style counts toward, never shown.
 //!
 //! Read by hand, as the matcher's JSON is ([`crate::matcher::json`]): no serde_json in the page's WebAssembly.
@@ -154,11 +155,19 @@ impl Genres {
         self.by_key.get(k).map(|&at| self.genres[at].name.as_str())
     }
 
-    /// A words field's value as its words: the one split, on every path. A library's keep list (`keep`: its own forms
-    /// kept whole) is read first, ignoring case and inside a longer value, longest first; then the rest splits on "/",
-    /// ";" and ",". Each word trimmed, none empty; a repeat (ignoring case) dropped, its first spelling kept.
+    /// A words field's value as its words: the one split, on every path (the owner, 2026-11-20, "split everywhere").
+    /// The exceptions are read first, each a form read as the words it is ("RnB/Swing": R&B, New Jack Swing); then a
+    /// library's keep list (`keep`: its own forms kept whole); each ignoring case and inside a longer value, longest first,
+    /// and none where a form before it took the stretch. Then the rest splits on "/", ";" and ",", never on "&", and a
+    /// part's leading "&" or "and" is dropped ("Folk, World, & Country": Folk, World, Country), the word "and" only
+    /// ("Andean Music" is whole). Each word trimmed, none empty; a repeat (ignoring case) dropped, its first spelling kept.
     pub fn split(&self, value: &str, keep: &[String]) -> Vec<String> {
         let mut taken: Vec<Taken> = Vec::new();
+        let mut exceptions: Vec<usize> = (0..self.exceptions.len()).collect();
+        exceptions.sort_by_key(|&e| std::cmp::Reverse(self.exceptions[e].value.len()));
+        for e in exceptions {
+            take(value, &self.exceptions[e].value, Some(e), &mut taken);
+        }
         let mut kept: Vec<&str> = keep.iter().map(|k| k.trim()).filter(|k| !k.is_empty()).collect();
         kept.sort_by_key(|k| std::cmp::Reverse(k.len()));
         for k in kept {
@@ -233,11 +242,23 @@ fn matched(value: &str, at: usize, form: &str) -> Option<usize> {
     Some(len)
 }
 
-/// A part as a word, trimmed, if anything is left of it.
+/// A part as a word, trimmed and its leading "&" or "and" dropped, if anything is left of it.
 fn push_word(words: &mut Vec<String>, part: &str) {
-    let word = part.trim();
+    let word = without_joining(part.trim());
     if !word.is_empty() {
         words.push(word.to_string());
+    }
+}
+
+/// A part without the "&" or "and" a list leaves at its start ("Folk, World, & Country" leaves "& Country"): the word
+/// "and" alone, so "Andean Music" keeps its start.
+fn without_joining(part: &str) -> &str {
+    if let Some(rest) = part.strip_prefix('&') {
+        return rest.trim_start();
+    }
+    match part.get(..3) {
+        Some(first) if first.eq_ignore_ascii_case("and") && part[3..].chars().next().is_none_or(char::is_whitespace) => part[3..].trim_start(),
+        _ => part,
     }
 }
 
