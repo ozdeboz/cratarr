@@ -190,6 +190,10 @@ pub struct Slskd {
     key: String,
     http: reqwest::Client,
     clock: Clock,
+    /// Tests: slskd answered within this process by a router of the test's own (`within`): no socket, so tokio's paused clock does
+    /// not run on past a question while it is answered.
+    #[cfg(any(test, feature = "test-support"))]
+    within: Option<axum::Router>,
 }
 
 /// One file offered in answer to a search.
@@ -284,7 +288,29 @@ impl Slskd {
     pub fn new(url: &str, key: &str) -> Result<Self> {
         // Never a redirect (O1): its key stays on the host given.
         let http = crate::app::reach::lan_client().timeout(Duration::from_secs(20)).build()?;
-        Ok(Self { url: url.trim_end_matches('/').to_string(), key: key.to_string(), http, clock: Clock::default() })
+        Ok(Self {
+            url: url.trim_end_matches('/').to_string(),
+            key: key.to_string(),
+            http,
+            clock: Clock::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            within: None,
+        })
+    }
+
+    /// Tests: slskd at `url` (its lane that address's) answered within this process by `router`, its routes as slskd's API has them.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn within(url: &str, key: &str, router: axum::Router) -> Self {
+        Self { within: Some(router), ..Self::new(url, key).unwrap() }
+    }
+
+    /// A request sent to slskd (in tests, to the router standing in for it).
+    async fn sent(&self, request: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(router) = self.within.clone() {
+            return Ok(answered(router, request.build()?).await);
+        }
+        request.send().await
     }
 
     /// This client, its lane's waits on `clock` (the tests' own time).
@@ -305,7 +331,7 @@ impl Slskd {
     }
 
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let r = self.http.get(self.at(path)).header("X-API-Key", &self.key).send().await.map_err(unreached)?;
+        let r = self.sent(self.http.get(self.at(path)).header("X-API-Key", &self.key)).await.map_err(unreached)?;
         let status = r.status();
         if status.as_u16() == 429 {
             return Err(Busy("slskd is busy".into()).into());
@@ -334,7 +360,7 @@ impl Slskd {
             if !still() {
                 return Err(Gone.into());
             }
-            let r = match send().header("X-API-Key", &self.key).send().await {
+            let r = match self.sent(send().header("X-API-Key", &self.key)).await {
                 Ok(r) => r,
                 Err(e) if e.is_connect() => return Err(unreached(e).into()),
                 Err(e) => return Err(Lost(format!("slskd's answer did not come: {:#}", anyhow::Error::new(e))).into()),
@@ -524,6 +550,21 @@ impl Slskd {
 /// is read back by it, and a batch is never asked for twice.
 pub fn new_batch() -> String {
     uuid()
+}
+
+/// Tests: `r` answered by `router` within this process, as reqwest would have had it from slskd.
+#[cfg(any(test, feature = "test-support"))]
+async fn answered(router: axum::Router, r: reqwest::Request) -> reqwest::Response {
+    use tower::ServiceExt as _;
+    let mut asked = axum::http::Request::builder().method(r.method().clone()).uri(r.url().as_str());
+    for (name, value) in r.headers() {
+        asked = asked.header(name, value);
+    }
+    let body = r.body().and_then(reqwest::Body::as_bytes).map(<[u8]>::to_vec).unwrap_or_default();
+    let answer = router.oneshot(asked.body(axum::body::Body::from(body)).unwrap()).await.unwrap();
+    let (parts, body) = answer.into_parts();
+    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    reqwest::Response::from(axum::http::Response::from_parts(parts, body))
 }
 
 /// A random (version 4) UUID, as slskd takes ids.

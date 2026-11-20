@@ -261,6 +261,9 @@ pub struct SearchView {
     pub bandcamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// Failed: what its failure comes to (TN.1), so the bulk intake holds a track whose source could not answer for it.
+    #[serde(skip)]
+    pub failure: Option<super::turn::Failure>,
 }
 
 struct SearchJob {
@@ -290,10 +293,10 @@ pub struct FetchView {
     pub why: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
-    /// Refused for want of an answer ([`NotAsked`], [`crate::slskd::Away`]): nothing is known of the file or its user. The
-    /// page reads it as any refusal, with its why; the bulk intake holds nothing against the user for it.
+    /// Refused: what its refusal comes to (TN.1). For want of an answer (away, or paused: [`NotAsked`], slskd's) nothing is known
+    /// of the file or its user: the page reads it as any refusal, with its why; the bulk intake holds its track and blames no one.
     #[serde(skip)]
-    pub no_verdict: bool,
+    pub failure: Option<super::turn::Failure>,
 }
 
 struct FetchJob {
@@ -345,12 +348,24 @@ async fn want(album: &str, recording: &str, replace: Option<String>) -> Result<W
 pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Result<String> {
     let wanted = want(album, recording, replace).await?;
     let (slskd, _) = slskd().await?;
+    Ok(searching(wanted, slskd))
+}
+
+/// Tests: a search for the album's `track` started through this slskd, as [`search`] starts one (its release and slskd as the test
+/// has them); its id.
+#[cfg(test)]
+pub(crate) fn search_through(album: &str, track: ReleaseTrack, slskd: Slskd) -> String {
+    searching(Wanted { album: album.to_string(), track, replace: None }, slskd)
+}
+
+/// The search for `wanted` started through this slskd, its answers kept as they come; its id.
+fn searching(wanted: Wanted, slskd: Slskd) -> String {
     let text = query(&wanted.track.artist, &wanted.track.title);
     let bandcamp = format!("https://bandcamp.com/search?q={}&item_type=t", text.replace(' ', "+"));
     let id = new_id();
     let length_ms = wanted.track.length_ms;
     jobs(|j| {
-        j.searches.insert(id.clone(), SearchJob { wanted, view: SearchView { state: Searching::Searching, candidates: Vec::new(), bandcamp, why: None } });
+        j.searches.insert(id.clone(), SearchJob { wanted, view: SearchView { state: Searching::Searching, candidates: Vec::new(), bandcamp, why: None, failure: None } });
     });
     let job = id.clone();
     crate::run::spawn(async move {
@@ -359,12 +374,12 @@ pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Re
             if let Some(s) = j.searches.get_mut(&job) {
                 match found {
                     Ok(c) => (s.view.state, s.view.candidates) = (Searching::Done, c),
-                    Err(e) => (s.view.state, s.view.why) = (Searching::Failed, Some(format!("{e:#}"))),
+                    Err(e) => (s.view.state, s.view.why, s.view.failure) = (Searching::Failed, Some(format!("{e:#}")), Some(super::turn::class(&e))),
                 }
             }
         });
     });
-    Ok(id)
+    id
 }
 
 /// A single track's search through this slskd: its candidates, FLAC and MP3 only (the library's formats, which Cratarr writes tags
@@ -386,15 +401,11 @@ pub fn search_view(id: &str) -> Option<SearchView> {
 
 /// Fetches one of a search's candidates; the fetch's id.
 pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
-    let (wanted, c) = jobs(|j| {
-        let s = j.searches.get(search)?;
-        Some((s.wanted.clone(), s.view.candidates.iter().find(|c| c.id == candidate)?.clone()))
-    })
-    .context("That search is gone; search again")?;
+    let (wanted, c) = chosen(search, candidate)?;
     let (slskd, folder) = slskd().await?;
     let s = served()?;
     let staging = Path::new(s.data_dir.as_deref().context("Cratarr's data folder is needed")?).join("track-fetch");
-    fetch_through(&slskd, folder, staging, wanted, c).await
+    fetching(wanted, c, slskd, folder, staging, |file, track| async move { gate(&file, &track).await }).await
 }
 
 /// Tests elsewhere: a single file of `user`'s fetched as [`fetch`] fetches one (single-track fetch, and the bulk queue through it),
@@ -403,17 +414,41 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
 pub(crate) async fn fetch_through_for_tests(slskd: &Slskd, folder: PathBuf, staging: PathBuf, user: &str, file: crate::slskd::Offered) -> Result<String> {
     let wanted = Wanted { album: "al-1".into(), track: track_for(1, 1, "Slack Water", "Glass Harbour", None, ""), replace: None };
     let c = Candidate { id: 0, user: user.into(), file: file.filename.clone(), format: "flac".into(), lossless: true, bitrate: None, sample_rate: None, bit_depth: None, size: file.size, length_ms: None, free_slot: true, queue: 0, speed: 1, offered: file };
-    fetch_through(slskd, folder, staging, wanted, c).await
+    fetching(wanted, c, slskd.clone(), folder, staging, |file, track| async move { gate(&file, &track).await }).await
 }
 
-/// [`fetch`]'s fetch of candidate `c` through this slskd (its POST in slskd's lane), followed into `staging` and gated.
-async fn fetch_through(slskd: &Slskd, folder: PathBuf, staging: PathBuf, wanted: Wanted, c: Candidate) -> Result<String> {
+/// Tests: [`fetch`] through this slskd, its completed-downloads folder and this staging, the file gated by `gate`.
+#[cfg(test)]
+pub(crate) async fn fetch_through<G, Fut>(search: &str, candidate: usize, slskd: Slskd, folder: PathBuf, staging: PathBuf, gate: G) -> Result<String>
+where
+    G: FnOnce(PathBuf, ReleaseTrack) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<f32>> + Send + 'static,
+{
+    let (wanted, c) = chosen(search, candidate)?;
+    fetching(wanted, c, slskd, folder, staging, gate).await
+}
+
+/// A search's candidate, and what the search was for.
+fn chosen(search: &str, candidate: usize) -> Result<(Wanted, Candidate)> {
+    jobs(|j| {
+        let s = j.searches.get(search)?;
+        Some((s.wanted.clone(), s.view.candidates.iter().find(|c| c.id == candidate)?.clone()))
+    })
+    .context("That search is gone; search again")
+}
+
+/// The candidate `c` fetched through this slskd (its POST in slskd's lane) into its completed-downloads `folder`, moved into `staging`
+/// as it completes, then gated by `gate`; the fetch's id.
+async fn fetching<G, Fut>(wanted: Wanted, c: Candidate, slskd: Slskd, folder: PathBuf, staging: PathBuf, gate: G) -> Result<String>
+where
+    G: FnOnce(PathBuf, ReleaseTrack) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<f32>> + Send + 'static,
+{
     tidy(&staging);
-    let slskd = slskd.clone();
     let batch = slskd.fetch(&c.user, &c.offered).await?;
     let id = new_id();
     jobs(|j| {
-        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None, no_verdict: false }, staged: None });
+        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None, failure: None }, staged: None });
     });
     let job = id.clone();
     crate::run::spawn(async move {
@@ -434,18 +469,59 @@ async fn fetch_through(slskd: &Slskd, folder: PathBuf, staging: PathBuf, wanted:
         let staged = match got {
             Ok(p) => p,
             Err(e) => {
-                set(&|f| (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), crate::slskd::not_now(&e)));
+                set(&|f| (f.view.state, f.view.why, f.view.failure) = (Fetching::Refused, Some(format!("{e:#}")), Some(super::turn::class(&e))));
                 return;
             }
         };
         set(&|f| (f.view.state, f.view.percent, f.staged) = (Fetching::Checking, 100.0, Some(staged.clone())));
-        let verdict = gate(&staged, &wanted.track).await;
-        set(&|f| match &verdict {
-            Ok(score) => (f.view.state, f.view.score) = (Fetching::Passed, Some(*score)),
-            Err(e) => (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), e.is::<NotAsked>()),
-        });
+        checked(&job, gate(staged, wanted.track).await);
     });
     Ok(id)
+}
+
+/// A fetch's check heard: passed with its score, or refused with why and what that comes to (TN.1). Told to whoever listens.
+fn checked(id: &str, verdict: Result<f32>) {
+    jobs(|j| {
+        if let Some(f) = j.fetches.get_mut(id) {
+            match &verdict {
+                Ok(score) => (f.view.state, f.view.score) = (Fetching::Passed, Some(*score)),
+                Err(e) => (f.view.state, f.view.why, f.view.failure) = (Fetching::Refused, Some(format!("{e:#}")), Some(super::turn::class(e))),
+            }
+        }
+    });
+    tell(id);
+}
+
+/// A fetch whose check could not be asked (AcoustID away, or paused: no verdict) checked again on its staged file, nothing fetched
+/// again (TN.7: the bulk intake's track held at its check). Whether there was one to check.
+pub fn check_again(id: &str) -> bool {
+    check_again_with(id, |file, track| async move { gate(&file, &track).await })
+}
+
+/// [`check_again`], the file gated by `gate` (the tests' stands in).
+pub(crate) fn check_again_with<G, Fut>(id: &str, gate: G) -> bool
+where
+    G: FnOnce(PathBuf, ReleaseTrack) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<f32>> + Send + 'static,
+{
+    use super::turn::Failure;
+    let unanswered = |f: &FetchJob| f.view.state == Fetching::Refused && matches!(f.view.failure, Some(Failure::Away(_) | Failure::Paused { .. }));
+    let again = jobs(|j| {
+        let f = j.fetches.get_mut(id).filter(|f| unanswered(f))?;
+        let staged = f.staged.clone().filter(|p| p.exists())?;
+        (f.view.state, f.view.why, f.view.failure) = (Fetching::Checking, None, None);
+        Some((staged, f.wanted.track.clone()))
+    });
+    let Some((staged, track)) = again else { return false };
+    tell(id);
+    let job = id.to_string();
+    crate::run::spawn(async move { checked(&job, gate(staged, track).await) });
+    true
+}
+
+/// Whether a fetch's file is staged: fetched whole and moved out of slskd's folder, its check begun.
+pub fn staged(id: &str) -> bool {
+    jobs(|j| j.fetches.get(id).and_then(|f| f.staged.as_deref()).is_some_and(Path::exists))
 }
 
 /// A fetch's state as it changes, for the live channel (`fetch`: its id with its state).
@@ -671,7 +747,7 @@ async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid:
 pub use cratarr_gate::app::track_fetch_turn::{NotAsked, Unfit};
 
 /// [`gate`], asking `lookup` what AcoustID knows of the file (the tests' stands in for AcoustID).
-async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
+pub(crate) async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
     F: FnOnce(crate::acoustid::Print) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
@@ -698,7 +774,7 @@ where
     if track.recording.is_empty() {
         return Ok(1.0);
     }
-    let found = lookup(print).await.map_err(|e| NotAsked(format!("{e:#}")))?;
+    let found = lookup(print).await.map_err(NotAsked::of)?;
     // AcoustID knowing nothing of the file (X3: a small release with no fingerprints) is judged as with no recording, by its titles
     // and lengths, which its folder was found by; knowing it as another recording refuses it.
     if !found.iter().any(|f| !f.recordings.is_empty()) {
@@ -906,23 +982,12 @@ pub async fn fetch_file(album: &str, recording: &str, replace: Option<String>, r
     let id = new_id();
     let to = staging.join(&id).join(from.file_name().context("no file name")?);
     jobs(|j| {
-        let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None, no_verdict: false };
+        let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None, failure: None };
         j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view, staged: Some(to.clone()) });
     });
     tell(&id);
     let job = id.clone();
-    crate::run::spawn(async move {
-        let verdict = take(&from, &to, &wanted.track, looked_up).await;
-        jobs(|j| {
-            if let Some(f) = j.fetches.get_mut(&job) {
-                match &verdict {
-                    Ok(score) => (f.view.state, f.view.score) = (Fetching::Passed, Some(*score)),
-                    Err(e) => (f.view.state, f.view.why) = (Fetching::Refused, Some(format!("{e:#}"))),
-                }
-            }
-        });
-        tell(&job);
-    });
+    crate::run::spawn(async move { checked(&job, take(&from, &to, &wanted.track, looked_up).await) });
     Ok(id)
 }
 

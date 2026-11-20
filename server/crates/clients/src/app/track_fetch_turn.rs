@@ -2,9 +2,21 @@
 
 /// The gate stopped short of a verdict: AcoustID could not be asked (away, over its limit, its key gone or never set).
 /// That says nothing of the file, so it is no refusal: what fetched the file on its own must not treat it as one
-/// (`soulseek::check`, `track_intake::fetch`). Reads as the failure it carries.
+/// (`soulseek::check`, `track_intake::fetch`). Reads as the failure it carries; where AcoustID asked to be left alone, until when
+/// (epoch s), so its class is that pause (TN.1).
 #[derive(Debug)]
-pub struct NotAsked(pub String);
+pub struct NotAsked(pub String, pub Option<i64>);
+
+impl NotAsked {
+    /// AcoustID not answering `e`: in its words, its pause's deadline kept where it was one.
+    pub fn of(e: anyhow::Error) -> Self {
+        let until = match super::turn::class(&e) {
+            super::turn::Failure::Paused { until } => Some(until),
+            _ => None,
+        };
+        NotAsked(format!("{e:#}"), until)
+    }
+}
 
 impl std::fmt::Display for NotAsked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

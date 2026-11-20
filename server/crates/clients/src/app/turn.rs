@@ -517,7 +517,11 @@ fn class_of(cause: &(dyn std::error::Error + 'static), now: i64) -> Option<Failu
     if cause.is::<crate::slskd::NotKnown>() {
         return Some(Failure::NotFound);
     }
-    if cause.is::<crate::slskd::Away>() || cause.is::<super::track_fetch_turn::NotAsked>() || cause.is::<super::references_turn::SwitchedOff>() {
+    // The gate's AcoustID not asked: its pause where AcoustID asked to be left alone, else away.
+    if let Some(n) = cause.downcast_ref::<super::track_fetch_turn::NotAsked>() {
+        return Some(n.1.map_or_else(|| Failure::Away(cause.to_string()), |until| Failure::Paused { until }));
+    }
+    if cause.is::<crate::slskd::Away>() || cause.is::<super::references_turn::SwitchedOff>() {
         return away();
     }
     if cause.is::<super::track_fetch_turn::Unfit>() {

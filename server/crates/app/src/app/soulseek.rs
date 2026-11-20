@@ -72,7 +72,7 @@ const READS: u32 = 15;
 /// Between two such reads.
 const READ_AGAIN: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 4 });
 /// A record held for slskd is tried again after this long.
-const SLSKD_AGAIN: i64 = 300;
+pub(super) const SLSKD_AGAIN: i64 = 300;
 /// Fetches failed on Cratarr's own side in a row after which a record holds a day (Y9): its folder is not asked of its user every
 /// five minutes all day.
 const LOCAL_AT_MOST: u32 = 3;
@@ -85,7 +85,7 @@ const ROUND_AT_LEAST: i64 = 15 * 60;
 /// A file's length may be this far from its track's.
 const LENGTH_SLACK_MS: i64 = crate::slskd::LENGTH_SLACK_MS;
 /// A record held at its check is checked again after this long: each time decodes a file to ask AcoustID about it.
-const CHECK_AGAIN: i64 = 15 * 60;
+pub(super) const CHECK_AGAIN: i64 = 15 * 60;
 /// A record whose placing failed is placed again from its checked files after this long (X4).
 const PLACE_AGAIN: i64 = 15 * 60;
 /// Placings failed in a row after which a record holds a day (Y12): one that fails for good is not tried every fifteen minutes.
@@ -3202,7 +3202,7 @@ mod tests {
     }
 
     fn acoustid_away() -> anyhow::Error {
-        NotAsked("AcoustID could not be reached".into()).into()
+        NotAsked("AcoustID could not be reached".into(), None).into()
     }
 
     #[tokio::test]
