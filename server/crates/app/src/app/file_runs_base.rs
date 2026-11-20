@@ -1,6 +1,8 @@
 //! `file_runs`' proposal and its field compare, in base: what a writer below Incoming (a word's, the tempo's) proposes
 //! for the one way to change the library's files (decision 0092). `file_runs` re-exports them.
 
+use serde::Serialize;
+
 use crate::journal::{FileWrite, RunFailed, RunRecord};
 
 /// What a writer proposes: its kind and title, its records, each file's change.
@@ -27,4 +29,24 @@ pub fn flat(values: &[String]) -> Vec<String> {
             _ => v,
         })
         .collect()
+}
+
+/// A run's status, the same for every writer (0092).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Status {
+    pub id: String,
+    pub what: String,
+    pub title: String,
+    /// waiting, writing, adding (an album action's files moved, its library reading it) or done.
+    pub state: &'static str,
+    /// Records done of all.
+    pub done: usize,
+    pub of: usize,
+    pub failed: Vec<RunFailed>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undo: Option<String>,
+    pub undone: bool,
+    pub albums: usize,
 }

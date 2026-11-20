@@ -28,7 +28,7 @@ use serde::Serialize;
 
 use crate::journal::{EventId, FileRun, FileWrite, Journal, RunFailed, RunRecord};
 
-pub use super::file_runs_base::{Proposal, flat};
+pub use super::file_runs_base::{Proposal, Status, flat};
 
 /// A record's stamp: what the sheet showed of it (each file's place and fields before and after), so an apply can tell
 /// whether that is still what would be written.
@@ -122,26 +122,6 @@ pub struct FieldOption {
     pub kind: Option<&'static str>,
     pub from: String,
     pub certainty: &'static str,
-}
-
-/// A run's status, the same for every writer (0092).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Status {
-    pub id: String,
-    pub what: String,
-    pub title: String,
-    /// waiting, writing, adding (an album action's files moved, its library reading it) or done.
-    pub state: &'static str,
-    /// Records done of all.
-    pub done: usize,
-    pub of: usize,
-    pub failed: Vec<RunFailed>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub undo: Option<String>,
-    pub undone: bool,
-    pub albums: usize,
 }
 
 /// A record's files' state (in `source`, beside the `Album` that holds it).
