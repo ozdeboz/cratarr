@@ -388,7 +388,22 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
     let (slskd, folder) = slskd().await?;
     let s = served()?;
     let staging = Path::new(s.data_dir.as_deref().context("Cratarr's data folder is needed")?).join("track-fetch");
+    fetch_through(&slskd, folder, staging, wanted, c).await
+}
+
+/// Tests elsewhere: a single file of `user`'s fetched as [`fetch`] fetches one (single-track fetch, and the bulk queue through it),
+/// through this slskd; the fetch's id.
+#[cfg(test)]
+pub(crate) async fn fetch_through_for_tests(slskd: &Slskd, folder: PathBuf, staging: PathBuf, user: &str, file: crate::slskd::Offered) -> Result<String> {
+    let wanted = Wanted { album: "al-1".into(), track: track_for(1, 1, "Slack Water", "Glass Harbour", None, ""), replace: None };
+    let c = Candidate { id: 0, user: user.into(), file: file.filename.clone(), format: "flac".into(), lossless: true, bitrate: None, sample_rate: None, bit_depth: None, size: file.size, length_ms: None, free_slot: true, queue: 0, speed: 1, offered: file };
+    fetch_through(slskd, folder, staging, wanted, c).await
+}
+
+/// [`fetch`]'s fetch of candidate `c` through this slskd (its POST in slskd's lane), followed into `staging` and gated.
+async fn fetch_through(slskd: &Slskd, folder: PathBuf, staging: PathBuf, wanted: Wanted, c: Candidate) -> Result<String> {
     tidy(&staging);
+    let slskd = slskd.clone();
     let batch = slskd.fetch(&c.user, &c.offered).await?;
     let id = new_id();
     jobs(|j| {
