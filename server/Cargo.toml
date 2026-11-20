@@ -86,6 +86,7 @@ flate2 = "1"
 cratarr-core = { path = "crates/core" }
 cratarr-media = { path = "crates/media" }
 cratarr-store = { path = "crates/store" }
+cratarr-runner = { path = "crates/runner" }
 cratarr-clients = { path = "crates/clients" }
 cratarr-gate = { path = "crates/gate" }
 cratarr-served = { path = "crates/served" }
@@ -131,6 +132,7 @@ cratarr-search = { workspace = true, features = ["test-support"] }
 cratarr-gate = { workspace = true, features = ["test-support"] }
 cratarr-clients = { workspace = true, features = ["test-support"] }
 cratarr-store = { workspace = true, features = ["test-support"] }
+cratarr-runner = { workspace = true, features = ["test-support"] }
 cratarr-media = { workspace = true, features = ["test-support"] }
 cratarr-core = { workspace = true, features = ["test-support"] }
 # The page's types from the server's (generated, web/src/lib/generated): written by the tests, so a release build

@@ -11,8 +11,7 @@ mod turn {
     use reqwest::header::HeaderMap;
 
     use crate::app::turn::fakes::{self, headers, kind, print};
-    use crate::app::turn::{ACOUSTID, DISCOGS, Failure, GITHUB, MUSICBRAINZ, Paused, Pinned, Refused, Stuck, Turn, class, held_choice};
-    use crate::userdata::UserData;
+    use crate::app::turn::{ACOUSTID, DISCOGS, Failure, GITHUB, MUSICBRAINZ, Paused, Pinned, Refused, Stuck, Turn, class};
 
     /// A slskd at a local address whose batches answer `status`, Retry-After `said`, `body`; its own state `state`.
     async fn slskd(status: u16, said: Option<&'static str>, body: serde_json::Value, state: serde_json::Value) -> crate::slskd::Slskd {
@@ -255,7 +254,7 @@ mod turn {
         assert_eq!((musicbrainz.paused_until(), discogs.paused_until()), (None, Some(t0 + 300)));
 
         // Bandcamp switched off: away, its bot check's hold kept; switched on again, lifted through its one turn (V8).
-        let ud = UserData::open(None).unwrap();
+        let ud = crate::journal::Journal::open(None).unwrap();
         let was_held = crate::bandcamp::TURN.as_held();
         crate::bandcamp::hold_in(Some(&ud));
         let was = set_for_tests(BANDCAMP_ON, false);
@@ -264,12 +263,12 @@ mod turn {
         let held_off = crate::bandcamp::held_until(t0);
         set_for_tests(BANDCAMP_ON, true);
         crate::bandcamp::switched(Some(&ud), true);
-        let lifted = (crate::bandcamp::held_until(t0), crate::bandcamp::TURN.paused_until(), ud.import_choice(&held_choice("bandcamp")).unwrap());
+        let lifted = (crate::bandcamp::held_until(t0), crate::bandcamp::TURN.paused_until(), ud.pause("bandcamp").unwrap());
         set_for_tests(BANDCAMP_ON, was);
         crate::bandcamp::TURN.put_back(was_held);
         assert!(off.is_err_and(|e| e.to_string() == "Bandcamp is switched off" && no_pause(&e)), "switched off: away, no deadline");
         assert_eq!(held_off, Some(t0 + 86_400), "switched off, its hold stays");
-        assert_eq!(lifted, (None, None, Some(String::new())), "switched on: lifted in memory and in the user data");
+        assert_eq!(lifted, (None, None, None), "switched on: lifted in memory and in its row (RN's R4)");
         assert_eq!(discogs.paused_until(), Some(t0 + 300), "another source's pause kept");
 
         // slskd switched off and on again: Discogs' pause as it was, nothing asked of it before t0+300.

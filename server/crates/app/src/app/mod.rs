@@ -128,7 +128,11 @@ impl App {
         let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming, playlists_db, Some(step_017::run)).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
-        let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);
+        // The server's, opened at its start (`main`); a test's own otherwise.
+        let journal = match crate::journal::instance() {
+            Some(j) => j,
+            None => Arc::new(crate::journal::Journal::open(journal_file.as_deref())?),
+        };
         let sync_state = crate::sync_state::SyncState::open(sync_file.as_deref())?;
         let sync = Arc::new(sync::SyncService::new(library.clone(), sync_state, journal.clone()));
         sync.listen();

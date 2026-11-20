@@ -7450,7 +7450,8 @@ async fn background_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::V
 async fn bandcamp_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
     crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         crate::app::switches::set_on(crate::app::switches::BANDCAMP, b.enabled)?;
-        crate::bandcamp::switched(crate::serve::instance().as_deref().map(|s| &*s.userdata), b.enabled);
+        // Its hold lifted where its turn keeps it: the journal's row (RN's R4).
+        crate::bandcamp::switched(None, b.enabled);
         Ok(())
     })
     .await

@@ -244,7 +244,12 @@ async fn main() -> Result<()> {
     serve::set_instance(served.clone());
     // Every outside service's hold kept across a restart taken up before anything is asked (OQ-T3), Bandcamp's day after its bot
     // check among them (Y8); their holds kept from now on.
-    app::turn::keep_all(&served.userdata, &[&app::discogs::TURN, &app::lastfm::FM]);
+    // The journal's file holds them (RN's R4), with the saved queues and the runner's jobs: opened here, once, for the app too.
+    let journal = std::sync::Arc::new(
+        journal::Journal::open(data_dir.as_deref().map(|d| std::path::Path::new(d).join("journal.sqlite")).as_deref()).context("cannot open the journal")?,
+    );
+    journal::set_instance(journal.clone());
+    app::turn::keep_all(&journal, &[&app::discogs::TURN, &app::lastfm::FM]);
     // The environment's server settings, with what Settings saved over them (0.9.8).
     let runtime = app::runtime::start(app::runtime::Seed::from_env(&env), Some(&served.userdata), &cfg.bind);
     let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), runtime.snapcast_host.clone());

@@ -484,6 +484,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "cratarr-rules",
+ "cratarr-runner",
  "cratarr-served",
  "getrandom 0.3.4",
  "image",
@@ -732,6 +733,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratarr-runner"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "cratarr-store",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cratarr-search"
 version = "0.17.0"
 dependencies = [
@@ -792,6 +805,7 @@ dependencies = [
  "cratarr-records",
  "cratarr-requests",
  "cratarr-rules",
+ "cratarr-runner",
  "cratarr-search",
  "cratarr-served",
  "cratarr-store",

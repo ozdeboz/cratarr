@@ -7495,16 +7495,16 @@ pub mod tests {
     // queues as they were kept. slskd has no pause of its own in 0.17 (round 1.3's lane): where TN held slskd by its 429, slskd is
     // away (503) for that while instead (`FakeSlskd::away_until`), nothing of it kept across a restart (SK2.6)
 
-    /// TN.9's world for one start, slskd at `url`, the server's holds kept in its user data (OQ-T3). Before the stop, at t0: slskd
+    /// TN.9's world for one start, slskd at `url`, the server's holds kept in the journal's rows (OQ-T3, RN's R4). Before the stop, at t0: slskd
     /// away until t0+300 (503 to all it is asked; no hold of its own, so none kept), and AcoustID's code 14 to ss-6's first file at its
     /// check (Retry-After 600): ss-6 held at its check to t0+600, b6's files in slskd's folder; ss-w waiting, its round's wait over at
     /// t0+100. The server stops at t0+60 (b6's folder emptied meanwhile where `emptied`) and starts at t0+120, AcoustID's turn made anew
     /// taking up its hold.
     async fn restart_mid_pause(name: &str, url: &str, emptied: bool) {
-        use crate::app::turn::{ACOUSTID, class, held_choice};
+        use crate::app::turn::{ACOUSTID, class};
         let (_pinned, clock) = Clock::at_t0();
-        let ud = Arc::new(crate::userdata::UserData::open(None).unwrap());
-        let kept_until = |source: &str| ud.import_choice(&held_choice(source)).unwrap().and_then(|v| v.parse::<i64>().ok());
+        let ud = Arc::new(crate::journal::Journal::open(None).unwrap());
+        let kept_until = |source: &str| ud.pause(source).unwrap().map(|p| p.until);
         let items = vec![
             Item { percent: 100.0, ..ticked(tn_item("ss-6", 9406, "Two Rooms", State::Checking), &["peer-a"], Some("b6")) },
             Item { misses: 1, due: T0 + 100, why: Some("No folder holds every track of its release".into()), ..tn_item("ss-w", 9408, "Spring Tide", State::Waiting) },
@@ -7523,7 +7523,7 @@ pub mod tests {
         });
         let heard = Arc::new(FakeAcoustid { limits: Mutex::new(VecDeque::from([true])), said: Some(600), ..Default::default() });
         let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
-        // The turns as a start makes them: AcoustID's keeping its hold in the user data, as `turn::keep_all` keeps the server's own;
+        // The turns as a start makes them: AcoustID's keeping its hold in its row, as `turn::keep_all` keeps the server's own;
         // slskd has none (round 1.3's lane).
         let turns = || {
             let acoustid = Arc::new(Turn::new(ACOUSTID));
