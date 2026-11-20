@@ -290,7 +290,7 @@ async fn kept_or_find_by(served: &std::sync::Arc<crate::serve::Serve>, albums: V
         // lacking ids) asks behind the pages, as the background reads do, and the pause holds it (U8). One album asked, not one left
         // of many by the matches kept (T13.4): a finding whose other albums are matched already is still the background's.
         let page = albums.len() == 1;
-        let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
+        let _ = crate::runner::spawn(KIND, &account, false, move |h| async move {
             let matching = match_each(h, due, ud, served, finder);
             if page { matching.await } else { super::musicbrainz::behind(matching).await }
         });
@@ -300,7 +300,7 @@ async fn kept_or_find_by(served: &std::sync::Arc<crate::serve::Serve>, albums: V
 
 /// The matching task's work (`kept_or_find_by`): each album's match found by `finder` and kept, with the release's own list in its
 /// references, as the task's steps say.
-async fn match_each(h: std::sync::Arc<super::tasks::Handle>, due: Vec<String>, ud: std::sync::Arc<crate::userdata::UserData>, served: std::sync::Arc<crate::serve::Serve>, finder: Finder) -> Result<()> {
+async fn match_each(h: std::sync::Arc<crate::runner::Handle>, due: Vec<String>, ud: std::sync::Arc<crate::userdata::UserData>, served: std::sync::Arc<crate::serve::Serve>, finder: Finder) -> Result<()> {
     let http = super::discover::http()?;
     let total = due.len() as u64;
     for (i, album) in due.into_iter().enumerate() {
@@ -403,7 +403,7 @@ pub fn fix_of(served: &crate::serve::Serve, finding: &str, album: &str, m: &Matc
 
 /// Whether the account's matching runs now.
 pub fn running(account: &str) -> bool {
-    super::tasks::tasks().of(account).iter().any(|t| t.kind == KIND && t.finished.is_none())
+    crate::runner::runner().of(account).iter().any(|t| t.kind == KIND && t.finished.is_none())
 }
 
 #[cfg(test)]

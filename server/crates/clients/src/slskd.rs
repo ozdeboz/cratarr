@@ -191,7 +191,7 @@ pub struct Slskd {
 }
 
 /// One file offered in answer to a search.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Offered {
     pub filename: String,
@@ -587,7 +587,7 @@ pub fn base_name(filename: &str) -> &str {
 }
 
 /// One file as the page is offered it.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
     pub id: usize,

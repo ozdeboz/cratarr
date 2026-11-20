@@ -3,9 +3,11 @@
 //! as a file in the data folder for a month and served from there. The Cover Art Archive took about 3 s a cover (two
 //! redirects to archive.org) every time; a Bandcamp cover took a read of its album page, one page a second. A look's
 //! covers are fetched ahead after it, one at a time.
+//!
+//! Three covers are fetched at once (the runner's `COVERS`, RN's RL3), each one's bytes held meanwhile; the one a page asks for goes
+//! before a look's next. A look's covers ahead are one job of Cratarr's own on the runner (`covers:ahead`), merged when asked twice.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -21,10 +23,8 @@ const FORGET: Duration = Duration::from_secs(60 * 86_400);
 const NONE_KEEP: Duration = Duration::from_secs(86_400);
 /// The most of a cover's bytes read (the Spotify picture relay's too, Y11).
 pub const MOST_BYTES: usize = 5 * 1024 * 1024;
-/// Covers fetched at once (each one's bytes held meanwhile).
-static FETCHING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
-/// A look's covers fetched ahead by one task at a time.
-static WARMING: AtomicBool = AtomicBool::new(false);
+/// A look's covers fetched ahead: one job at a time (its kind and key on the runner).
+pub const AHEAD: &str = "covers:ahead";
 
 /// Whose cover: in `catalogue::records`, beside the requests' cover check that reads it (SPLIT-PLAN P7).
 pub use crate::catalogue::records::Of;
@@ -145,7 +145,7 @@ where
     }
     let mut failed = false;
     for p in pictures {
-        let _turn = FETCHING.acquire().await?;
+        let _turn = crate::runner::resource::COVERS.take(crate::runner::Priority::Asked).await;
         match fetch(p.clone()).await {
             Ok(Some(b)) if !b.is_empty() => {
                 if let Some(f) = file.clone() {
@@ -235,14 +235,19 @@ fn kept(file: &std::path::Path) -> Option<Vec<u8>> {
     (age < KEEP).then(|| std::fs::read(file).ok()).flatten().filter(|b| !b.is_empty())
 }
 
-/// An album's cover and its type: the kept one, else fetched and kept. `None`: it has none.
+/// An album's cover and its type, as a page asks for it: the kept one, else fetched and kept. `None`: it has none.
 pub async fn cover(of: &Of) -> Result<Option<(Vec<u8>, &'static str)>> {
+    cover_as(of, crate::runner::Priority::Asked).await
+}
+
+/// `cover`, its fetch taking its turn as `prio`: a page's before a look's next.
+async fn cover_as(of: &Of, prio: crate::runner::Priority) -> Result<Option<(Vec<u8>, &'static str)>> {
     let file = file_of(of).context("Cratarr's data folder is needed")?;
     let f = file.clone();
     if let Some(b) = crate::run::spawn_blocking(move || kept(&f)).await? {
         return Ok(Some(sniffed(b)));
     }
-    let _turn = FETCHING.acquire().await?;
+    let _turn = crate::runner::resource::COVERS.take(prio).await;
     // Fetched by another meanwhile.
     let f = file.clone();
     if let Some(b) = crate::run::spawn_blocking(move || kept(&f)).await? {
@@ -326,27 +331,29 @@ pub async fn image(http: &reqwest::Client, url: &str, most: usize) -> Result<Opt
     Ok(Some(b))
 }
 
-/// A look's covers fetched ahead, one at a time, in the background (one such task at a time; the next look's does the
-/// rest); the covers not asked for in a long while taken away first.
+/// A look's covers fetched ahead, one at a time, in the background: one job of Cratarr's own (`AHEAD`; asked again while it runs,
+/// the one running goes on, the next look's does the rest); the covers not asked for in a long while taken away first.
 pub fn warm(covers: Vec<String>) {
     let wanted: Vec<Of> = covers.iter().filter_map(|c| Of::of_address(c)).collect();
-    if wanted.is_empty() || WARMING.swap(true, Ordering::SeqCst) {
+    if wanted.is_empty() {
         return;
     }
+    let Ok(job) = crate::runner::runner().begin_keyed(AHEAD, AHEAD, None) else { return };
     crate::run::spawn(async move {
         if let Some(dir) = crate::serve::instance().and_then(|s| s.data_dir.clone()).map(|d| d.join(FOLDER)) {
             let _ = crate::run::spawn_blocking(move || forget_old(&dir)).await;
         }
         let mut fetched = 0;
-        for of in &wanted {
-            match cover(of).await {
+        for (n, of) in wanted.iter().enumerate() {
+            job.step("Covers ahead", n as u64, Some(wanted.len() as u64));
+            match cover_as(of, crate::runner::Priority::Background).await {
                 Ok(Some(_)) => fetched += 1,
                 Ok(None) => {}
                 Err(e) => tracing::debug!("covers: {of:?} not kept: {e:#}"),
             }
         }
         tracing::info!("covers: {fetched} of a look's {} kept", wanted.len());
-        WARMING.store(false, Ordering::SeqCst);
+        job.finish(Ok::<_, anyhow::Error>(fetched));
     });
 }
 

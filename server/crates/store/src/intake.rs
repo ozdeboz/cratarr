@@ -199,6 +199,12 @@ impl Journal {
     pub fn check_count(&self, item: &str) -> Result<(u32, u32)> {
         self.write(|tx| tx.check_count(item))
     }
+
+    /// Tests: every row its connection has changed so far (DS4: a percent writes nothing).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn total_changes(&self) -> u64 {
+        self.db().total_changes()
+    }
 }
 
 impl Tx<'_> {

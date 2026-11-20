@@ -358,6 +358,109 @@ mod tests {
         Box::leak(Box::new(Runner::new()))
     }
 
+    /// Every source file of the server's crates and its binary, but the runner's own, with its test modules cut off (a test's own
+    /// limit is no work's): (path from the server's folder, its lines).
+    fn sources() -> Vec<(String, Vec<String>)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let (crates, server) = (here.parent().unwrap(), here.parent().unwrap().parent().unwrap());
+        let mut files = Vec::new();
+        walk(crates, &mut files);
+        walk(&server.join("src"), &mut files);
+        files
+            .into_iter()
+            .filter(|f| !f.starts_with(here) && !f.to_string_lossy().contains("tests"))
+            .map(|f| {
+                let lines: Vec<String> = std::fs::read_to_string(&f).unwrap().lines().map(str::to_string).collect();
+                // A test module (`mod tests`, `pub mod tests`, `pub(crate) mod tests`) and all after it are the tests'.
+                let cut = lines
+                    .iter()
+                    .position(|l| ["mod tests", "pub mod tests", "pub(crate) mod tests"].iter().any(|m| l.trim_start().starts_with(m)))
+                    .unwrap_or(lines.len());
+                (f.strip_prefix(server).unwrap().to_string_lossy().replace('\\', "/"), lines[..cut].to_vec())
+            })
+            .collect()
+    }
+
+    /// RL1's scan: no decode turn taken outside the runner. The one decode is the runner's `DECODE`; no `HEAVY` is left.
+    #[test]
+    fn no_decode_turn_outside_the_runner() {
+        let mut found = Vec::new();
+        for (file, lines) in sources() {
+            for (n, l) in lines.iter().enumerate() {
+                if l.contains(&["HEA", "VY"].concat()) || l.contains(&["heavy", "_base"].concat()) {
+                    found.push(format!("{file}:{}: {}", n + 1, l.trim()));
+                }
+            }
+        }
+        assert!(found.is_empty(), "a decode turn outside the runner: {found:#?}");
+    }
+
+    /// RL4: every semaphore, service turn or lock that limits work, by where it is: the runner's resources (here), the services'
+    /// turns (C.8: the runner's resource for each outside service's calls, kept with its client), and the others named with their
+    /// owner and run. A new limit outside the inventory fails it; none is left beside the runner's for decoding, Discogs or covers.
+    #[test]
+    fn every_work_limit_is_the_runners_or_named() {
+        const TURNS: &str = "a service's turn (TN): the runner's resource for its calls (C.8)";
+        let inventory: [(&str, &str, &str); 20] = [
+            ("crates/clients/src/acoustid.rs", "TURN", TURNS),
+            ("crates/clients/src/acoustid.rs", "FAKE", "AcoustID's stand-in turn (test support)"),
+            ("crates/clients/src/app/musicbrainz.rs", "TURN", TURNS),
+            ("crates/clients/src/bandcamp.rs", "TURN", TURNS),
+            ("crates/records/src/app/discogs.rs", "TURN", TURNS),
+            ("crates/listening/src/app/lastfm.rs", "FM", TURNS),
+            ("crates/base/src/opus_copy_base.rs", "COPIES", "Opus copies, two at once (the player's; not RN's)"),
+            ("crates/incoming/src/app/analysis_pass.rs", "WINDS", "tape winding's own turns (decision 0074; not RN's)"),
+            ("crates/incoming/src/app/file_runs.rs", "LOCK", "the file gate's one lock (GF)"),
+            ("crates/media/src/covers.rs", "EMBEDDED", "a file's own pictures read, two at once (media)"),
+            ("crates/clients/src/jellyfin.rs", "turns", "Jellyfin's questions in flight (its client)"),
+            ("crates/served/src/serve/ldap.rs", "hashing", "one password hashed at a time (sign-in)"),
+            ("crates/served/src/serve/mod.rs", "resizing", "one cover resized at a time (OpenSubsonic)"),
+            ("crates/playing/src/app/device_covers.rs", "gate", "a device's covers sent at once (the player's)"),
+            ("crates/records/src/app/discover.rs", "TURNS", "Discover's fair turn per source"),
+            ("crates/playlists/src/app/playlists/ops.rs", "ONE_AT_A_TIME", "playlists' writes one at a time"),
+            ("crates/requests/src/app/retention.rs", "ONE", "retention's pass one at a time"),
+            ("crates/requests/src/app/room.rs", "ONE", "the disks' free space read one at a time (AL03)"),
+            ("crates/records/src/app/around_records.rs", "CHANGING", "around records' changes one at a time"),
+            ("crates/gate/src/moves.rs", "PROBING", "one mount probed at a time"),
+        ];
+        let limit = |l: &str| {
+            l.contains("Semaphore::new(") || l.contains("Semaphore::const_new(") || l.contains("Turn::new(") || (l.contains("static ") && l.contains("Mutex<()>"))
+        };
+        let mut unnamed = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (file, lines) in sources() {
+            for (n, l) in lines.iter().enumerate() {
+                if !limit(l) || l.trim_start().starts_with("//") {
+                    continue;
+                }
+                // Its name: the static's, else the field's or the binding's it is made for, looked for on its line and the few above.
+                let near = lines[n.saturating_sub(3)..=n].join(" ");
+                match inventory.iter().find(|(f, name, _)| *f == file && near.contains(name)) {
+                    Some(i) => {
+                        seen.insert((i.0, i.1));
+                    }
+                    None => unnamed.push(format!("{file}:{}: {}", n + 1, l.trim())),
+                }
+            }
+        }
+        assert!(unnamed.is_empty(), "a limit neither the runner's nor named: {unnamed:#?}");
+        for (f, name, why) in &inventory {
+            assert!(!why.contains("decod") && !why.contains("Discogs") || why == &TURNS, "{f} {name}: no private limit for decoding or Discogs");
+        }
+        assert!(!seen.iter().any(|(f, _)| f.contains("cover_cache")), "no private limit for covers beside the runner's");
+        assert_eq!((DECODE.budget, COVERS.budget), (1, 3), "the runner's own: one decode, three covers");
+    }
+
     /// RL1: four decoders ask the one decode at once: the pass (catching up, a job), a page's waveform (asked for, no job of its
     /// own), a Soulseek check (a job) and the intake card's hearing (asked for, a job). Exactly one decodes at any moment; the
     /// page's ask goes before the pass's next file and the pass goes on after; Activity shows the one decoding and the others

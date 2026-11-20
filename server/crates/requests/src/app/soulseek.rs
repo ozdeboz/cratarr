@@ -2401,7 +2401,7 @@ const FILES_GONE: &str = "Its checked files were gone: fetched again";
 
 /// One record checked and placed (SK1.3): a placing a stop cut after its rename taken as placed (Y10); checked files whose placing
 /// failed placed again from them (X4); one held at its check whose files went meanwhile fetched again (X4, TN.9); else its downloaded
-/// files gated one at a time, each on the one decode turn (`HEAVY`, the light rule), then placed. A file that fails sets its folder
+/// files gated one at a time, each on the one decode turn (the runner's `DECODE`), then placed. A file that fails sets its folder
 /// aside and fails its user, the next folder after. One whose item left the list meanwhile (SK1.6) is checked no further, and placed
 /// and set aside nowhere.
 async fn check_one<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, places: &Places, gate: &G)
@@ -2452,7 +2452,18 @@ where
     let release: Vec<ReleaseTrack> =
         judged_by(&it, &f).iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect();
     let still = || kept(|k| k.items.iter().any(|i| i.id == id && i.batch.as_deref() == Some(batch.as_str())));
-    let checked = match check_while(&dir, &f, &release, gate, &still).await {
+    // The check a job of Cratarr's own (AC3): "Checking <artist> – <title> · 4 of 9 files", its files counted as each is heard.
+    let job = crate::runner::runner().begin_keyed(CHECK, id, None).ok();
+    let doing = format!("Checking {} – {}", it.record.artist, it.record.album);
+    if let Some(j) = &job {
+        j.detail(None, Some("files"));
+        j.step(&doing, 0, Some(f.files.len() as u64));
+    }
+    let checked = check_while_as(&dir, &f, &release, gate, &still, job.as_ref().map(|j| (j, doing.as_str()))).await;
+    if let Some(j) = job {
+        j.finish(Ok::<_, anyhow::Error>(()));
+    }
+    let checked = match checked {
         Ok(Some(verdict)) => verdict,
         Ok(None) => {
             std::fs::remove_dir_all(&dir).ok();
@@ -2782,12 +2793,25 @@ fn local_failure(t: &crate::slskd::Transfer) -> bool {
 /// What the check of a fetched folder found: its files in the release's order, or why each that failed did (by its name).
 type Verdict = std::result::Result<Vec<PathBuf>, BTreeMap<String, String>>;
 
-/// Every file of the fetched folder gated against its track (by `gate`), one at a time, each on the one decode turn (`HEAVY`, taken
+/// Every file of the fetched folder gated against its track (by `gate`), one at a time, each on the one decode turn (the runner's `DECODE`, taken
 /// for the file and let go after: the light rule): the verdict, or, where AcoustID could not be asked and no file has failed so far,
 /// none: why (`NotAsked`, AcoustID's deadline with it where it asked to be left alone), as nothing is known yet. `still` is asked
 /// before each file and after the last: where it says no (its item left the list, SK1.6), the check ends there, with no verdict
 /// (`None`).
+#[cfg(test)]
 async fn check_while<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G, still: &(dyn Fn() -> bool + Sync)) -> Result<Option<Verdict>>
+where
+    G: Fn(PathBuf, ReleaseTrack) -> Fut,
+    Fut: std::future::Future<Output = Result<f32>>,
+{
+    check_while_as(dir, f, release, gate, still, None).await
+}
+
+/// A check's job kind on the runner (AC3).
+pub const CHECK: &str = "soulseek:check";
+
+/// `check_while`, its job told each file heard (its step: what it does, and how many files of how many) and waiting on the one decode.
+async fn check_while_as<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G, still: &(dyn Fn() -> bool + Sync), job: Option<(&crate::runner::Handle, &str)>) -> Result<Option<Verdict>>
 where
     G: Fn(PathBuf, ReleaseTrack) -> Fut,
     Fut: std::future::Future<Output = Result<f32>>,
@@ -2811,9 +2835,12 @@ where
             why.insert(name, "It is not in slskd's folder".into());
             continue;
         };
-        let turn = super::heavy_base::HEAVY.acquire().await.expect("the turn is never closed");
+        let turn = crate::runner::resource::DECODE.take_for(crate::runner::Priority::Background, job.map(|j| j.0), None).await;
         let heard = gate(path.clone(), track.clone()).await;
         drop(turn);
+        if let Some((j, doing)) = job {
+            j.step(doing, (out.len() + why.len() + 1) as u64, Some(f.files.len() as u64));
+        }
         match heard {
             Ok(_) => out.push(path),
             // None after it is asked about: AcoustID would not answer them either, and each would be decoded whole to find
@@ -3383,6 +3410,44 @@ pub mod tests {
         // The other way round nothing has failed yet: no verdict, though a file after it might.
         let second = |file: PathBuf, _| std::future::ready(if file.ends_with("01 One.flac") { Err(acoustid_away()) } else { Err(anyhow::anyhow!("2 frames would not decode")) });
         assert_eq!(check(&dir, &f, &release, &second).await.unwrap_err().to_string(), "AcoustID could not be reached");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// AC3: a check of "Glass Harbour – Tide Tables" is a job on the runner: at its fifth of nine files Activity reads "Checking
+    /// Glass Harbour – Tide Tables · 4 of 9 files", the files counted as each is heard, one check at a time on the one decode. Never two
+    /// checks running, nor a count that disagrees with the files heard.
+    #[tokio::test]
+    async fn activity_shows_soulseeks_checks_and_placings() {
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-ac3-{}", std::process::id()));
+        let dir = d.join(crate::slskd::FOLDER).join("b-ac3");
+        std::fs::create_dir_all(&dir).unwrap();
+        let names: Vec<String> = (1..=9).map(|n| format!("0{n} Track.flac")).collect();
+        for n in &names {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        let f = Folder { user: "peer-z".into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: names.iter().map(|n| file(&format!(r"d\{n}"), 100)).collect(), unchecked: None };
+        let release: Vec<ReleaseTrack> = (1..=9).map(|n| super::super::track_fetch::track_for(1, n, "Track", "Glass Harbour", None, "r")).collect();
+        let r: &'static crate::runner::Runner = Box::leak(Box::new(crate::runner::Runner::new()));
+        let job = r.begin_keyed(CHECK, "ss-ac3", None).unwrap();
+        let doing = "Checking Glass Harbour – Tide Tables";
+        job.detail(None, Some("files"));
+        job.step(doing, 0, Some(9));
+        assert!(r.begin_keyed(CHECK, "ss-ac3", None).is_err(), "one check of an item at a time");
+        let (heard, at_fifth) = (std::sync::Mutex::new(0usize), std::sync::Mutex::new(None));
+        let gate = |_: PathBuf, _| {
+            let mut n = heard.lock().unwrap();
+            *n += 1;
+            if *n == 5 {
+                *at_fifth.lock().unwrap() = r.rows().iter().find(|x| x.kind == CHECK).map(|x| x.words(&|_| String::new()));
+            }
+            std::future::ready(Ok::<f32, anyhow::Error>(0.9))
+        };
+        let verdict = check_while_as(&dir, &f, &release, &gate, &|| true, Some((&job, doing))).await.unwrap().unwrap();
+        assert_eq!(verdict.map(|v| v.len()).ok(), Some(9));
+        assert_eq!(at_fifth.lock().unwrap().as_deref(), Some("Checking Glass Harbour – Tide Tables · 4 of 9 files"), "the count the files heard give");
+        assert_eq!(r.rows()[0].words(&|_| String::new()), "Checking Glass Harbour – Tide Tables · 9 of 9 files", "the last told before it ends");
+        job.finish(Ok::<_, anyhow::Error>(()));
+        assert!(r.rows().is_empty());
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -6028,7 +6093,7 @@ pub mod tests {
                 Box::pin(async move {
                     let batch = file.parent().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let held = super::super::heavy_base::HEAVY.try_acquire().map(drop).is_err();
+                    let held = crate::runner::resource::DECODE.try_take().is_none();
                     if me.at_once.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
                         me.violations.lock().unwrap().push(format!("two files heard at once: {name}"));
                     }
@@ -6148,7 +6213,7 @@ pub mod tests {
     }
 
     /// SK1.3: checks one at a time, in the order downloads ended (ended together, the list's order), each record placed before the
-    /// next check begins; each file heard on the one decode turn (`HEAVY`): while a test holds it, nothing is heard, and downloads
+    /// next check begins; each file heard on the one decode turn (the runner's `DECODE`): while a test holds it, nothing is heard, and downloads
     /// go on meanwhile.
     #[tokio::test]
     async fn checks_go_one_at_a_time_while_downloads_run() {
@@ -6163,7 +6228,7 @@ pub mod tests {
         let (ours, client) = (ours("ss-sk13-"), slskd.client());
         start_downloads(&ours, &client, &d, &Look::roomy()).await;
         let (b1, b2, b3, b4) = (batch_of(ids[0]), batch_of(ids[1]), batch_of(ids[2]), batch_of(ids[3]));
-        let heavy = super::super::heavy_base::HEAVY.acquire().await.unwrap();
+        let heavy = crate::runner::resource::DECODE.take(crate::runner::Priority::Background).await;
         slskd.release(&b2);
         follow_round(&ours, &client, &d).await;
         tokio::time::sleep(Duration::from_millis(5)).await;

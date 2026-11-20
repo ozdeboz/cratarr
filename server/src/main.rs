@@ -1,4 +1,4 @@
-use cratarr_api::{analysis, api, app, catalogue, config, diagnostics, fixtures, idempotent, mcp, memwatch, run, serve, settings, snapcast, source};
+use cratarr_api::{analysis, api, app, catalogue, config, diagnostics, fixtures, idempotent, mcp, memwatch, run, runner, serve, settings, snapcast, source};
 // What the route sweep's tests (whole_router.rs) name besides.
 #[cfg(test)]
 use cratarr_api::{bandcamp, journal, playlists, search};
@@ -249,6 +249,11 @@ async fn main() -> Result<()> {
         journal::Journal::open(data_dir.as_deref().map(|d| std::path::Path::new(d).join("journal.sqlite")).as_deref()).context("cannot open the journal")?,
     );
     journal::set_instance(journal.clone());
+    // 0.18's step, RN's parts (DI06): 0.17's bulk queue and its kept holds onto the journal's rows, before the turns take the holds up.
+    app::step_018::run(&journal, data_dir.as_deref().map(std::path::Path::new), &served.userdata, app::moment::now_secs()).context("cannot finish 0.18's step")?;
+    // The runner's jobs (RN): those a stop cut off read back and said so, before any job begins; the finished pruned each hour.
+    runner::runner().attach(journal.clone()).context("cannot read the runner's jobs")?;
+    runner::runner().prune_hourly();
     app::turn::keep_all(&journal, &[&app::discogs::TURN, &app::lastfm::FM]);
     // The environment's server settings, with what Settings saved over them (0.9.8).
     let runtime = app::runtime::start(app::runtime::Seed::from_env(&env), Some(&served.userdata), &cfg.bind);
@@ -333,6 +338,9 @@ async fn main() -> Result<()> {
     app::scrobble::run(served.clone());
     // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, records fetched on a tick, once a library takes them.
     app::soulseek::start(&app);
+    // The single fetches a stop cut off followed again by their batches (RN's DQ3, DQ5); the bulk queue's worker with them.
+    crate::run::spawn(async { app::track_fetch::resume().await });
+    app::track_intake::resume(&app);
     // Records not had that nothing keeps and nobody saw for six months, forgotten once a day (RT01), with their kept lists and
     // the artists left with nothing (RT01b): after Soulseek's list is read, whose items keep theirs (read sooner, an empty list
     // would be begun and written over the kept one), and the catalogue attached.

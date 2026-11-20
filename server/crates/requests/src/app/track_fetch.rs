@@ -14,7 +14,8 @@
 //! (`fetch_file`), then the same gate, the same Add to album, the same Undo. Its place on the album is the recording's
 //! on the release, never its own tags'.
 //!
-//! The searches and fetches are kept in memory (a restart forgets them; their staged files are tidied the next time).
+//! The searches and fetches are kept on rows in the journal's file (DI-Q3 (a), RN's DQ5; `rows`): a restart answers a search made
+//! before it, follows a fetch under way again by its batch, and keeps a staged file a fetch names; the percent stays in memory.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,10 @@ use crate::slskd::{Candidate, Slskd};
 pub use super::track_fetch_records::{Have, ReleaseTrack, ReleaseView, release_by_id};
 use super::requests_host::RequestsHost;
 use super::track_fetch_records::release_of;
+
+mod rows;
+#[cfg(any(test, feature = "test-support"))]
+pub use rows::{keep_in, restarted};
 
 /// Where the connection's choices are kept (user data's server choices, as Discogs' key).
 pub const SLSKD_URL: &str = "slskd:url";
@@ -190,7 +195,7 @@ struct SearchJob {
 
 // ---- 3. Fetching
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Fetching {
     Queued,
@@ -220,6 +225,8 @@ struct FetchJob {
     wanted: Wanted,
     view: FetchView,
     staged: Option<PathBuf>,
+    /// The candidate fetched, and slskd's batch it is fetched under (what a start follows it again by).
+    candidate: Option<(Candidate, String)>,
 }
 
 #[derive(Default)]
@@ -231,7 +238,7 @@ struct Jobs {
 static JOBS: Mutex<Option<Jobs>> = Mutex::new(None);
 
 fn jobs<T>(f: impl FnOnce(&mut Jobs) -> T) -> T {
-    f(JOBS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Jobs::default))
+    f(JOBS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(rows::load))
 }
 
 fn new_id() -> String {
@@ -282,7 +289,9 @@ fn searching(wanted: Wanted, slskd: Slskd) -> String {
     let id = new_id();
     let length_ms = wanted.track.length_ms;
     jobs(|j| {
-        j.searches.insert(id.clone(), SearchJob { wanted, view: SearchView { state: Searching::Searching, candidates: Vec::new(), bandcamp, why: None, failure: None } });
+        let s = SearchJob { wanted, view: SearchView { state: Searching::Searching, candidates: Vec::new(), bandcamp, why: None, failure: None } };
+        rows::keep_search(&id, &s);
+        j.searches.insert(id.clone(), s);
     });
     let job = id.clone();
     crate::run::spawn(async move {
@@ -293,6 +302,7 @@ fn searching(wanted: Wanted, slskd: Slskd) -> String {
                     Ok(c) => (s.view.state, s.view.candidates) = (Searching::Done, c),
                     Err(e) => (s.view.state, s.view.why, s.view.failure) = (Searching::Failed, Some(format!("{e:#}")), Some(super::turn::class(&e))),
                 }
+                rows::keep_search(&job, s);
             }
         });
     });
@@ -365,35 +375,84 @@ where
     let batch = slskd.fetch(&c.user, &c.offered).await?;
     let id = new_id();
     jobs(|j| {
-        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None, failure: None }, staged: None });
+        let f = FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None, failure: None }, staged: None, candidate: Some((c.clone(), batch.clone())) };
+        rows::keep_fetch(&id, &f);
+        j.fetches.insert(id.clone(), f);
     });
-    let job = id.clone();
-    crate::run::spawn(async move {
-        let set = |f: &dyn Fn(&mut FetchJob)| {
-            let changed = jobs(|j| j.fetches.get_mut(&job).map(|x| {
+    crate::run::spawn(followed(id.clone(), wanted.track, c, batch, slskd, folder, staging, gate));
+    Ok(id)
+}
+
+/// A fetch followed by its batch until slskd has it whole, moved into its staging and gated: its state kept on its row as it changes
+/// (never its percent: R7), told to whoever listens.
+#[allow(clippy::too_many_arguments)]
+async fn followed<G, Fut>(job: String, track: ReleaseTrack, c: Candidate, batch: String, slskd: Slskd, folder: PathBuf, staging: PathBuf, gate: G)
+where
+    G: FnOnce(PathBuf, ReleaseTrack) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<f32>> + Send + 'static,
+{
+    let set = |f: &dyn Fn(&mut FetchJob)| {
+        let changed = jobs(|j| {
+            j.fetches.get_mut(&job).map(|x| {
                 let before = (x.view.state.clone(), x.view.percent.round());
                 f(x);
+                if before.0 != x.view.state {
+                    rows::keep_fetch(&job, x);
+                }
                 before != (x.view.state.clone(), x.view.percent.round())
-            }));
-            if changed == Some(true) {
-                tell(&job);
+            })
+        });
+        if changed == Some(true) {
+            tell(&job);
+        }
+    };
+    let got = follow(&slskd, &c, &batch, &folder, &staging.join(&job), &|p| {
+        set(&|f| (f.view.state, f.view.percent) = (if p > 0.0 { Fetching::Downloading } else { Fetching::Queued }, p));
+    })
+    .await;
+    let staged = match got {
+        Ok(p) => p,
+        Err(e) => {
+            set(&|f| (f.view.state, f.view.why, f.view.failure) = (Fetching::Refused, Some(format!("{e:#}")), Some(super::turn::class(&e))));
+            return;
+        }
+    };
+    set(&|f| (f.view.state, f.view.percent, f.staged) = (Fetching::Checking, 100.0, Some(staged.clone())));
+    checked(&job, gate(staged, track).await);
+}
+
+/// At a start (RN's DQ3, DQ5): every fetch kept under way followed again by its batch (no new POST), one being checked heard again on
+/// its staged file. Through the server's slskd and staging.
+pub async fn resume() {
+    if jobs(|j| rows::under_way(j)).is_empty() {
+        return;
+    }
+    let (Ok((slskd, folder)), Ok(s)) = (slskd().await, served()) else {
+        tracing::warn!(target: "library", "the single fetches under way wait: slskd is not set up");
+        return;
+    };
+    let Some(staging) = s.data_dir.as_deref().map(|d| Path::new(d).join("track-fetch")) else { return };
+    resume_through(slskd, folder, staging, |file, track| async move { gate(&file, &track).await });
+}
+
+/// [`resume`] through this slskd, its folder and this staging, each file gated by `gate` (the tests' stands in).
+pub fn resume_through<G, Fut>(slskd: Slskd, folder: PathBuf, staging: PathBuf, gate: G)
+where
+    G: Fn(PathBuf, ReleaseTrack) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = Result<f32>> + Send + 'static,
+{
+    for (id, c, batch, track, staged, state) in jobs(|j| rows::under_way(j)) {
+        match (state, staged.filter(|p| p.exists())) {
+            (Fetching::Checking, Some(file)) => {
+                let gate = gate.clone();
+                crate::run::spawn(async move { checked(&id, gate(file, track).await) });
             }
-        };
-        let got = follow(&slskd, &c, &batch, &folder, &staging.join(&job), &|p| {
-            set(&|f| (f.view.state, f.view.percent) = (if p > 0.0 { Fetching::Downloading } else { Fetching::Queued }, p));
-        })
-        .await;
-        let staged = match got {
-            Ok(p) => p,
-            Err(e) => {
-                set(&|f| (f.view.state, f.view.why, f.view.failure) = (Fetching::Refused, Some(format!("{e:#}")), Some(super::turn::class(&e))));
-                return;
+            _ => {
+                tracing::info!(target: "library", fetch = %id, batch = %batch, "a single fetch under way followed again by its batch");
+                crate::run::spawn(followed(id, track, c, batch, slskd.clone(), folder.clone(), staging.clone(), gate.clone()));
             }
-        };
-        set(&|f| (f.view.state, f.view.percent, f.staged) = (Fetching::Checking, 100.0, Some(staged.clone())));
-        checked(&job, gate(staged, wanted.track).await);
-    });
-    Ok(id)
+        }
+    }
 }
 
 /// A fetch's check heard: passed with its score, or refused with why and what that comes to (TN.1). Told to whoever listens.
@@ -404,6 +463,7 @@ fn checked(id: &str, verdict: Result<f32>) {
                 Ok(score) => (f.view.state, f.view.score) = (Fetching::Passed, Some(*score)),
                 Err(e) => (f.view.state, f.view.why, f.view.failure) = (Fetching::Refused, Some(format!("{e:#}")), Some(super::turn::class(e))),
             }
+            rows::keep_fetch(id, f);
         }
     });
     tell(id);
@@ -427,6 +487,7 @@ where
         let f = j.fetches.get_mut(id).filter(|f| unanswered(f))?;
         let staged = f.staged.clone().filter(|p| p.exists())?;
         (f.view.state, f.view.why, f.view.failure) = (Fetching::Checking, None, None);
+        rows::keep_fetch(id, f);
         Some((staged, f.wanted.track.clone()))
     });
     let Some((staged, track)) = again else { return false };
@@ -486,6 +547,7 @@ pub fn set_aside(id: &str, why: &str) -> Option<String> {
 
 /// The file staged and the fetch forgotten (a refused one dropped, or one the admin does not want).
 pub fn drop_fetch(id: &str) {
+    rows::forget(rows::FETCHES, id);
     if let Some(f) = jobs(|j| j.fetches.remove(id))
         && let Some(dir) = f.staged.as_deref().and_then(Path::parent)
     {
@@ -561,7 +623,7 @@ fn tidy(staging: &Path) {
     let Ok(entries) = std::fs::read_dir(staging) else { return };
     for e in entries.flatten() {
         let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > STAGED_FOR);
-        let known = jobs(|j| j.fetches.contains_key(&e.file_name().to_string_lossy().to_string()));
+        let known = jobs(|j| rows::named(j, &e.file_name().to_string_lossy()));
         if old && !known {
             std::fs::remove_dir_all(e.path()).ok();
         }
@@ -901,7 +963,7 @@ pub async fn fetch_file(album: &str, recording: &str, replace: Option<String>, r
     let to = staging.join(&id).join(from.file_name().context("no file name")?);
     jobs(|j| {
         let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None, failure: None };
-        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view, staged: Some(to.clone()) });
+        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view, staged: Some(to.clone()), candidate: None });
     });
     tell(&id);
     let job = id.clone();
@@ -995,11 +1057,16 @@ fn undo_file(id: &str) -> Result<PathBuf> {
 /// Cratarr's check is the yes): "Missing tracks · Album", or "Better copy · Album" where it replaces one; its Undo the
 /// run's (the new track to the trash, the one it replaced back).
 pub async fn add<H: RequestsHost>(app: &Arc<H>, fetch: &str) -> Result<super::file_runs_base::Status> {
-    add_on(app.clone(), fetch).await
+    add_on(app.clone(), fetch, None).await
+}
+
+/// [`add`], `also` written in its run's own transaction, given its Undo (RN's R2: the bulk item's Added with its run).
+pub async fn add_with<H: RequestsHost>(app: &Arc<H>, fetch: &str, also: Option<crate::intake::Also>) -> Result<super::file_runs_base::Status> {
+    add_on(app.clone(), fetch, also).await
 }
 
 /// [`add`], on its host.
-async fn add_on(app: Arc<dyn RequestsHost>, fetch: &str) -> Result<super::file_runs_base::Status> {
+async fn add_on(app: Arc<dyn RequestsHost>, fetch: &str, also: Option<crate::intake::Also>) -> Result<super::file_runs_base::Status> {
     let (wanted, staged) = jobs(|j| {
         let f = j.fetches.get(fetch)?;
         (f.view.state == Fetching::Passed).then(|| (f.wanted.clone(), f.staged.clone()))
@@ -1031,7 +1098,7 @@ async fn add_on(app: Arc<dyn RequestsHost>, fetch: &str) -> Result<super::file_r
             }],
             failed: Vec::new(),
         })
-    }))
+    }), also)
     .await?;
     jobs(|j| {
         if let Some(f) = j.fetches.get_mut(fetch) {
@@ -1874,5 +1941,77 @@ mod tests {
         std::fs::remove_file(&path).ok();
         assert_eq!(err.to_string(), "Clipped at 0:01");
         assert!(!err.is::<NotAsked>(), "a refusal, not a check stopped short");
+    }
+
+    /// DQ5 (DI-Q3 (a)): root's single search for a track of `al-42`, five candidates; root's fetch of candidate 2 under way, slskd
+    /// holding it at 40 %; a staged file of an earlier fetch that passed its gate, not yet added. After a restart: the search answers the
+    /// same; the fetch reads 0 % until slskd is read, is followed by its batch (no second POST) and passes; the staged file still offers
+    /// Add to album and the tidy leaves it. Never a 404 for a search made before the restart, a staged file a row names tidied away, nor
+    /// the fetch asked twice.
+    #[tokio::test]
+    async fn a_single_search_and_fetch_survive_a_restart() {
+        let d = std::env::temp_dir().join(format!("cratarr-dq5-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let journal = Arc::new(crate::journal::Journal::open(Some(&d.join("journal.sqlite"))).unwrap());
+        keep_in(Some(journal.clone()));
+        let answer = |user: &str| serde_json::json!({ "username": user, "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100,
+            "files": [{ "filename": r"x\Glass Harbour\04 Ferry Bell.flac", "size": 1000, "length": 100 }] });
+        let answers: Vec<serde_json::Value> = ["peer-a", "peer-b", "peer-c", "peer-d", "peer-e"].iter().map(|u| answer(u)).collect();
+        // slskd holds root's fetch of candidate 2 from before the restart, its batch b-16 at 40 %.
+        let slskd = crate::slskd::scripted::Scripted::new().answers(answers).knows("b-16", "peer-c", &[r"x\Glass Harbour\04 Ferry Bell.flac".to_string()], 40.0).writes_to(&d, None);
+        let track = track_for(1, 4, "Ferry Bell", "Glass Harbour", Some(100_000), "rec-4");
+        let sid = search_through("al-42", track.clone(), slskd.client());
+        for _ in 0..500 {
+            if search_view(&sid).is_some_and(|v| v.state != Searching::Searching) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let found = search_view(&sid).unwrap();
+        assert_eq!((found.state.clone(), found.candidates.len()), (Searching::Done, 5));
+        let passing = |_: PathBuf, _: ReleaseTrack| async { Ok::<f32, anyhow::Error>(0.97) };
+        // Root's fetch of candidate 2, under way in slskd as b-16, kept as its row was written when it began.
+        let fid = "f-16".to_string();
+        jobs(|j| {
+            let f = FetchJob { wanted: Wanted { album: "al-42".into(), track: track.clone(), replace: None }, view: FetchView { state: Fetching::Downloading, percent: 40.0, why: None, score: None, failure: None }, staged: None, candidate: Some((found.candidates[2].clone(), "b-16".into())) };
+            rows::keep_fetch(&fid, &f);
+            j.fetches.insert(fid.clone(), f);
+        });
+        // An earlier fetch that passed its gate, staged, not added.
+        let earlier = d.join("staging").join("f-earlier").join("04 Ferry Bell.flac");
+        std::fs::create_dir_all(earlier.parent().unwrap()).unwrap();
+        std::fs::write(&earlier, b"flac").unwrap();
+        let candidate = found.candidates[0].clone();
+        jobs(|j| {
+            let f = FetchJob { wanted: Wanted { album: "al-42".into(), track: track.clone(), replace: None }, view: FetchView { state: Fetching::Passed, percent: 100.0, why: None, score: Some(0.98), failure: None }, staged: Some(earlier.clone()), candidate: Some((candidate, "b-earlier".into())) };
+            rows::keep_fetch("f-earlier", &f);
+            j.fetches.insert("f-earlier".into(), f);
+        });
+        let posts = slskd.posts().len();
+
+        // The restart: the memory gone, the rows read back.
+        restarted(&[&sid, &fid, "f-earlier"]);
+        let back = search_view(&sid).expect("no 404 for a search made before the restart");
+        assert_eq!((back.state, back.candidates.iter().map(|c| c.user.clone()).collect::<Vec<_>>()), (Searching::Done, found.candidates.iter().map(|c| c.user.clone()).collect::<Vec<_>>()));
+        assert_eq!(back.candidates[2].offered.filename, found.candidates[2].offered.filename, "each candidate's file to ask for");
+        assert_eq!(fetch_view(&fid).map(|v| (v.state, v.percent)), Some((Fetching::Downloading, 0.0)), "0 % until slskd is read again");
+        assert!(staged("f-earlier"), "the staged file still offers Add to album");
+        tidy(&d.join("staging"));
+        assert!(earlier.exists(), "the tidy leaves what a row names");
+        resume_through(slskd.client(), d.clone(), d.join("staging"), passing);
+        for b in slskd.going() {
+            slskd.release(&b);
+        }
+        for _ in 0..1000 {
+            if fetch_view(&fid).is_some_and(|v| v.state == Fetching::Passed) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(fetch_view(&fid).map(|v| v.state), Some(Fetching::Passed), "followed by its batch to its end");
+        assert_eq!(slskd.posts().len(), posts, "no second POST");
+        keep_in(None);
+        std::fs::remove_dir_all(&d).ok();
     }
 }

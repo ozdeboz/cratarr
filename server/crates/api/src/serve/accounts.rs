@@ -328,6 +328,8 @@ async fn set_active(State(serve): State<Arc<Serve>>, Path(name): Path<String>, a
 /// devices stop playing for it (paused: their queues stay, as its data does). Returns how many sign-ins ended.
 async fn left(serve: &Serve, name: &str) -> usize {
     let ended = serve.sessions.revoke_user(name, None).unwrap_or(0);
+    // Its jobs asked to stop (RN's AC6): none of an account that is gone goes on.
+    crate::runner::runner().stop_account(name);
     if let Some(on) = crate::app::PlayOn::held_by(serve) {
         for p in on.list_for(Some(name)).into_iter().filter(|p| p.online && p.playing) {
             if let Err(e) = on.command(&p.name, crate::app::PlayOnCommand::Pause).await {

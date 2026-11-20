@@ -18,6 +18,6 @@ pub mod resource;
 pub mod state;
 pub mod words;
 
-pub use jobs::{Handle, Row, Runner, Step, Task, Wait, runner, spawn};
+pub use jobs::{Handle, Row, Runner, Step, Stepper, Task, Wait, runner, spawn};
 pub use resource::{COVERS, DECODE, Priority, Resource};
 pub use state::State;

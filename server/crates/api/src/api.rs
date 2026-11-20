@@ -364,6 +364,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/admin/migration", get(migration_report))
             .route("/api/admin/migration/moved", get(migration_moved))
             .route("/api/health/report", get(health_report))
+            // Health › Activity (RN): every job that runs, what it does now and how far; administrators' only (R8).
+            .route("/api/activity", get(activity))
             // Health's Missing list: a track there is this one (A5), for good.
             .route("/api/missing/reconnect", post(reconnect_track))
             .route("/api/folders", get(browse_folders))
@@ -4720,6 +4722,13 @@ async fn migration_moved(State(app): State<Arc<App>>) -> Result<Json<serde_json:
     Ok(Json(json!({ "albums": of(ALBUM), "artists": of(ARTIST), "tracks": of(SONG) })))
 }
 
+/// Health › Activity (RN item 6, R8: administrators', as Health is): every job that runs or waits, from the runner alone, each with
+/// what it does now, how far, what it waits for and whose; its patches follow on the live channel (`activity`), none by a poll.
+async fn activity() -> Result<Json<serde_json::Value>, ApiError> {
+    let jobs = crate::run::spawn_blocking(|| crate::runner::runner().rows()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(json!({ "jobs": jobs })))
+}
+
 /// The 0.16 first start's migration report (decision 0101's rehearsal: compared with production's copy), by part:
 /// each when it ran (epoch s) and what it found (its `tables`, its `unmatched`, its own fields). None ran: no parts.
 async fn migration_report(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -4858,7 +4867,7 @@ fn listenbrainz_who(ctx: &Ctx, b: &ListenBrainzImport) -> Result<(Arc<crate::ser
 async fn own_tasks(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
-    Ok(Json(json!({ "tasks": crate::app::tasks::tasks().of(&account) })))
+    Ok(Json(json!({ "tasks": crate::runner::runner().of(&account) })))
 }
 
 /// One's own running task asked to stop (0.9.6: a cover picked ends its look); refused when it is not running. Work that
@@ -4866,7 +4875,7 @@ async fn own_tasks(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
 async fn stop_task(ctx: Ctx, Path(id): Path<u64>) -> Result<StatusCode, ApiError> {
     ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
-    if crate::app::tasks::tasks().stop(&account, id) { Ok(StatusCode::NO_CONTENT) } else { Err(ToggleError::Refused("That task is not running.".into()).into()) }
+    if crate::runner::runner().stop(&account, id) { Ok(StatusCode::NO_CONTENT) } else { Err(ToggleError::Refused("That task is not running.".into()).into()) }
 }
 
 #[derive(Deserialize)]
@@ -4903,12 +4912,12 @@ async fn ids_moved(State(app): State<Arc<App>>, Json(b): Json<MovedBody>) -> Res
 }
 
 /// Long work begun as a task: 202 with the task, which the page follows (`app::tasks`).
-fn started(task: Result<crate::app::tasks::Task, String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+fn started(task: Result<crate::runner::Task, String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let task = task.map_err(ToggleError::Refused)?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "task": task }))))
 }
 
-fn progress_of(h: Arc<crate::app::tasks::Handle>) -> impl Fn(&str, u64, Option<u64>) + Send + Sync {
+fn progress_of(h: Arc<crate::runner::Handle>) -> impl Fn(&str, u64, Option<u64>) + Send + Sync {
     move |name, done, total| h.step(name, done, total)
 }
 
@@ -4950,7 +4959,7 @@ fn bring_listenbrainz(ctx: &Ctx, b: ListenBrainzImport, preview: bool) -> Result
     if let Err(e) = serve.userdata.set_import_choice(&listenbrainz_choice(&account), &user) {
         tracing::warn!("import: the ListenBrainz user could not be kept: {e:#}");
     }
-    started(crate::app::tasks::spawn("import:listenbrainz", &account.clone(), preview, move |h| async move {
+    started(crate::runner::spawn("import:listenbrainz", &account.clone(), preview, move |h| async move {
         let progress = progress_of(h);
         if preview {
             crate::app::listenbrainz::preview(&serve, &account, &user, &progress).await
@@ -5029,7 +5038,7 @@ async fn discover(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let services = json!({ "listenbrainz": who.listenbrainz.is_some(), "lastfm": who.lastfm.is_some() });
     let stale = found.as_ref().is_none_or(|f| crate::app::moment::now_secs() - f.at > crate::app::discover::FRESH_SECS);
-    let running = crate::app::tasks::tasks().of(&account).iter().any(|t| t.kind == crate::app::discover::KIND && t.finished.is_none());
+    let running = crate::runner::runner().of(&account).iter().any(|t| t.kind == crate::app::discover::KIND && t.finished.is_none());
     // Every account looks: the library's discographies need no service (0069 amended, 0.9).
     if stale && !running {
         let _ = crate::app::discover::start(&app, serve.clone(), &account, who);
@@ -6110,7 +6119,7 @@ async fn bring_lastfm(ctx: &Ctx, b: LastFmImport, preview: bool) -> Result<(Stat
         keeps_history(ctx)?;
     }
     let (serve, account, user, auth) = lastfm_who(ctx, b).await?;
-    started(crate::app::tasks::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
+    started(crate::runner::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
         crate::app::lastfm::bring(&serve, &account, &user, &auth, what, preview, &progress_of(h)).await
     }))
 }
@@ -6141,7 +6150,7 @@ async fn import_file(ctx: Ctx, Query(q): Query<FileImport>, body: axum::body::By
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
-    started(crate::app::tasks::spawn("import:file", &account.clone(), q.preview, move |h| async move {
+    started(crate::runner::spawn("import:file", &account.clone(), q.preview, move |h| async move {
         crate::app::import_files::import(&app, &serve, &account, &q.name, &body, q.preview, &progress_of(h)).await
     }))
 }

@@ -6544,3 +6544,50 @@ async fn a_folder_with_only_clipping_a_click_and_a_pop_passes_with_notes_end_to_
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// 0.18's upgrade, one real start (SCENARIOS-RN DM6; DC2's KE7 joins it with its `soulseek` part): a data folder with what 0.17 kept
+/// of RN's, its bulk queue (`track-intake.json`, the 0.17 fixture) and its sources' holds in the user data's server choices, started
+/// as 0.18. RN's asserts: the `bulk queue` and `sources' holds` parts of `/api/admin/migration` agree with DM1 and DM5;
+/// `/api/track-intake` lists the 12; Activity lists each of the queue's jobs once; the old file kept as `.017`. Never a part failed,
+/// nor an item listed twice.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_017_data_folder_upgrades_to_018_end_to_end() {
+    let root = temp("rn-upgrade");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    settings(&data, &[(&library, "music")], &root.join("own"));
+    // A first start makes the data folder's stores; stopped, it is given what 0.17 kept of RN's.
+    Server::start(&data).await.stop();
+    let fixture = include_bytes!("fixtures/0.17/track-intake.json");
+    std::fs::write(data.join("track-intake.json"), fixture).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    {
+        let ud = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+        for (source, until) in [("musicbrainz", now + 600), ("bandcamp", now + 80_000), ("lastfm", now + 200_000), ("discogs", now - 10)] {
+            ud.execute("INSERT OR REPLACE INTO import_choices (source, choice) VALUES (?1, ?2)", rusqlite::params![format!("{source}:held_until"), until.to_string()]).unwrap();
+        }
+        // As 0.17 left it: the step's marks are 0.18's own.
+        let j = rusqlite::Connection::open(data.join("journal.sqlite")).unwrap();
+        j.execute("DELETE FROM intake_marks WHERE name LIKE 'step_018:%'", []).unwrap();
+    }
+    let s = Server::start(&data).await;
+    let parts = s.get("/api/admin/migration").await["parts"].clone();
+    let bulk = &parts["bulk queue"];
+    assert_eq!(bulk["moved"], 12, "{bulk}");
+    assert_eq!(bulk["said"], "Bulk queue: 12 moved (2 queued, 1 searched again, 2 found, 1 not found, 1 failed, 1 to fetch, 2 back to its tick, 1 added, 1 refused); 0 dropped");
+    let holds = &parts["sources' holds"];
+    assert_eq!(holds["moved"], 3, "MusicBrainz, Bandcamp, Last.fm cut to its cap; Discogs past: {holds}");
+    assert!(!data.join("track-intake.json").exists() && std::fs::read(data.join("track-intake.json.017")).unwrap() == fixture.to_vec(), "kept as .017, byte for byte");
+    let items = s.get("/api/track-intake").await["items"].as_array().cloned().unwrap_or_default();
+    let ids: std::collections::BTreeSet<String> = items.iter().map(|i| i["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!((items.len(), ids.len()), (12, 12), "the 12, each once");
+    let jobs = s.get("/api/activity").await["jobs"].as_array().cloned().unwrap_or_default();
+    let queue_jobs: Vec<String> = jobs.iter().filter_map(|j| j["id"].as_str().filter(|id| id.starts_with("intake:")).map(str::to_string)).collect();
+    let once: std::collections::BTreeSet<&String> = queue_jobs.iter().collect();
+    assert_eq!(once.len(), queue_jobs.len(), "each of the queue's jobs once: {queue_jobs:?}");
+    assert!(queue_jobs.iter().all(|j| ids.contains(j.trim_start_matches("intake:"))), "every job an item of the queue");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}

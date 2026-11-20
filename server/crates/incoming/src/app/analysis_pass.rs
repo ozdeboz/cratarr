@@ -11,7 +11,9 @@
 //! again; or copies the one 0.16 kept in the file's shape row, where 0.17's step was told to skip moving it (P6), with no
 //! decode and no rest.
 //!
-//! One file is decoded at a time, whoever asked (`HEAVY`): the pass, a page's visuals, a play's waveform, the look ahead.
+//! One file is decoded at a time, whoever asked (the runner's `DECODE`, RN): the pass, a page's visuals, a play's waveform, the
+//! look ahead; one asked for goes before the pass's next file. The pass is a job of Cratarr's own on the runner (`analysis`):
+//! Health › Activity says what it does now, to which file, and why (asked for, or catching up), resting, or waiting for memory.
 //! And only with room for it (`memwatch::room`, the audit's memory budget): the pass waits; one asked for now or looked
 //! ahead to is not made then.
 //! The turn is held by the work itself, so a page that stops waiting (a skip, a timeout) cannot let a second decode in
@@ -88,13 +90,23 @@ pub fn run(cat: Arc<Catalogue>) {
         let mut unbanded: HashSet<(i64, String, u64, i64)> = HashSet::new();
         let mut banding = BandWaves::default();
         let mut waiting_said = false;
+        // Its job on the runner while it is on (AC2): none while it is off.
+        let mut job: Option<crate::runner::Handle> = None;
+        let mut banded = 0u64;
         loop {
             let settings = super::runtime_base::now();
             let (mode, hear_beats) = (settings.analysis, settings.beat_this);
             if mode == Mode::Off {
+                if let Some(j) = job.take() {
+                    j.finish(Ok::<_, anyhow::Error>(()));
+                }
                 rest_idle().await;
                 continue;
             }
+            if job.is_none() {
+                job = crate::runner::runner().begin_keyed(KIND, KIND, None).ok();
+            }
+            let pass = job.as_ref();
             let c = cat.clone();
             let counts = crate::run::spawn_blocking(move || c.analysis_counts()).await.ok().and_then(|r| r.ok());
             if mode == Mode::Keep && counts.is_some_and(|(done, all)| all > 0 && done * 100 < all * STARTED_AT) {
@@ -135,24 +147,30 @@ pub fn run(cat: Arc<Catalogue>) {
                     .unwrap_or_default();
                     banding = queue;
                     let Some(work) = next else {
+                        resting(pass);
                         rest_idle().await;
                         continue;
                     };
                     let (folder, rel, size, mtime) = (work.0, work.1.clone(), work.3, work.4);
-                    let banded = band_wave_item(&cat, work, crate::analysis::band_wave::work_out).await;
-                    if let Banded::Missed(_) = banded {
+                    banded += 1;
+                    let left = banding.0.len() as u64;
+                    working(pass, "Band waves", &rel, true, Some((banded, banded + left)));
+                    let item = band_wave_item(&cat, work, crate::analysis::band_wave::work_out, pass).await;
+                    if let Banded::Missed(_) = item {
                         unbanded.insert((folder, rel, size, mtime));
                     }
-                    tokio::time::sleep(banded.rest()).await;
+                    resting(pass);
+                    tokio::time::sleep(item.rest()).await;
                     continue;
                 };
-                crate::memwatch::wait_for_room().await;
-                let turn = HEAVY.acquire().await.expect("the turn is never closed");
+                working(pass, "Beats", &rel, false, None);
+                let fits = crate::runner::resource::MEMORY.fits(KIND, pass).await;
+                let turn = crate::runner::resource::DECODE.take_for(crate::runner::Priority::Background, pass, None).await;
                 let started = Instant::now();
                 let c = cat.clone();
                 let r = rel.clone();
                 match crate::run::spawn_blocking(move || {
-                    let _turn = turn;
+                    let _turn = (turn, fits);
                     let _job = crate::memwatch::job(format!("Beat this!: {r}"));
                     crate::app::beat_this::hear_and_keep(&c, folder, &r, &path, size, mtime)
                 })
@@ -168,20 +186,23 @@ pub fn run(cat: Arc<Catalogue>) {
                         unheard.insert((folder, rel, size, mtime));
                     }
                 }
+                resting(pass);
                 tokio::time::sleep(started.elapsed() * REST).await;
                 continue;
             }
             // New music to analyse: the waveforms in three bands are asked for again after it, so the newest come first (T13.4),
             // not after the rest of a batch taken before it came.
             banding = BandWaves::default();
-            for (folder, rel, path, size, mtime) in batch {
-                crate::memwatch::wait_for_room().await;
-                let turn = HEAVY.acquire().await.expect("the turn is never closed");
+            let of = batch.len() as u64;
+            for (n, (folder, rel, path, size, mtime)) in batch.into_iter().enumerate() {
+                working(pass, "Analysis", &rel, true, Some((n as u64 + 1, of)));
+                let fits = crate::runner::resource::MEMORY.fits(KIND, pass).await;
+                let turn = crate::runner::resource::DECODE.take_for(crate::runner::Priority::Background, pass, None).await;
                 let started = Instant::now();
                 let c = cat.clone();
                 let r = rel.clone();
                 let done = crate::run::spawn_blocking(move || {
-                    let _turn = turn;
+                    let _turn = (turn, fits);
                     let _job = crate::memwatch::job(format!("analysis: {r}"));
                     let genres = c.genres_of_file(folder, &r);
                     let a = crate::analysis::analyse(&path, &genres)?;
@@ -199,10 +220,40 @@ pub fn run(cat: Arc<Catalogue>) {
                         failed.insert((folder, rel, size, mtime));
                     }
                 }
+                resting(pass);
                 tokio::time::sleep(started.elapsed() * REST).await;
             }
         }
     });
+}
+
+/// The pass's job kind on the runner.
+pub const KIND: &str = "analysis";
+
+/// The pass at work (AC2): what it works out ("Band waves", "Beats", "Analysis"), to which file, why (it catches up, nobody asked
+/// for it), and how far this run, where it counts.
+pub(crate) fn working(job: Option<&crate::runner::Handle>, what: &str, rel: &str, counted: bool, far: Option<(u64, u64)>) {
+    let Some(j) = job else { return };
+    let why = crate::runner::words::word("catching_up").unwrap_or_default();
+    j.detail(Some(if counted { format!("{rel} · {why}") } else { rel.to_string() }), None);
+    match far {
+        Some((done, of)) => j.step(what, done, Some(of)),
+        None => j.step(what, 0, None),
+    }
+}
+
+/// A decode a page asked for, as Activity shows it while it waits for its turn and while it decodes (AC2 (b)): "Waveform · <file> ·
+/// asked for".
+pub(crate) fn asked_for(work: &str, rel: &str) -> String {
+    format!("{work} · {rel} · {}", crate::runner::words::word("asked_for").unwrap_or_default())
+}
+
+/// The pass resting between files (AC2 (d)): it runs, and goes on.
+pub(crate) fn resting(job: Option<&crate::runner::Handle>) {
+    if let Some(j) = job {
+        j.detail(None, None);
+        j.step(crate::runner::words::word("resting").unwrap_or_default(), 0, None);
+    }
 }
 
 /// What one file of the pass's waveforms in three bands came to (`band_wave_item`).
@@ -229,8 +280,8 @@ impl Banded {
 /// One file of the pass's waveforms in three bands. Where none is apart, the wave 0.16 kept in its shape row is copied
 /// (`Catalogue::copy_kept_band_wave`; P6, W6: with `017:band_wave` marked by hand, `analysis_band_wave` is empty and the
 /// question lists every analysed file, so a copy each costs a read where a decode each cost days), with no turn, no wait for
-/// room and no rest. Else it is worked out by `decode`, with room for it and on the one turn (`HEAVY`).
-async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): Work, decode: fn(&std::path::Path) -> anyhow::Result<BandWave>) -> Banded {
+/// room and no rest. Else it is worked out by `decode`, with room for it and on the one decode (the runner's `DECODE`).
+async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): Work, decode: fn(&std::path::Path) -> anyhow::Result<BandWave>, job: Option<&crate::runner::Handle>) -> Banded {
     let (c, r) = (cat.clone(), rel.clone());
     match crate::run::spawn_blocking(move || c.copy_kept_band_wave(folder, &r, size, mtime)).await {
         Ok(Ok(true)) => return Banded::Copied,
@@ -238,13 +289,13 @@ async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): 
         Ok(Err(e)) => tracing::warn!("band waveform: {rel}: the one kept not copied: {e:#}"),
         Err(e) => tracing::warn!("band waveform: {rel}: the one kept not copied: {e}"),
     }
-    crate::memwatch::wait_for_room().await;
-    let turn = HEAVY.acquire().await.expect("the turn is never closed");
+    let fits = crate::runner::resource::MEMORY.fits(KIND, job).await;
+    let turn = crate::runner::resource::DECODE.take_for(crate::runner::Priority::Background, job, None).await;
     let started = Instant::now();
     let c = cat.clone();
     let r = rel.clone();
     let done = crate::run::spawn_blocking(move || {
-        let _turn = turn;
+        let _turn = (turn, fits);
         // Taken with its batch, a while ago maybe: still there as it was, or passed over.
         if c.file_to_analyse(folder, &r).is_none_or(|(_, s, m)| (s, m) != (size, mtime)) {
             return Ok(false);
@@ -275,9 +326,7 @@ async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): 
     }
 }
 
-pub(crate) use super::heavy_base::HEAVY;
-
-/// Winding's own turns (Tape rewind, a wind, decision 0074), apart from [`HEAVY`]: a wind decodes a few seconds of a
+/// Winding's own turns (Tape rewind, a wind, decision 0074), apart from the one decode (the runner's `DECODE`): a wind decodes a few seconds of a
 /// file at a time (a few MB), so it never waits behind a whole file's decode, which takes about half a gigabyte for a
 /// moment, nor holds one up for as long as a hold lasts (the owner, 2026-10-27: a hold back just after a track began
 /// stopped the track and never wound; the track's analysis held the one turn for up to 10 s). Two, so a new hold need
@@ -300,7 +349,8 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
         Some(Some(w)) if w.failed() => return None,
         _ => {}
     }
-    let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    let asked = asked_for("Waveform", &rel);
+    let turn = crate::runner::resource::DECODE.take_within(crate::runner::Priority::Asked, TURN, Some(asked)).await?;
     if !crate::memwatch::room() {
         return None;
     }
@@ -351,7 +401,8 @@ pub async fn spectrum(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<S
         Some(Some(s)) if s.failed() => return None,
         _ => {}
     }
-    let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    let asked = asked_for("Spectrum", &rel);
+    let turn = crate::runner::resource::DECODE.take_within(crate::runner::Priority::Asked, TURN, Some(asked)).await?;
     if !crate::memwatch::room() {
         return None;
     }
@@ -436,7 +487,8 @@ async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_signals: boo
         return Some((k.0.unwrap_or_default(), k.1.unwrap_or_default()));
     }
     // The turn goes with the decode: one past its deadline, or whose page stopped waiting, still holds it until done.
-    let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    let asked = asked_for("Beats and signals", &rel);
+    let turn = crate::runner::resource::DECODE.take_within(crate::runner::Priority::Asked, TURN, Some(asked)).await?;
     if !crate::memwatch::room() {
         return None;
     }
@@ -559,7 +611,7 @@ async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
     if beats.is_some() && signals.is_some() {
         return;
     }
-    let Ok(turn) = HEAVY.try_acquire() else { return };
+    let Some(turn) = crate::runner::resource::DECODE.try_take() else { return };
     if !crate::memwatch::room() {
         return;
     }
@@ -670,12 +722,12 @@ mod tests {
         assert_eq!(work.iter().map(|w| w.1.as_str()).collect::<Vec<_>>(), ["F.flac"], "the escape: asked for");
 
         // The turn held here, and no room on this thread, all along: an item that waited for either would never end.
-        let turn = HEAVY.acquire().await.unwrap();
-        let permits = HEAVY.available_permits();
+        let turn = crate::runner::resource::DECODE.take(crate::runner::Priority::Background).await;
+        let permits = crate::runner::resource::DECODE.available();
         crate::memwatch::FULL.set(true);
-        let item = tokio::time::timeout(Duration::from_secs(10), band_wave_item(&cat, work[0].clone(), decode)).await;
+        let item = tokio::time::timeout(Duration::from_secs(10), band_wave_item(&cat, work[0].clone(), decode, None)).await;
         crate::memwatch::FULL.set(false);
-        assert_eq!(HEAVY.available_permits(), permits, "HEAVY's permits as before");
+        assert_eq!(crate::runner::resource::DECODE.available(), permits, "the decode's turns as before");
         drop(turn);
         let item = item.expect("no turn nor room waited for");
         assert_eq!(item, Banded::Copied);
@@ -716,7 +768,7 @@ mod tests {
         let mut came = Vec::new();
         for w in work {
             let rel = w.1.clone();
-            let banded = band_wave_item(&cat, w, decode).await;
+            let banded = band_wave_item(&cat, w, decode, None).await;
             came.push((rel, matches!(banded, Banded::Worked(_))));
         }
         came.sort();
@@ -806,7 +858,7 @@ mod tests {
 
         // The turn free first: held by a test beside this one, it would turn the look away for another reason.
         crate::memwatch::FULL.set(true);
-        drop(HEAVY.acquire().await.unwrap());
+        drop(crate::runner::resource::DECODE.take(crate::runner::Priority::Background).await);
         ahead(cat.clone(), 0, "next.wav".into()).await;
         crate::memwatch::FULL.set(false);
         assert_eq!(decodes(), 0, "no room: not decoded");

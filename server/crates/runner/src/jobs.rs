@@ -121,7 +121,10 @@ impl Row {
         };
         parts.extend(far);
         if let Some(w) = &self.waits {
-            parts.push(w.what.clone());
+            // A source's pause says only until when ("Paused until 14:05"); a hold of its own says its words first.
+            if !w.what.is_empty() {
+                parts.push(w.what.clone());
+            }
             parts.extend(w.until.and_then(|u| say("paused_until", &[("until", &when(u))])));
         }
         parts.join(" · ")
@@ -395,8 +398,11 @@ impl Runner {
         for p in providers {
             rows.extend(p());
         }
-        // A decode asked for by no job of its own (a page's waveform): seen while it waits and while it decodes.
-        rows.extend(crate::resource::DECODE.rows());
+        // A decode asked for by no job of its own (a page's waveform): seen while it waits and while it decodes. Cratarr's runner's;
+        // a runner of a test's own lists its own jobs alone.
+        if std::ptr::eq(self, runner()) {
+            rows.extend(crate::resource::DECODE.rows());
+        }
         rows
     }
 
@@ -460,9 +466,45 @@ pub struct Handle {
     stop: Arc<AtomicBool>,
 }
 
+/// A job's steps told from work that cannot hold its handle (blocking work, a copy's files as each lands: TU2).
+#[derive(Clone)]
+pub struct Stepper {
+    runner: &'static Runner,
+    id: u64,
+}
+
+impl Stepper {
+    /// As `Handle::step`.
+    pub fn step(&self, name: &str, done: u64, total: Option<u64>) {
+        step_in(self.runner, self.id, name, done, total);
+    }
+}
+
+/// A job's step: a new step told at once, and a step done to its last (RY01.13); the same step's count at most four times a second.
+fn step_in(runner: &Runner, id: u64, name: &str, done: u64, total: Option<u64>) {
+    let mut new = total == Some(done);
+    runner.change(
+        id,
+        |k| {
+            new |= k.task.step.as_ref().is_none_or(|s| s.name != name) || k.waits.is_some();
+            k.task.step = Some(Step { name: name.into(), done, total });
+            (k.state, k.waits) = (State::Running, None);
+        },
+        false,
+    );
+    if new {
+        runner.change(id, |_| {}, true);
+    }
+}
+
 impl Handle {
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Its steps told from work that cannot hold it.
+    pub fn stepper(&self) -> Stepper {
+        Stepper { runner: self.runner, id: self.id }
     }
 
     /// Whether it was asked to stop.
@@ -479,19 +521,7 @@ impl Handle {
     /// Where it is now. A new step is told at once, and so is a step done to its last (RY01.13: a page sees "3 of 3" before the
     /// task ends, which takes its step away); the same step's count otherwise at most four times a second. A step means it runs.
     pub fn step(&self, name: &str, done: u64, total: Option<u64>) {
-        let mut new = total == Some(done);
-        self.runner.change(
-            self.id,
-            |k| {
-                new |= k.task.step.as_ref().is_none_or(|s| s.name != name) || k.waits.is_some();
-                k.task.step = Some(Step { name: name.into(), done, total });
-                (k.state, k.waits) = (State::Running, None);
-            },
-            false,
-        );
-        if new {
-            self.runner.change(self.id, |_| {}, true);
-        }
+        step_in(self.runner, self.id, name, done, total);
     }
 
     /// What it does its step to, and why ("Glass Harbour/Night Ferry/03 Neap.flac · catching up"), and what it counts.
@@ -641,6 +671,40 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("never finished");
+    }
+
+    /// TU1's scan: every task runs on the runner. No `tasks::spawn`, `tasks().begin` or `tasks::tasks()` outside it, and no tasks.rs
+    /// beside it.
+    #[test]
+    fn every_task_runs_on_the_runner() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        let crates = here.parent().unwrap();
+        walk(crates, &mut files);
+        walk(&crates.parent().unwrap().join("src"), &mut files);
+        let gone = [["tasks", "::spawn"].concat(), ["tasks", "().begin"].concat(), ["tasks", "::tasks()"].concat()];
+        let mut found = Vec::new();
+        for f in files.iter().filter(|f| !f.starts_with(here)) {
+            let text = std::fs::read_to_string(f).unwrap();
+            for w in &gone {
+                if text.contains(w.as_str()) {
+                    found.push(format!("{}: {w}", f.display()));
+                }
+            }
+            assert!(!f.ends_with("app/tasks.rs"), "tasks.rs is gone: {}", f.display());
+        }
+        assert!(files.len() > 100, "the sources read");
+        assert!(found.is_empty(), "a task begun outside the runner: {found:#?}");
     }
 
     // ---- JR2–JR5

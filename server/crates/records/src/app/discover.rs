@@ -2883,9 +2883,9 @@ pub fn lidarr<H: RecordsHost + ?Sized>(app: &H) -> Option<crate::lidarr::Lidarr>
 }
 
 /// Looks up the account's suggestions as a task (`app::tasks`), its result the `Found`.
-pub fn start<H: RecordsHost + ?Sized>(app: &Arc<H>, serve: Arc<crate::serve::Serve>, account: &str, who: Who) -> Result<super::tasks::Task, String> {
+pub fn start<H: RecordsHost + ?Sized>(app: &Arc<H>, serve: Arc<crate::serve::Serve>, account: &str, who: Who) -> Result<crate::runner::Task, String> {
     let (cat, a, artists) = (app.library().catalogue(), account.to_string(), app.artists().clone());
-    super::tasks::spawn(KIND, account, false, move |h| async move {
+    crate::runner::spawn(KIND, account, false, move |h| async move {
         let progress = move |name: &str, done: u64, total: Option<u64>| h.step(name, done, total);
         look(&serve, cat, &a, &who, artists, &progress).await
     })

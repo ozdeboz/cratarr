@@ -80,7 +80,9 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut arrived = app.incoming.subscribe_incoming();
     let mut collected = app.collection.subscribe();
     let mut players = app.play_on.subscribe();
-    let mut tasks = super::tasks::tasks().subscribe();
+    let mut tasks = crate::runner::runner().subscribe();
+    // Health › Activity's jobs as they change (RN, administrators' only, R8): a patch per change, a step at most four a second.
+    let mut activity = crate::runner::runner().subscribe_activity();
     // The account's favourites as they change, by any way (userdata `Starred`), where Cratarr's own library is open.
     let mut starred = app.served.as_ref().map(|s| s.userdata.subscribe_starred());
     // The account's preferences as another of its devices changes them (decision 0101 point 14).
@@ -97,7 +99,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     crate::run::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
         let account = app.served.as_ref().and_then(|s| s.current_user());
-        for t in account.as_deref().map(|a| super::tasks::tasks().of(a)).unwrap_or_default() {
+        for t in account.as_deref().map(|a| crate::runner::runner().of(a)).unwrap_or_default() {
             if let Some(m) = Message::of("task", &t)
                 && out.send(m).await.is_err()
             {
@@ -168,6 +170,14 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 r = collected.recv(), if open[3] => changed(&out, r, &mut open[3], &["collection"]).await,
                 r = tasks.recv() => match r {
                     Ok(t) if account.as_deref() == Some(t.account.as_str()) => match Message::of("task", &t) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(broadcast::error::RecvError::Closed) => false,
+                },
+                r = activity.recv() => match r {
+                    Ok(row) if crate::serve::access::administering() => match Message::of("activity", &row) {
                         Some(m) => out.send(m).await.is_ok(),
                         None => true,
                     },
