@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod sk6_harness;
+
 const BIN: &str = env!("CARGO_BIN_EXE_cratarr-server");
 
 struct Server {

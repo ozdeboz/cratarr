@@ -118,6 +118,7 @@ enum Mode {
     NewApiKey,
     MakeFixtures,
     MakeLayout,
+    MakeGateCases,
     Analyse,
     Signals,
     Beats,
@@ -126,7 +127,7 @@ enum Mode {
 }
 
 /// The known flags, as the answer to an unknown argument lists them.
-const KNOWN: &str = "--version | --healthcheck | --new-api-key <name> --out <file> | --make-fixtures <folder> | --make-layout <folder> | --analyse <music folder> --out <file> [--threads N] | --signals <file>... | --beats <file>... | none: the server";
+const KNOWN: &str = "--version | --healthcheck | --new-api-key <name> --out <file> | --make-fixtures <folder> | --make-layout <folder> | --make-gate-cases <folder> | --analyse <music folder> --out <file> [--threads N] | --signals <file>... | --beats <file>... | none: the server";
 
 /// The arguments after the program's name, read once (W4).
 fn mode(args: &[String]) -> Mode {
@@ -137,6 +138,7 @@ fn mode(args: &[String]) -> Mode {
         "--new-api-key" => Mode::NewApiKey,
         "--make-fixtures" => Mode::MakeFixtures,
         "--make-layout" => Mode::MakeLayout,
+        "--make-gate-cases" => Mode::MakeGateCases,
         "--analyse" => Mode::Analyse,
         "--signals" => Mode::Signals,
         "--beats" => Mode::Beats,
@@ -187,6 +189,7 @@ async fn main() -> Result<()> {
         }),
         Mode::MakeFixtures => make_and_leave("--make-fixtures", fixtures::make, args.get(1)),
         Mode::MakeLayout => make_and_leave("--make-layout", fixtures::make_layout, args.get(1)),
+        Mode::MakeGateCases => make_and_leave("--make-gate-cases", fixtures::gate_cases, args.get(1)),
         Mode::Analyse => std::process::exit(match analysis::batch::run(&args[1..]) {
             Ok(code) => code,
             Err(e) => {
