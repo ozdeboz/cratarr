@@ -1,8 +1,7 @@
-//! What Home Assistant reads of Cratarr, pinned at 0.17's shape (the contract the Home Assistant session gathered from the Pi's
-//! configuration and cratarr-ha 0.5: the Play On push to its webhook, the player commands its script sends and reads the status and
-//! error of, the library calls, the health check, and the integration's own routes). Each field it reads is there, of the type it
-//! reads it as; Cratarr's own ids are `tr-`/`al-`. A change that fails this breaks Home Assistant: keep the field, or change it in
-//! step with the Home Assistant session.
+//! What Home Assistant reads of Cratarr, pinned at 0.17's shape (its configuration's calls and cratarr-ha 0.5's: the Play On push to
+//! its webhook, the player commands its script sends and reads the status and error of, the library calls, the health check, and the
+//! integration's own routes). Each field it reads is there, of the type it reads it as; Cratarr's own ids are `tr-`/`al-`. A change
+//! that fails this breaks Home Assistant: keep the field, or change it in step with Home Assistant's side.
 
 use std::time::Duration;
 
