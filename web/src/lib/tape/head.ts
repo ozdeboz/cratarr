@@ -1,6 +1,6 @@
 // The tape's head on the page (decision 0102, the owner 2026-11-03; amended the same day after measuring the tablet and
 // reading Mixxx and xwax): the reading itself, the same as the app's (android TapeHead.kt, its constants and its
-// behaviour, a5's), pure, so the page's audio worklet (lib/tape/head.worklet) and the tests run the same code.
+// behaviour), pure, so the page's audio worklet (lib/tape/head.worklet) and the tests run the same code.
 //
 // - **Chunks on demand** ([Chunks], Mixxx's CachingReader): [CHUNK] frames each, decoded by workers as the head asks
 //   for them, [KEPT] of them kept around where the tape is, the least recently read let go. The head asks ahead the way
@@ -15,7 +15,7 @@
 // The page's output runs at its own rate (the context's), the track at its own: a frame given is `rate / outRate` of
 // the track's at speed 1; times are the output's.
 
-/** A motion as the page sends it, the engine's (tape.wasm, the rules crate's tape: a5's): a tap's, a hold's (flown
+/** A motion as the page sends it, the engine's (tape.wasm, the rules crate's tape): a tap's, a hold's (flown
  *  from 1×, or spun up from a stand over `attack` ms), a spin-up from a stand to `v` × over `attack` ms, or a steady
  *  speed (× the track's, signed). */
 export type Motion =

@@ -1627,7 +1627,7 @@ where
             (i.folders, i.state, i.misses, i.why) = (found.into_iter().take(SHOWN).collect(), State::Found, 0, None);
         });
     }
-    // Not found: a search's answer, not a dead end, as Soulseek's users change by the hour (the coordinator, run 7b): searched
+    // Not found: a search's answer, not a dead end, as Soulseek's users change by the hour: searched
     // again later, by either list; its why says which could not find it.
     let missed = if it.untimed.is_empty() { "No folder holds every track of its release" } else { "No folder holds every track, even by titles" };
     with_item(id, |i| {

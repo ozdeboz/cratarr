@@ -207,11 +207,11 @@ mod tests {
     #[test]
     fn a_players_visuals_go_where_its_music_is_handed_over() {
         let v = GroupVisuals::new();
-        let before = v.put("ThinkPad", 0, map(json!({ "flash": 0.7 })), "a").unwrap();
+        let before = v.put("Laptop", 0, map(json!({ "flash": 0.7 })), "a").unwrap();
         v.put("Salon tablet", 0, map(json!({ "flash": 0.1 })), "b").unwrap();
         let mut heard = v.subscribe();
-        v.moved("ThinkPad", "Salon tablet");
-        assert!(v.get("ThinkPad").is_none());
+        v.moved("Laptop", "Salon tablet");
+        assert!(v.get("Laptop").is_none());
         let there = v.get("Salon tablet").unwrap();
         assert_eq!(there.settings["flash"], json!(0.7), "in place of its own");
         assert!(there.version > before);

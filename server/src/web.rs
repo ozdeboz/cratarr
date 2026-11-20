@@ -1,4 +1,4 @@
-//! Serves the built Svelte UI from a folder (0.11; 632 and the owner, 2026-10-30: a page-only fix ships without a Rust
+//! Serves the built Svelte UI from a folder (0.11; the owner, 2026-10-30: a page-only fix ships without a Rust
 //! build): `CRATARR_WEB_DIR`, else the image's `/web`, else `../web/dist` beside the source (development: a
 //! `pnpm build` shows up at once). Read from disk on each request; the system keeps what is asked often.
 

@@ -1,8 +1,7 @@
 # 0094: Taste in sequences and lists
 
-- Status: accepted (the owner, 2026-11-02, by question sets after a5 listed where the taste is used: "we need to deep
-  dive now, … how the user taste profile affects sequences and lists"). For 0.14. The server's parts are a5's, the
-  page's 632's.
+- Status: accepted (the owner, 2026-11-02, by question sets after a list of where the taste is used: "we need to deep
+  dive now, … how the user taste profile affects sequences and lists"). For 0.14.
 - Date: 2026-11-02
 - Builds on: 0036 (radio), 0024 (crates), 0060 (one set of sorts and filters); amends 0036 and 0060
 

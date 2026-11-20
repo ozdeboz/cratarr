@@ -24,7 +24,7 @@ const FLOOR = 1 / 16;
 
 /** The wind's stream braked as lib/localPlayer does it (its rate the plan's speed over the stream's 128×, at most 1×,
  *  at least its floor), its rate changes heard 100 ms late, and the page standing still for 376 ms a second in (the
- *  ThinkPad's log, 02:21:59): until the hand-over. The way it is heard, and where it is handed over. */
+ *  laptop's log, 02:21:59): until the hand-over. The way it is heard, and where it is handed over. */
 function windDown(t: ReturnType<typeof setup>) {
   const { plans, c } = t;
   let heard: Place = c.start;

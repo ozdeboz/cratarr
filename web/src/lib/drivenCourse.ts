@@ -1,5 +1,5 @@
 // A player driven through the server (Play On) as this page counts it on between its reports (the owner, 2026-10-30:
-// the tablet driving the ThinkPad "doesn't show reality" through a wind; it glided to each report and then stood).
+// the tablet driving the laptop "doesn't show reality" through a wind; it glided to each report and then stood).
 // A report says the player's place, when it was so (`position_at`), whether it winds, and, where the player and the
 // server say it, its speed. Its speed otherwise: 1 playing, 0 paused, and through a wind the speed between its last two
 // places, as measured. The page then counts on as it does for the app's own deck (lib/deckCourse), each report's

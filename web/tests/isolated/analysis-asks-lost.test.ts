@@ -1,5 +1,5 @@
 // A lost ask for a track's analysis fails in time and lets the ones behind it go (0.16.0, 2026-11-08: one request lost to a
-// network that dropped held every waveform after it, on the tablet and the ThinkPad, until the page was opened again).
+// network that dropped held every waveform after it, on the tablet and the laptop, until the page was opened again).
 // lib/analysisAsks, the real one, over a network that never answers the first.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

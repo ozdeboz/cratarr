@@ -3458,7 +3458,7 @@ impl Catalogue {
     /// A file's stable track id as served (`tr-N`, 0101): the record's track, whichever copy the file is (amended
     /// 2026-11-04), by the library it is in (its root as set) and its path there. None: no file there with a track yet,
     /// or no such library in use. Blocking.
-    #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, 632's stage 2)
+    #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, stage 2)
     pub fn track_by_path(&self, folder: &str, rel: &str) -> Option<String> {
         let at = self.folders().id_of(std::path::Path::new(folder))?;
         self.track_of(at, rel).map(crate::serve::ids::song)
@@ -3466,7 +3466,7 @@ impl Catalogue {
 
     /// The stable track id a playlist line names, as served: where the line points ([`Self::place_of_line`]), then that
     /// file's track. Blocking.
-    #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, 632's stage 2)
+    #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, stage 2)
     pub fn track_of_line(&self, line: &str) -> Option<String> {
         let (folder, rel) = self.place_of_line(line)?;
         self.track_of(folder, &rel).map(crate::serve::ids::song)
@@ -3475,7 +3475,7 @@ impl Catalogue {
     /// What a track is or was (0101 point 11: a missing entry shows it): its title, artist, album, MusicBrainz recording
     /// and length, from its file while it has one (here, or gone a while), else as kept when it retired. None: no such
     /// track. Blocking.
-    #[allow(dead_code)] // playlists' missing entries (632's stage 2)
+    #[allow(dead_code)] // playlists' missing entries (stage 2)
     pub fn remembered(&self, track: i64) -> Option<Remembered> {
         let db = self.db();
         let file: Option<(i64, String, Option<i64>)> = db

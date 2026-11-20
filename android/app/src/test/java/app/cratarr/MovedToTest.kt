@@ -17,9 +17,9 @@ class MovedToTest {
 
     @Test
     fun a_view_names_where_its_music_went_and_when() {
-        val view = JSONObject("""{"name":"ThinkPad","moved_to":{"player":"Salon tablet","at":1761800000000}}""")
+        val view = JSONObject("""{"name":"Laptop","moved_to":{"player":"Salon tablet","at":1761800000000}}""")
         assertEquals("player:Salon tablet" to 1_761_800_000_000L, MovedTo.ofView(view))
-        assertNull(MovedTo.ofView(JSONObject("""{"name":"ThinkPad"}""")))
+        assertNull(MovedTo.ofView(JSONObject("""{"name":"Laptop"}""")))
         assertNull(MovedTo.ofView(null))
     }
 }

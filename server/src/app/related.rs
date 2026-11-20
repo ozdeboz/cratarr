@@ -644,7 +644,7 @@ mod tests {
         panic!("still looking")
     }
 
-    /// F8.1 (c), as the coordinator corrected it (the recommendations read ListenBrainz and MusicBrainz, never Last.fm): while a look runs
+    /// F8.1 (c), as corrected (the recommendations read ListenBrainz and MusicBrainz, never Last.fm): while a look runs
     /// they say so, naming the source it asks first; MusicBrainz switched off, a look asks it nothing (nor for the new artists' albums on
     /// Bandcamp, which MusicBrainz links), still reads ListenBrainz, and they say MusicBrainz is switched off, in F1's words; switched on
     /// again, a look at once that asks it. A look that heard no source (ListenBrainz's connection reset, MusicBrainz off) keeps nothing

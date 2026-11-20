@@ -2,9 +2,8 @@
 
 - Status: accepted (the owner, 2026-11-01: "Shouldn't we have some sort of test database? Like a development database,
   and also a test database for ephemeral stuff. How much of this makes sense? We want to keep it robust and tight.";
-  by question set: all three; reviewed by a5 the same day. Made neutral the same day: how a developer works, and how
-  a maintainer tries a release before it ships, are their own and not this project's to direct). For 0.13. The
-  server's parts are a5's, the page's 632's.
+  by question set: all three; reviewed the same day. Made neutral the same day: how a developer works, and how
+  a maintainer tries a release before it ships, are their own and not this project's to direct). For 0.13.
 - Date: 2026-11-01
 - Builds on: 0092 (one way to change files: writers that change real files), 0008 (the catalogue), 0011 (the journal)
 

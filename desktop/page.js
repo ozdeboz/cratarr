@@ -14,7 +14,7 @@
 // Out of reach has a bound (2026-11-08): Cratarr gets WAIT_MS to begin its answer for a file of its page, and a proxy's
 // refusal in front of it (403, 502 to 504, as the page's lib/reach reads them) counts as no answer. A network that goes
 // silent drops what is sent without a word, so without the bound the window stayed blank until the connection gave up:
-// 2 min 14 s, measured on the ThinkPad with Cratarr's address dropped. Once out of reach, Cratarr counts so for AWAY_MS,
+// 2 min 14 s, measured on a laptop with Cratarr's address dropped. Once out of reach, Cratarr counts so for AWAY_MS,
 // or until it answers anything: meanwhile the page's files are the app's at once, without asking. The service worker's
 // script is the one exception, Cratarr's or none: a quick failure, so the browser keeps the worker it has.
 'use strict';

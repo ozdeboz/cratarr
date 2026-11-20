@@ -1,9 +1,9 @@
 # 0096: Libraries equal; playlists in Cratarr; Incoming a library's setting
 
 - Status: accepted (the owner, 2026-11-02: "this duality is an old one in our software package. My gut feeling says
-  more than half of the reasons it exists are no longer real"; by question sets after a5 listed every behaviour the
+  more than half of the reasons it exists are no longer real"; by question sets after a list of every behaviour the
   split drives). To be built in 0.15/0.16 with each user's own music; the inconsistencies under Context are fixed in
-  0.13 as bugs. The server's parts are a5's, the page's 632's.
+  0.13 as bugs.
 - Date: 2026-11-02
 - Builds on: 0009 (library uses), 0013 (Keep and Replace), 0034 (one Library page, moves), 0044 (folders), 0084 (each
   user's own music); amends 0009, 0034 and 0084
@@ -55,11 +55,11 @@ dropped Incoming's tracks, and the page still said an Incoming track could not g
 
 ## Amendment 2026-11-02: a quality limit in place of the format (for 0.14)
 
-The owner, by question set (relayed by 632): a library's "Albums moved in" (CD format or as they are) becomes a
+The owner, by question set: a library's "Albums moved in" (CD format or as they are) becomes a
 **quality limit** of four steps: none, up to 24-bit/96 kHz, up to 24-bit/48 kHz, CD (16-bit/44.1 kHz).
 
 - Only lossless files above the limit are converted, into FLAC at the limit; lossy files are never touched.
 - It applies to albums moved into the library and to Keep into it; not to Sync to a device or to Export.
 - Lowering a library's limit converts nothing already there: Health points out the albums above their library's
   limit, each with its fix.
-- Built in 0.14, before the rest of this decision. The server's parts are a5's, the sheet and row 632's.
+- Built in 0.14, before the rest of this decision.

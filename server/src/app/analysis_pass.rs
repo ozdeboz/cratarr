@@ -1,4 +1,4 @@
-//! Decision 0035: the NAS keeps the analysis up to date. The first pass over the whole library is the ThinkBook's
+//! Decision 0035: the NAS keeps the analysis up to date. The first pass over the whole library is a PC's
 //! (`cratarr-server --analyse`, its results imported by file); after it, this pass analyses what comes or changes (a
 //! new album, a replaced file, a newer analysis version), one file at a time, resting three times as long as each
 //! took: about a quarter of one core, so Cratarr answers as fast as ever meanwhile.
@@ -18,8 +18,8 @@
 //! beside one still running: one decode for the visuals takes about half a gigabyte for a moment, and two at once, or
 //! one beside an import, went over the NAS's 768 MB (eighteen restarts, 2026-10-23/24).
 //!
-//! `CRATARR_ANALYSIS`: `keep` (the default: waits until most of the library has an analysis, as after the ThinkBook's
-//! import, then keeps up), `all` (does the first pass itself, when no ThinkBook is at hand), `off`.
+//! `CRATARR_ANALYSIS`: `keep` (the default: waits until most of the library has an analysis, as after a PC's
+//! import, then keeps up), `all` (does the first pass itself, when no PC is at hand), `off`.
 
 use std::collections::HashSet;
 use std::sync::Arc;

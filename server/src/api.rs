@@ -1480,7 +1480,7 @@ struct ImportTo {
     folder: String,
 }
 
-/// Analyses made elsewhere (decision 0035: the ThinkBook's pass), as JSON lines for one library folder, read as they
+/// Analyses made elsewhere (decision 0035: a PC's pass), as JSON lines for one library folder, read as they
 /// come (tens of MB): each taken while its file is as it was analysed. Answers with the counts.
 async fn analysis_import(
     State(app): State<Arc<App>>,
