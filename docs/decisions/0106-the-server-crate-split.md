@@ -54,3 +54,20 @@ release to the moment 0.17's last preview is cut.
   - the small crates' to a few seconds;
   - app edits are about 1.8× faster until phase 2.
 - **Tooling:** the test runner takes a package, and the image build and CI build the workspace.
+
+## Amendment (2026-11-20): one crate per domain
+
+Decided by the owner while phase 2 ran, on the question of how fine the split should go. The rule:
+
+- **A crate per domain** with its own data, its own rules and a one-way dependency, under a thin top that only wires
+  (`app`, `api`). The compiler then keeps the layers: a crate cannot reach the one above it, where a module's boundary
+  is only a convention.
+- **Below domain level only when measured:** a build time or a test that needs its own isolation asks for it, not tidiness.
+  A crate whose interface would be larger than its inside is too small.
+- **Phase 2's areas become crates** bottom up: `served`, `base`, `listening`, `records`, `requests` and `playing` side by
+  side, `incoming`, then `health` and `search` side by side, above them `app` and `api`. Health and search are two crates,
+  not one: they don't use each other, so an edit to one rebuilds neither the other nor its tests.
+- **Collections beneath playback (planned for 0.18, after phase 2):** `playlists` and `crates` become crates below
+  `playing`. They are what plays; playing (the queue, radio, Play On) uses them and never the reverse. As with phase 2,
+  the wrong-way references are scanned and untangled first, then the files move.
+- **Each crate says what it is:** its `lib.rs` opens with the area it holds and what it may depend on.
