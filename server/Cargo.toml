@@ -140,6 +140,8 @@ ts-rs.workspace = true
 cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
 # Calls the routers as a client would, in tests (decision 0030).
 tower.workspace = true
+# Reads a stream as a client would (the players' events, a player's commands), in tests.
+tokio-stream.workspace = true
 # What the end-to-end suite (tests/e2e.rs) reads and writes beside the server it starts.
 flate2.workspace = true
 image.workspace = true
