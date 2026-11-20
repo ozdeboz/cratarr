@@ -14,6 +14,7 @@ pub mod device_index_settled;
 pub mod files;
 pub use cratarr_gate::serve::ids;
 pub mod import;
+pub mod import_base;
 pub mod import_job;
 pub use cratarr_gate::serve::index_rows;
 pub mod ldap;

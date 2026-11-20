@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use super::PlayingService;
 use crate::userdata::UserData;
 use crate::userdata::offline::KEEP_SECS;
 
@@ -101,15 +100,10 @@ impl Plays {
         Self { seen: tokio::sync::Mutex::new(HashMap::new()), kept }
     }
 
-    /// Counts the plays not counted before. Returns the ids the player may forget: counted now, or before. A play
-    /// that cannot be counted now (its server away) is left out, so the player sends it again later.
-    pub async fn take(&self, playing: &PlayingService, events: Vec<PlayEvent>) -> Vec<String> {
-        self.take_with(events, |e| async move { playing.hear(&e).await.map_err(|e| e.to_string()) })
-            .await
-    }
-
-    /// As `take`, counting with `count`.
-    async fn take_with<F, Fut>(&self, events: Vec<PlayEvent>, count: F) -> Vec<String>
+    /// Counts the plays not counted before, each with `count` (the server's: `PlayingService::hear`). Returns the ids the player
+    /// may forget: counted now, or before. A play that cannot be counted now (its server away) is left out, so the player sends it
+    /// again later.
+    pub async fn take_with<F, Fut>(&self, events: Vec<PlayEvent>, count: F) -> Vec<String>
     where
         F: Fn(PlayEvent) -> Fut,
         Fut: std::future::Future<Output = Result<(), String>>,

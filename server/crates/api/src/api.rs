@@ -6744,7 +6744,8 @@ async fn history_listening(ctx: Ctx, Query(q): Query<ListeningQuery>, RawQuery(r
 }
 
 async fn plays(State(app): State<Arc<App>>, Json(p): Json<PlayEvents>) -> Json<serde_json::Value> {
-    let done = app.plays.take(&app.playing, p.events).await;
+    let playing = &app.playing;
+    let done = app.plays.take_with(p.events, |e| async move { playing.hear(&e).await.map_err(|e| e.to_string()) }).await;
     // Home's Jump back in shows the plays now, not when its keep runs out (0.12.3: Home's Jump back in asked dozens of
     // times a minute, 2026-10-31).
     if !done.is_empty() {

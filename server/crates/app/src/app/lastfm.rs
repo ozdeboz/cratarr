@@ -22,9 +22,14 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::import::{Counter, Listened, Matcher, Tally, Track, into_history, key};
-use crate::serve::import::{Seen, decide};
+use crate::serve::import_base::{Seen, decide};
 use crate::userdata::{ImportChange, ImportKey, Kind};
 use super::reach::Sent as _;
+
+/// Cratarr's metadata client (O6): its User-Agent, its guard (O1), as Discover's.
+fn http() -> Result<reqwest::Client> {
+    Ok(super::reach::client(super::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?)
+}
 
 const API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Last.fm's largest page of recent tracks (and of loved ones).
@@ -196,8 +201,7 @@ async fn read(
     progress: &Progress,
     mut spool: Option<&mut super::resume::Spool<Scrobble>>,
 ) -> Result<Vec<Scrobble>> {
-    // Cratarr's metadata client (O6): its User-Agent, its guard (O1).
-    let http = super::discover::http()?;
+    let http = http()?;
     let mut out = Vec::new();
     let mut page = 1usize;
     loop {
@@ -483,8 +487,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
         Ok((songs, loved, scrobbles, asks))
     })
     .await??;
-    // Cratarr's metadata client (O6): its User-Agent, its guard (O1).
-    let http = super::discover::http()?;
+    let http = http()?;
     for (n, &i) in asks.iter().enumerate() {
         progress("Finding the loved tracks' albums", n as u64, Some(asks.len() as u64));
         FM.turn().await;
