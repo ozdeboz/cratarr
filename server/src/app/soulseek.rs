@@ -235,6 +235,11 @@ pub struct Item {
     /// When its folders were found (epoch s, SK3.4): a free slot counts within the hour; 0, not known (0.16's).
     #[serde(default)]
     pub found_at: i64,
+    /// What its check heard in a file that passed, by the file's name (SK6.3, the owner's "and in the item"): clipping, clicks, a pop
+    /// at the very end, in `Findings::notes()`'s words. Kept once its check passed, so a placing tried again keeps them; shown on the
+    /// arrival's card.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
 }
 
 /// A folder set aside: whose, where it is kept, and why each of its files failed.
@@ -982,6 +987,7 @@ pub fn list_for_tests(id: &str, record: i64) {
         forgotten: 0,
         auto: false,
         found_at: 0,
+        notes: BTreeMap::new(),
     };
     kept(|k| k.items.push(i));
 }
@@ -1455,6 +1461,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             forgotten: 0,
             auto: false,
             found_at: 0,
+            notes: BTreeMap::new(),
         });
         // Its first search as the order has it (X1, `first_search`).
         if let Some(i) = k.items.last_mut() {
@@ -2158,7 +2165,11 @@ async fn checks() {
     loop {
         if let Ok((slskd, folder)) = super::track_fetch::slskd_ready().await {
             let places = Places::of_server();
-            let gate = |file: PathBuf, track: ReleaseTrack| async move { super::track_fetch::gate_track(&file, &track).await };
+            let gate = |file: PathBuf, track: ReleaseTrack| async move {
+                let (score, notes) = super::track_fetch::gate_track_and_notes(&file, &track).await?;
+                note_heard(&file, notes);
+                Ok(score)
+            };
             for _ in 0..1_000 {
                 if !check_next(&every, &slskd, &folder, &places, &gate).await {
                     break;
@@ -2228,8 +2239,14 @@ where
         slskd.drop_transfer(&f.user, &t.id).await;
     }
     match checked {
-        Ok(files) => place_from(id, &it, &dir, &files, places).await,
+        Ok(files) => {
+            // Its notes kept once its check passed (SK6.3): a placing tried again keeps them, and its arrival's card says them.
+            let notes = notes_of(&files);
+            with_item(id, |i| i.notes = notes);
+            place_from(id, &it, &dir, &files, places).await
+        }
         Err(why) => {
+            notes_of(&files_under(&dir));
             let aside = set_aside(&dir, id, &f.user, &why, places.data.as_deref());
             // Gone either way (X4): set aside, or where it could not be, removed.
             std::fs::remove_dir_all(&dir).ok();
@@ -2398,6 +2415,22 @@ async fn follow_one(id: &str, slskd: &Slskd, folder: &Path) {
             }
         }
     }
+}
+
+/// Notes Soulseek's gate heard in a file that passed (SK6.3), by its path, till its check takes them (`check_one`).
+static HEARD: Mutex<BTreeMap<PathBuf, String>> = Mutex::new(BTreeMap::new());
+
+/// What Soulseek's gate heard in `file`, kept for its check.
+pub(crate) fn note_heard(file: &Path, notes: Option<String>) {
+    if let Some(n) = notes {
+        HEARD.lock().unwrap_or_else(|e| e.into_inner()).insert(file.to_path_buf(), n);
+    }
+}
+
+/// The notes heard in these files, by name, taken.
+fn notes_of(files: &[PathBuf]) -> BTreeMap<String, String> {
+    let mut heard = HEARD.lock().unwrap_or_else(|e| e.into_inner());
+    files.iter().filter_map(|p| Some((p.file_name()?.to_string_lossy().into_owned(), heard.remove(p)?))).collect()
 }
 
 /// The checks' worker woken: a download ended.
@@ -2947,6 +2980,7 @@ mod tests {
             forgotten: 0,
             auto: false,
             found_at: 0,
+            notes: BTreeMap::new(),
         };
         assert!(on_failed(&mut i, "a", "a is offline".into()));
         assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone(), i.failed.clone()), (State::Approved, Some(0), 1, None, vec!["a".to_string()]));
@@ -2996,6 +3030,7 @@ mod tests {
             forgotten: 0,
             auto: false,
             found_at: 0,
+            notes: BTreeMap::new(),
         };
         kept(|k| k.items.push(i));
     }
@@ -3306,6 +3341,7 @@ mod tests {
             forgotten: 0,
             auto: false,
             found_at: 0,
+            notes: BTreeMap::new(),
         };
         kept(|k| k.items.push(i));
         r
@@ -3599,6 +3635,7 @@ mod tests {
             forgotten: 0,
             auto: false,
             found_at: 0,
+            notes: BTreeMap::new(),
         };
         kept(|k| k.items.push(i));
     }
@@ -5172,6 +5209,7 @@ mod tests {
             forgotten: 0,
             auto: false,
             found_at: 0,
+            notes: BTreeMap::new(),
         };
         let mut found = item(State::Found);
         search_again(&mut found);
@@ -5310,6 +5348,7 @@ mod tests {
             forgotten: 0,
             auto: false,
             found_at: 0,
+            notes: BTreeMap::new(),
         }
     }
 
@@ -6476,6 +6515,100 @@ mod tests {
         assert_eq!(item("ss-h2-c").unwrap().state, State::Approved, "Cratarr's pick not sent");
         assert_eq!(slskd.post_users(), ["peer-b"], "the tick goes");
         assert!(!Look::of_disks().read, "a look of the disks alone has read nothing of the server");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// The record whose real audio the gate cases hold: its artist, title, year and request 11, its list with recordings r-1 … r-3.
+    fn case_item(id: &str, batch: &str, users: &[&str]) {
+        use crate::fixtures::gate::TIDE_TABLES as REC;
+        tide_tables(id, State::Fetching, Some(batch), users);
+        with_item(id, |i| i.tracks = REC.tracks.iter().enumerate().map(|(n, (title, secs))| Track { disc: 1, position: n as u32 + 1, title: title.to_string(), length_ms: Some(*secs as i64 * 1000), recording: Some(format!("r-{}", n + 1)) }).collect());
+    }
+
+    /// slskd's folder holding a gate case's real files under `batch`, as `fetched_to` holds stand-ins.
+    fn fetched_from(case: &str, batch: &str) -> PathBuf {
+        let from = crate::fixtures::gate::gate_cases_once().join(case).join(crate::fixtures::gate::TIDE_TABLES.folder());
+        let d = data_folder(&format!("case-{batch}"));
+        let at = d.join(crate::slskd::FOLDER).join(batch);
+        std::fs::create_dir_all(&at).unwrap();
+        for e in std::fs::read_dir(&from).unwrap().flatten() {
+            std::fs::copy(e.path(), at.join(e.file_name())).unwrap();
+        }
+        d
+    }
+
+    /// Soulseek's own gate (faults refusing, notes passing, its notes kept for the check), AcoustID stood in: it knows each file of
+    /// `names` as its recording, and each question is noted in `asked`.
+    fn knowing(asked: &Arc<Mutex<Vec<String>>>, names: &[(&str, &str)]) -> impl Fn(PathBuf, ReleaseTrack) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f32>> + Send>> + use<> {
+        let asked = asked.clone();
+        let names: BTreeMap<String, String> = names.iter().map(|(f, r)| (f.to_string(), r.to_string())).collect();
+        move |file: PathBuf, track: ReleaseTrack| {
+            let (asked, names) = (asked.clone(), names.clone());
+            Box::pin(async move {
+                let name = file.file_name().unwrap().to_string_lossy().into_owned();
+                let recording = names.get(&name).cloned().unwrap_or_default();
+                let lookup = move |_: crate::acoustid::Print| {
+                    asked.lock().unwrap().push(name);
+                    std::future::ready(Ok(vec![crate::acoustid::Found { score: 0.97, recordings: vec![crate::acoustid::Recording { id: recording }] }]))
+                };
+                let (score, notes) = super::super::track_fetch::gate_track_noted(&file, &track, lookup).await?;
+                note_heard(&file, notes);
+                Ok(score)
+            })
+        }
+    }
+
+    const CASE_NAMES: [(&str, &str); 3] = [("01 Slack Water.flac", "r-1"), ("02 Neap.flac", "r-2"), ("03 Spring Tide.flac", "r-3")];
+
+    /// SK6.1's AcoustID's half: a certain folder's real files pass every check, AcoustID asked of each; passed (its checked files
+    /// kept, as only the library a unit test has not set up stops it); nobody failed, nothing set aside, no notes.
+    #[tokio::test]
+    async fn a_certain_folders_files_pass_every_check_and_acoustid_is_asked_of_each() {
+        let (id, batch) = ("ss-g1", "b-g1");
+        case_item(id, batch, &["peer-a"]);
+        let d = fetched_from(crate::fixtures::gate::CLEAN, batch);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        fetch_from(id, &slskd_at(all_in()).await, &d, knowing(&asked, &CASE_NAMES)).await;
+        let i = item(id).unwrap();
+        assert_eq!(asked.lock().unwrap().len(), 3, "AcoustID asked of each file");
+        assert!(i.failed.is_empty() && i.set_aside.is_empty() && i.checked.as_deref() == Some(batch) && i.notes.is_empty(), "{i:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK6.2's AcoustID's half: a FLAC walled at 16 kHz is refused, each file in the fault's words, before AcoustID is asked; through
+    /// the workers its user is failed and the item goes back to its search.
+    #[tokio::test]
+    async fn a_transcode_is_refused_before_acoustid_is_asked() {
+        let (id, batch) = ("ss-g2", "b-g2");
+        case_item(id, batch, &["peer-a"]);
+        let d = fetched_from(crate::fixtures::gate::WALLED, batch);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let gate = knowing(&asked, &CASE_NAMES);
+        let it = item(id).unwrap();
+        let why = check(&d.join(crate::slskd::FOLDER).join(batch), &it.folders[0], &release_to_check(&it), &gate).await.unwrap().unwrap_err();
+        assert_eq!(why.values().collect::<Vec<_>>(), ["Not lossless: it stops at 16 kHz"; 3], "{why:?}");
+        assert!(asked.lock().unwrap().is_empty(), "AcoustID asked nothing");
+        fetch_from(id, &slskd_at(all_in()).await, &d, gate).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.failed.clone(), i.state, i.folders.len()), (vec!["peer-a".to_string()], State::Waiting, 0), "back to its search");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// SK6.3's AcoustID's half: clipping, a click and a pop at the very end pass every check, AcoustID still asked of every file;
+    /// passed, nobody failed, nothing set aside; the item keeps its notes, by file.
+    #[tokio::test]
+    async fn notes_pass_every_check_and_acoustid_is_still_asked() {
+        let (id, batch) = ("ss-g3", "b-g3");
+        case_item(id, batch, &["peer-a"]);
+        let d = fetched_from(crate::fixtures::gate::NOTES, batch);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        fetch_from(id, &slskd_at(all_in()).await, &d, knowing(&asked, &CASE_NAMES)).await;
+        let i = item(id).unwrap();
+        assert_eq!(asked.lock().unwrap().len(), 3, "AcoustID asked of every file, notes or not");
+        assert!(i.failed.is_empty() && i.set_aside.is_empty() && i.checked.as_deref() == Some(batch), "{i:?}");
+        assert_eq!(i.notes.get("02 Neap.flac").map(String::as_str), Some("Clipped at 0:01"));
+        assert_eq!(i.notes.get("03 Spring Tide.flac").map(String::as_str), Some("A click at 0:01; a pop at the very end"));
+        assert!(!i.notes.contains_key("01 Slack Water.flac"));
         std::fs::remove_dir_all(&d).ok();
     }
 

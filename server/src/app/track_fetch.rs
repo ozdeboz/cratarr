@@ -605,6 +605,23 @@ pub async fn gate_track(file: &Path, track: &ReleaseTrack) -> Result<f32> {
     gate_track_with(file, track, |print| unless_paused(looked_up, print)).await
 }
 
+/// Soulseek's gate for a file, as [`gate_track_with`], with the notes its sound was heard to have (`Findings::notes()`: clipping,
+/// clicks, a pop at the very end), which pass it and show on its arrival (SK6.3), `lookup` asked what AcoustID knows of it.
+pub(super) async fn gate_track_noted<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<(f32, Option<String>)>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
+    let print = printed(file).await?;
+    let notes = print.flaws.notes();
+    Ok((judge_track(print, track, lookup).await?, notes))
+}
+
+/// [`gate_track`], with the notes its sound was heard to have (`gate_track_noted`).
+pub(super) async fn gate_track_and_notes(file: &Path, track: &ReleaseTrack) -> Result<(f32, Option<String>)> {
+    gate_track_noted(file, track, |print| unless_paused(looked_up, print)).await
+}
+
 /// [`gate_track`], asking `lookup` what AcoustID knows of the file (the tests' stands in).
 async fn gate_track_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
