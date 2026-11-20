@@ -1,8 +1,9 @@
 //! Lists like a list, of its own kind (the owner, 2026-10-23: "any list that has a profile at the top gets a similarity
-//! set at the bottom"). An album's albums are `radio::similar_albums`, a playlist's playlists
-//! `PlaylistService::similar_playlists`; a crate's crates are here: the asking account's crates, each by the tracks it
-//! holds (its first page, newest first), through the one similarity (`radio::similar_lists`). A crate made from a seed
-//! (a genre, Sounds like) has none: it is no crate of one's own.
+//! set at the bottom"). An album's albums are `radio::similar_albums`; a playlist's playlists and a crate's crates are
+//! here: the asking account's crates, each by the tracks it holds (its first page, newest first), through the one
+//! similarity (`radio::similar_lists`). A crate made from a seed (a genre, Sounds like) has none: it is no crate of one's
+//! own. Here in playing, beside radio, whose index the one similarity reads (SP3-U: `similar_playlists` was the playlist
+//! service's).
 
 use super::{CrateLook, PlaylistService, ToggleError};
 use crate::crates::{GENRE, LIKE};
@@ -18,6 +19,31 @@ fn seeded(id: &str) -> bool {
 async fn songs_of(playlists: &PlaylistService, id: &str) -> Result<Vec<String>, ToggleError> {
     let page = playlists.crate_rows(id, Some(crate::source::cratarr::KIND.id), 0, SAMPLE, &CrateLook::default()).await?;
     Ok(page.rows.into_iter().filter_map(|r| r.id).collect())
+}
+
+/// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
+/// those the asking account sees, the closest first, with how alike (0 to 100): radio::similar_lists.
+pub async fn similar_playlists(playlists: &PlaylistService, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
+    let Some(serve) = playlists.served() else { return Ok(Vec::new()) };
+    let lists = playlists.visible_lines().await?;
+    let id = id.to_string();
+    let (seed, candidates) = crate::run::spawn_blocking(move || {
+        let cat = serve.catalogue();
+        let songs = |lines: &[String]| lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(cat, l)).collect::<Vec<_>>();
+        let mut seed = Vec::new();
+        let mut candidates = Vec::new();
+        for (list, _, lines) in &lists {
+            if *list == id {
+                seed = songs(lines);
+            } else {
+                candidates.push((list.clone(), songs(lines)));
+            }
+        }
+        (seed, candidates)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    super::radio::similar_lists(seed, candidates, count).await
 }
 
 /// Crates like a crate, among the asking account's, the closest first, with how alike (0 to 100).

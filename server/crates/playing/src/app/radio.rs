@@ -19,7 +19,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+#[cfg(test)]
+use rusqlite::Connection;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
@@ -116,36 +118,13 @@ fn similar_by_of_listener() -> Option<Vec<Signal>> {
     similar_by_of(&crate::serve::instance()?.current_user()?)
 }
 
-/// An account's own "Similar by" (its settings' `similar_by`: signal names, the first counting most), when it set one;
-/// names not known are left out. A player Cratarr drives (Play On, with nobody asking) takes its account's.
-pub fn similar_by_of(user: &str) -> Option<Vec<Signal>> {
-    let served = crate::serve::instance()?;
-    let (_, settings) = served.userdata.settings_of(user).ok()?;
-    similar_by_in(&settings)
-}
+/// An account's Similar by and More music choice, and what Radio leaves for later: the crates read them too, so they sit
+/// below playing (`crates_from_radio`).
+pub use super::crates_from_radio::{more_music_of, similar_by_of};
+use super::crates_from_radio::{read_only, recent_plays};
+#[cfg(test)]
+use super::crates_from_radio::{more_music_in, similar_by_in};
 
-/// An account's More music choice (0.9.5, its settings' `more_music`): the libraries Radio and Autoplay choose from
-/// (by Cratarr's library ids, its folders; none: all) and whether Discover's Bandcamp suggestions join them.
-pub fn more_music_of(user: &str) -> (Option<Vec<String>>, bool) {
-    match crate::serve::instance().and_then(|s| s.userdata.settings_of(user).ok()) {
-        Some((_, settings)) => more_music_in(&settings),
-        None => (None, false),
-    }
-}
-
-fn more_music_in(settings: &serde_json::Value) -> (Option<Vec<String>>, bool) {
-    let m = &settings["more_music"];
-    (m["libraries"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()), m["bandcamp"].as_bool().unwrap_or(false))
-}
-
-/// "Similar by" as an account's settings hold it; none set, or none known: none.
-fn similar_by_in(settings: &serde_json::Value) -> Option<Vec<Signal>> {
-    let names = settings.get("similar_by")?.as_array()?.clone();
-    Some(names.into_iter().filter_map(|n| serde_json::from_value(n).ok()).collect()).filter(|v: &Vec<Signal>| !v.is_empty())
-}
-
-/// Played within this long: left out while there is enough else (the owner, 2026-10-16).
-const RECENT: Duration = Duration::from_secs(7 * 24 * 3600);
 /// An index older than this is built again even when the library is not.
 const FRESH: Duration = Duration::from_secs(600);
 
@@ -381,12 +360,6 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
     Ok(index)
 }
 
-fn read_only(file: &Path) -> Result<Connection> {
-    let conn = crate::db::open_read_only(file)?;
-    conn.busy_timeout(Duration::from_secs(10))?;
-    Ok(conn)
-}
-
 /// What the library was last built from (its meta row), so an index from before is built again.
 fn built_from(library: &Path) -> Result<String> {
     let conn = read_only(library)?;
@@ -398,28 +371,6 @@ fn starred_songs(userdata: &Path, user: &str) -> Result<HashSet<String>> {
     let conn = read_only(userdata)?;
     let mut st = conn.prepare("SELECT item FROM annotation WHERE user = ?1 AND kind = 'song' AND starred = 1")?;
     Ok(st.query_map(params![user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
-}
-
-/// Songs played within seven days as one's own, with when (epoch seconds): what was heard while following another
-/// is not kept from the radio (the owner, 2026-10-30).
-fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
-    let conn = read_only(userdata)?;
-    let since = super::moment::now_secs() - RECENT.as_secs() as i64;
-    let mut st = conn.prepare("SELECT item, own_date FROM annotation WHERE user = ?1 AND kind = 'song' AND own_date >= ?2")?;
-    let rows = st.query_map(params![owner, since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
-/// What Radio leaves for later of `user`'s, as `ready` reads it: nothing while its play history is off.
-pub(super) fn recent_of(serve: &crate::serve::Serve, user: &str) -> Result<HashMap<String, i64>> {
-    let Some(dir) = &serve.data_dir else { return Ok(HashMap::new()) };
-    if serve.userdata.tracking(user) { recent_plays(&dir.join("userdata.sqlite"), user) } else { Ok(HashMap::new()) }
-}
-
-/// The folders of the libraries `user` lets Radio and Autoplay choose from; none: every one.
-pub(super) fn folders_of(serve: &crate::serve::Serve, user: &str) -> Option<Vec<i64>> {
-    let libraries = more_music_of(user).0?;
-    Some(serve.library.roots().into_iter().filter(|(_, r)| libraries.iter().any(|l| Path::new(l) == Path::new(r))).map(|(f, _)| f).collect())
 }
 
 /// Interns names as numbers: genres and tags in any case, ids exactly.

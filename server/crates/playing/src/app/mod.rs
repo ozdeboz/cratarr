@@ -31,6 +31,7 @@ pub mod visuals;
 pub mod playlists_settings;
 pub mod playon_players;
 pub mod playlists_insights;
+pub mod crates_from_radio;
 
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateLook, CrateOrder, CratePage, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};

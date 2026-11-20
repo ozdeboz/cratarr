@@ -3061,7 +3061,7 @@ impl PlaylistService {
         let (s, who) = (serve.clone(), user.to_string());
         let (albums, recent, libraries) = crate::run::spawn_blocking(move || -> Result<_> {
             let albums = s.userdata.starred(&who, crate::userdata::Kind::Album)?;
-            Ok((albums, super::radio::recent_of(&s, &who)?, super::radio::folders_of(&s, &who)))
+            Ok((albums, super::crates_from_radio::recent_of(&s, &who)?, super::crates_from_radio::folders_of(&s, &who)))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))??;
@@ -3072,7 +3072,7 @@ impl PlaylistService {
             artists_out,
             lists,
             together,
-            similar_by: super::radio::similar_by_of(user),
+            similar_by: super::crates_from_radio::similar_by_of(user),
             libraries,
             crates: kept,
             recent: recent.into_iter().filter_map(|(song, at)| Some((crate::serve::ids::track_of(&song)?, at))).collect(),
@@ -3431,7 +3431,7 @@ impl PlaylistService {
         // On the first page only: the panel shows them on top.
         let genres = if offset == 0 {
             let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
-            crates::top_genres(lib.files().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), super::playing::GENRES_SHOWN)
+            crates::top_genres(lib.files().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), super::crates_from_radio::GENRES_SHOWN)
         } else {
             Vec::new()
         };
@@ -3679,7 +3679,7 @@ impl PlaylistService {
                 membership.entry(line).or_default().push(name.clone());
             }
         }
-        let by = asking_user(self.served.as_deref()).and_then(|u| super::radio::similar_by_of(&u)).map_or(crate::similarity::Weights::EQUAL, |o| crate::similarity::Weights::ranked(&o));
+        let by = asking_user(self.served.as_deref()).and_then(|u| super::crates_from_radio::similar_by_of(&u)).map_or(crate::similarity::Weights::EQUAL, |o| crate::similarity::Weights::ranked(&o));
         let uses = match asking_user(self.served.as_deref()) {
             Some(user) => {
                 let (files, served) = (files.clone(), self.served.clone());
@@ -4294,31 +4294,6 @@ impl PlaylistService {
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
-    }
-
-    /// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
-    /// those the asking account sees, the closest first, with how alike (0 to 100): radio::similar_lists.
-    pub async fn similar_playlists(&self, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
-        let Some(serve) = self.served.clone() else { return Ok(Vec::new()) };
-        let lists = self.visible_lines().await?;
-        let id = id.to_string();
-        let (seed, candidates) = crate::run::spawn_blocking(move || {
-            let cat = serve.catalogue();
-            let songs = |lines: &[String]| lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(cat, l)).collect::<Vec<_>>();
-            let mut seed = Vec::new();
-            let mut candidates = Vec::new();
-            for (list, _, lines) in &lists {
-                if *list == id {
-                    seed = songs(lines);
-                } else {
-                    candidates.push((list.clone(), songs(lines)));
-                }
-            }
-            (seed, candidates)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-        super::radio::similar_lists(seed, candidates, count).await
     }
 
     /// One playlist's lines (one's own, or a shared one).

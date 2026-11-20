@@ -71,8 +71,9 @@ pub struct StateView {
     pub sources: Vec<SourceTab>,
 }
 
-/// The most genres the panel shows on top of an album or a crate.
-pub const GENRES_SHOWN: usize = 5;
+/// The most genres the panel shows on top of an album or a crate: below playing, as a crate's page counts them too
+/// (`crates_from_radio`).
+pub use super::crates_from_radio::GENRES_SHOWN;
 
 /// An artist as the panel shows them (decided 2026-10-16, as Symfonium's): their albums and the albums they appear on,
 /// newest first, and their tracks album by album as a playlist's rows, with the owner's plays (Top tracks; what Play

@@ -6669,7 +6669,7 @@ async fn similar_crates(State(app): State<Arc<App>>, Path(id): Path<String>) -> 
 
 /// Playlists like a playlist, among those the account sees: `[{id, alike}]`, the closest first.
 async fn similar_playlists(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let found = app.playlists.similar_playlists(&id, SIMILAR_LISTS).await?;
+    let found = crate::app::similar::similar_playlists(&app.playlists, &id, SIMILAR_LISTS).await?;
     Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
 }
 
