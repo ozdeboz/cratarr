@@ -30,73 +30,12 @@ use super::playon::QueueTrack;
 use crate::similarity::{Signal, Track, Weights, unique};
 
 pub use cratarr_rules::radio::{Ask, Index, MAX_COUNT, Mode, RadioBy, Song, choose};
+pub use super::radio_base::{AutoMode, AutoplayMode, Within};
 
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
 pub const LANE_RADIO: &str = "radio";
 /// The lane of Autoplay's tracks: after everything, when the queue runs out.
 pub const LANE_AUTOPLAY: &str = "autoplay";
-
-/// Autoplay's modes; off is its absence (`stop` in commands).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum AutoMode {
-    #[default]
-    Similar,
-    Artist,
-    Era,
-    Random,
-    Taste,
-}
-
-impl AutoMode {
-    /// What Autoplay in this mode asks for.
-    pub fn asks(self) -> Mode {
-        match self {
-            AutoMode::Similar => Mode::Similar,
-            AutoMode::Artist => Mode::Artist,
-            AutoMode::Era => Mode::Era,
-            AutoMode::Random => Mode::Random,
-            AutoMode::Taste => Mode::Taste,
-        }
-    }
-}
-
-/// Autoplay's mode in a command: `stop` switches it off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum AutoplayMode {
-    Stop,
-    Similar,
-    Artist,
-    Era,
-    Random,
-    Taste,
-}
-
-impl AutoplayMode {
-    pub fn on(self) -> Option<AutoMode> {
-        match self {
-            AutoplayMode::Stop => None,
-            AutoplayMode::Similar => Some(AutoMode::Similar),
-            AutoplayMode::Artist => Some(AutoMode::Artist),
-            AutoplayMode::Era => Some(AutoMode::Era),
-            AutoplayMode::Random => Some(AutoMode::Random),
-            AutoplayMode::Taste => Some(AutoMode::Taste),
-        }
-    }
-    pub fn of(mode: Option<AutoMode>) -> Self {
-        match mode {
-            None => AutoplayMode::Stop,
-            Some(AutoMode::Similar) => AutoplayMode::Similar,
-            Some(AutoMode::Artist) => AutoplayMode::Artist,
-            Some(AutoMode::Era) => AutoplayMode::Era,
-            Some(AutoMode::Random) => AutoplayMode::Random,
-            Some(AutoMode::Taste) => AutoplayMode::Taste,
-        }
-    }
-}
 
 /// A radio mode from before the amendment, as Autoplay: (mode, albums, restart).
 pub fn from_old(mode: Option<Mode>) -> (AutoMode, bool, bool) {
@@ -137,36 +76,12 @@ pub struct Autoplay {
     pub within: Option<Within>,
 }
 
-/// What Radio and Autoplay stay inside (decision 0094: the page's collection), as Cratarr's own library has it: a
-/// crate as saved (a genre too, `genre:<name>`), a playlist, a record, an artist, or tracks.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum Within {
-    /// `without`: the libraries switched off, as the crate showed (Home's crates are of every library).
-    Crate {
-        id: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(as = "Option<_>", optional))]
-        without: Vec<String>,
-    },
-    Playlist { id: String },
-    Album { source: String, id: String },
-    /// `id`: theirs (`ar-<n>`, G6) where the page knows it; `without`: the libraries switched off, as the artist showed.
-    Artist {
-        source: String,
-        name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(test, ts(optional))]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(as = "Option<_>", optional))]
-        without: Vec<String>,
-    },
-    Tracks { source: String, ids: Vec<String> },
+/// `Within` as a play names it: here, as `Within` sits in base, below the play it names.
+trait AsCollection {
+    fn collection(&self) -> super::play::Collection;
 }
 
-impl Within {
+impl AsCollection for Within {
     /// As a play names it (app::play), to read its tracks as a play does.
     pub fn collection(&self) -> super::play::Collection {
         use super::play::Collection;

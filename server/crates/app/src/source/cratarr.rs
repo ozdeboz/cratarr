@@ -18,7 +18,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 
 use super::{Album, AlbumCopy, AlbumDetails, AlbumTrack, Choice, Field, Fut, Kind, Library, LibraryScan, Listed, PlaylistEvent, Source, Status, Track, TrackInfo, TrackPage, Values};
-use crate::app::{PlayOn, PlayOnCommand as Command};
+use crate::app::{PlayOnCommand as Command, Players, players};
 use crate::serve::Serve;
 use crate::userdata::{Annotation, Kind as Item};
 
@@ -154,9 +154,9 @@ struct CratarrSource {
 
 /// The player Cratarr follows, by name (any online one when none has anything loaded).
 /// Player `name` where it is known, else the followed one (0.9.8: carry-on resumes on the player it stopped).
-fn player_or_followed(name: Option<&str>) -> Result<(Arc<PlayOn>, String)> {
+fn player_or_followed(name: Option<&str>) -> Result<(Arc<dyn Players>, String)> {
     if let Some(n) = name
-        && let Some(on) = PlayOn::instance()
+        && let Some(on) = players()
         && on.get(n).is_some()
     {
         return Ok((on, n.to_string()));
@@ -164,8 +164,8 @@ fn player_or_followed(name: Option<&str>) -> Result<(Arc<PlayOn>, String)> {
     followed()
 }
 
-fn followed() -> Result<(Arc<PlayOn>, String)> {
-    let on = PlayOn::instance().context("Play On is not running")?;
+fn followed() -> Result<(Arc<dyn Players>, String)> {
+    let on = players().context("Play On is not running")?;
     let name = on.followed().map(|p| p.name).context("no Cratarr player is connected")?;
     Ok((on, name))
 }
@@ -367,7 +367,7 @@ impl Source for CratarrSource {
 
     fn now_playing_on<'a>(&'a self, player: Option<&'a str>) -> Fut<'a, Option<super::Playing>> {
         Box::pin(async move {
-            let Some(on) = PlayOn::instance() else { return Ok(None) };
+            let Some(on) = players() else { return Ok(None) };
             let Some(p) = (match player {
                 Some(n) => on.get(n),
                 None => on.followed(),
@@ -423,7 +423,7 @@ impl Source for CratarrSource {
     }
 
     fn players(&self) -> Fut<'_, Option<String>> {
-        Box::pin(async { Ok(PlayOn::instance().map(|on| on.summary())) })
+        Box::pin(async { Ok(players().map(|on| on.summary())) })
     }
 
     fn transport<'a>(&'a self, command: super::Transport) -> Fut<'a, String> {
@@ -503,7 +503,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let me = owner(&s)?;
             // One way in for listening (decision 0068).
-            crate::app::listening::heard(&s, &me, track, &crate::userdata::Heard::counted(at)).await?;
+            crate::app::listening_base::heard(&s, &me, track, &crate::userdata::Heard::counted(at)).await?;
             Ok(())
         })
     }

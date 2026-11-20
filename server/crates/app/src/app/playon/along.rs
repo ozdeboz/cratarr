@@ -12,13 +12,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::{Command, Entry, OWN_MUSIC, PlayFrom, PlayOn, PlayerKind, PlayerView, QueueTrack, belongs_to, first_owner, key, view_in};
 use crate::app::ToggleError;
 use crate::app::queue::Repeat;
 use crate::app::queue_requests::{Asker, QueueRequest, SETTLE_MS, State, line_of};
 use crate::app::radio::AutoplayMode;
+pub use crate::app::along_base::FollowTarget;
 
 /// A leader (or a follower) gone this long ends the following.
 const GONE_FOR: Duration = Duration::from_secs(120);
@@ -32,14 +33,6 @@ const FOLLOWING: &str = "following";
 /// few days after (a player gives up after 30).
 const SPANS: usize = 50;
 const SPANS_KEPT_SECS: i64 = 30 * 86_400;
-
-/// A player followed, by its user and name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct FollowTarget {
-    pub user: String,
-    pub player: String,
-}
 
 /// A player one may follow, as the leaders list shows it.
 #[derive(Debug, Clone, PartialEq, Serialize)]

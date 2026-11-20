@@ -18,6 +18,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::store::{Kind, Source};
+use crate::app::base_host::BaseHost;
 
 /// Every kind the sheet lists, in its order.
 pub const ALL: [&str; 6] = ["type", "year", "genre", "style", "mood", "tag"];
@@ -95,7 +96,7 @@ fn kind_name(kind: &str) -> Result<&'static str> {
 /// Whether a kind is written to the files: type and year as 0.13's switch; the others as chosen, genre by default.
 pub fn writes(serve: &crate::serve::Serve, kind: &str) -> bool {
     match kind {
-        "type" | "year" => crate::app::file_facts::is_on(serve),
+        "type" | "year" => crate::app::file_facts_base::is_on(serve),
         k => match serve.userdata.import_choice(&write_choice(k)).ok().flatten() {
             Some(c) => c == "1",
             None => k == "genre",
@@ -157,7 +158,7 @@ pub fn set_kind(serve: &crate::serve::Serve, kind: &str, write: Option<bool>, so
     let name = kind_name(kind)?;
     if let Some(w) = write {
         match name {
-            "type" | "year" => crate::app::file_facts::set_on(serve, w)?,
+            "type" | "year" => crate::app::file_facts_base::set_on(serve, w)?,
             k => serve.userdata.set_import_choice(&write_choice(k), if w { "1" } else { "0" })?,
         }
     }
@@ -209,12 +210,12 @@ fn with_alias(mut list: Vec<AliasRow>, word: &str, aliases: &[String]) -> Result
 }
 
 /// A kind's alias list kept (genre's into the tag rules).
-async fn keep_aliases(app: &Arc<crate::app::App>, serve: &crate::serve::Serve, kind: Kind, list: Vec<AliasRow>) -> Result<Vec<AliasRow>> {
+async fn keep_aliases(settings: &crate::app::settings::SettingsService, serve: &crate::serve::Serve, kind: Kind, list: Vec<AliasRow>) -> Result<Vec<AliasRow>> {
     match kind {
         Kind::Genre => {
-            let mut rules = app.settings.tag_rules();
+            let mut rules = settings.tag_rules();
             rules.genre_aliases = list.iter().map(|a| crate::catalogue::normalise::Alias { from: a.aliases.clone(), to: a.word.clone() }).collect();
-            app.settings.save_tag_rules(rules).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            settings.save_tag_rules(rules).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         k => serve.userdata.set_import_choice(&aliases_choice(k.name()), &serde_json::to_string(&list)?)?,
     }
@@ -229,15 +230,15 @@ fn word_kind(kind: &str) -> Result<Kind> {
 }
 
 /// A word's spellings set in its kind's alias list (none: its entry goes).
-pub async fn set_alias(app: &Arc<crate::app::App>, serve: &crate::serve::Serve, kind: &str, word: &str, aliases: &[String]) -> Result<Vec<AliasRow>> {
+pub async fn set_alias<H: BaseHost + ?Sized>(app: &Arc<H>, serve: &crate::serve::Serve, kind: &str, word: &str, aliases: &[String]) -> Result<Vec<AliasRow>> {
     let k = word_kind(kind)?;
     let list = with_alias(alias_rows(serve, k), word, aliases)?;
-    keep_aliases(app, serve, k, list).await
+    keep_aliases(app.settings(), serve, k, list).await
 }
 
 /// A word merged into another (a word's menu: Merge into…, and Rename everywhere into a new spelling): `from`, and the
 /// spellings that were it, become spellings of `into`.
-pub async fn merge(app: &Arc<crate::app::App>, serve: &crate::serve::Serve, kind: &str, from: &str, into: &str) -> Result<Vec<AliasRow>> {
+pub async fn merge<H: BaseHost + ?Sized>(app: &Arc<H>, serve: &crate::serve::Serve, kind: &str, from: &str, into: &str) -> Result<Vec<AliasRow>> {
     let k = word_kind(kind)?;
     let fold = super::key;
     if fold(from).is_empty() || fold(into).is_empty() {
@@ -250,7 +251,7 @@ pub async fn merge(app: &Arc<crate::app::App>, serve: &crate::serve::Serve, kind
         spellings.push(from.trim().to_string());
     }
     let list = with_alias(list, into, &spellings)?;
-    keep_aliases(app, serve, k, list).await
+    keep_aliases(app.settings(), serve, k, list).await
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use super::musicbrainz::Asked as _;
+pub(super) use super::renumber_base::file_name;
 
 /// A track matches a release's when their lengths are this close (s).
 const LENGTH_SLACK: i64 = 5;
@@ -356,10 +357,6 @@ fn row_tracks(lib: &crate::serve::library::Library, album: &str) -> Result<Vec<T
             Ok(Track { id, file: file_name(&rel), path: Path::new(root).join(&rel), place: (folder, rel), title, secs: (ms / 1000) as u32, disc, track })
         })
         .collect()
-}
-
-pub(super) fn file_name(rel: &str) -> String {
-    Path::new(rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.to_string())
 }
 
 /// What a writer writes to: every file of a record, or of its copy at (catalogue folder, folder in it) alone. A track's files

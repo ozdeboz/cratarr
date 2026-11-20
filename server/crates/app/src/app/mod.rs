@@ -17,6 +17,7 @@ pub use cratarr_gate::app::audiomuse;
 pub mod beat_this;
 pub mod capabilities;
 mod app_served;
+mod app_base;
 pub mod changes;
 pub mod analysis_pass;
 pub mod analysis_import;
@@ -65,6 +66,12 @@ pub mod fixes;
 pub mod fix_plans;
 #[cfg(test)]
 mod every_copy;
+#[cfg(test)]
+mod backup_list_tests;
+#[cfg(test)]
+mod file_words_tests;
+#[cfg(test)]
+mod library_tests;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
@@ -129,6 +136,23 @@ pub use cratarr_gate::app::switches;
 pub use cratarr_gate::app::reach;
 pub mod tracks;
 pub mod visuals;
+// Base's parts of the modules above it, moved down for the split's phase 2 (each named for its origin).
+pub mod base_host;
+pub mod device_index_base;
+pub mod file_facts_base;
+pub mod file_runs_base;
+mod incoming_base;
+mod incoming_settings;
+pub mod listening_base;
+mod playlists_base;
+mod playlists_settings;
+mod settings_base;
+mod playon_base;
+mod playon_players;
+mod queue_base;
+pub mod radio_base;
+mod along_base;
+pub mod renumber_base;
 
 use std::sync::Arc;
 
@@ -138,12 +162,15 @@ use serde::Serialize;
 pub use albums::{AlbumsView, ReplaceAsk};
 pub use collection::{CollectionService, CollectionView};
 pub use error::{ToggleError, plain};
-pub use incoming::{AlbumFate, CopySheet, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview, ReplaceSheet, shown_jobs as incoming_jobs_shown};
+pub use incoming::{AlbumFate, CopySheet, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, ReplacePreview, ReplaceSheet, shown_jobs as incoming_jobs_shown};
+pub use incoming_base::LidarrView;
 pub use insights::InsightsService;
 pub use library::{FreshIds, Library, SourceTab};
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateLook, CrateOrder, CratePage, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};
-pub use playon::{Command as PlayOnCommand, FollowTarget, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, QueueTracks, Report as PlayerReport, whose as whose_players};
+pub use playon::{PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTracks, Report as PlayerReport, whose as whose_players};
+pub use playon_base::{Command as PlayOnCommand, Players, QueueTrack, players};
+pub use along_base::FollowTarget;
 pub use plays::{PlayEvent, Plays};
 pub use sync::TargetChoice;
 pub use events::connect as events;
@@ -217,7 +244,7 @@ impl App {
             Some(s) => s.userdata.clone(),
             None => Arc::new(crate::userdata::UserData::open(None)?),
         };
-        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming, playlists_db).await?;
+        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming, playlists_db, Some(step_017::run)).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
         let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);

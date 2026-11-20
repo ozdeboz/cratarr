@@ -190,7 +190,7 @@ impl Follow {
                 tracing::info!("playlists: {} changed with {title}", changed.len());
                 // The first administrator's are kept in step with other servers (their keys are their names).
                 let theirs = changed.into_iter().filter(|k| !k.contains('/'));
-                super::playlists::tell_sources(&self.lib, theirs.map(|n| (n, crate::source::PlaylistChange::Edited)).collect());
+                super::playlists_base::tell_sources(&self.lib, theirs.map(|n| (n, crate::source::PlaylistChange::Edited)).collect());
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("playlists: could not follow event {}: {e:#}", entry.id),

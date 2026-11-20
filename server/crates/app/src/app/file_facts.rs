@@ -20,8 +20,8 @@ use serde::Serialize;
 use super::file_runs::{self, FilesState, Proposal, flat};
 use crate::journal::{FileWrite, RunRecord};
 
-/// The server choice that switches it on ("1").
-pub const CHOICE: &str = "write:file-facts";
+pub use super::file_facts_base::{CHOICE, is_on, set_on};
+
 /// Its kind of change.
 pub const KIND: &str = "types";
 const TITLE: &str = "Types and years";
@@ -68,15 +68,6 @@ pub fn facts_of(files: &[FileWrite]) -> HashMap<String, Vec<super::file_runs::Fi
         }
     }
     out
-}
-
-/// On unless switched off: type and year write by default (decision 0097, the Catalogue sheet's Write).
-pub fn is_on(serve: &crate::serve::Serve) -> bool {
-    serve.userdata.import_choice(CHOICE).ok().flatten().is_none_or(|c| c == "1")
-}
-
-pub fn set_on(serve: &crate::serve::Serve, on: bool) -> Result<()> {
-    serve.userdata.set_import_choice(CHOICE, if on { "1" } else { "0" })
 }
 
 /// A year as a date's first four digits.
