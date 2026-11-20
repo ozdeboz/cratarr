@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use super::App;
+use super::features_host::FeaturesHost;
 
 /// How much it asks of the owner, most first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -810,7 +810,11 @@ pub(super) fn files_wrong(served: &crate::serve::Serve, id: &str) -> anyhow::Res
     Ok(out)
 }
 
-impl App {
+/// Health's checks on the app that hosts them (`FeaturesHost`): the app answers its report and a record's by them
+/// (`App::health_report`, `App::record_health`).
+pub struct Checks<'a>(pub &'a dyn FeaturesHost);
+
+impl Checks<'_> {
     /// Every domain's findings now (decision 0063), worst first, the most recent first among equals.
     pub async fn health_report(&self) -> Report {
         let at = now();
@@ -833,7 +837,7 @@ impl App {
         findings.extend(self.check_players());
         checked.insert("players", at);
         findings.extend(or_failed("library", self.check_missing().await));
-        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at, self.served.as_deref())), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at, self.0.served().as_deref())), ("requests", check_requests(self.0.served().as_deref())), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }
@@ -841,7 +845,7 @@ impl App {
             f.items.truncate(ITEMS);
         }
         // Each item about a record of Cratarr's own with its type (GOTO.S1, F31.1: its Go to names it), one read for them all.
-        if let Some(served) = self.served.clone() {
+        if let Some(served) = self.0.served().clone() {
             let ids = own_albums(findings.iter().flat_map(|f| &f.items));
             let types = crate::run::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
             for i in findings.iter_mut().flat_map(|f| &mut f.items) {
@@ -859,13 +863,13 @@ impl App {
         let found = [short?, incoming?, library?].concat();
         let mut wrong = Vec::new();
         // Its files' problems: only the own library's records have files Cratarr read.
-        if let Some(served) = self.served.clone().filter(|_| source == crate::source::cratarr::KIND.id) {
+        if let Some(served) = self.0.served().clone().filter(|_| source == crate::source::cratarr::KIND.id) {
             let id = album.to_string();
             wrong = crate::run::spawn_blocking(move || files_wrong(&served, &id)).await??;
         }
         let mut health = record(&found, &(source.to_string(), album.to_string()), &wrong);
         // Its items with their record's type (GOTO.S1, F31.1).
-        if let Some(served) = self.served.clone() {
+        if let Some(served) = self.0.served().clone() {
             let ids = own_albums(health.findings.iter().flat_map(|f| &f.items));
             let types = crate::run::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
             for i in health.findings.iter_mut().flat_map(|f| &mut f.items) {
@@ -877,14 +881,14 @@ impl App {
 
     /// Health's Missing list, the report's alone: a record's own page has no use for it (`record_health`).
     async fn check_missing(&self) -> anyhow::Result<Vec<Finding>> {
-        let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
-        let (c, ud) = (self.library.catalogue(), served.userdata.clone());
+        let Some(served) = self.0.served().clone() else { return Ok(Vec::new()) };
+        let (c, ud) = (self.0.library().catalogue(), served.userdata.clone());
         let (missing, held) = crate::run::spawn_blocking(move || -> anyhow::Result<_> { Ok((c.missing()?, ud.songs_held()?)) }).await??;
         Ok(missing_list(missing, &held).into_iter().collect())
     }
 
     async fn check_files(&self) -> anyhow::Result<Vec<Finding>> {
-        let c = self.library.catalogue();
+        let c = self.0.library().catalogue();
         let status = crate::run::spawn_blocking(move || c.status()).await??;
         let mut out = files(&status.issues);
         out.extend(self.check_short().await?);
@@ -900,8 +904,8 @@ impl App {
     /// - **breaking off**: any other (a FLAC's damaged frames, decoding stopped): replace it, or play it to where it
     ///   breaks off.
     async fn check_short(&self) -> anyhow::Result<Vec<Finding>> {
-        let c = self.library.catalogue();
-        let served = self.served.clone();
+        let c = self.0.library().catalogue();
+        let served = self.0.served().clone();
         let found = crate::run::spawn_blocking(move || -> anyhow::Result<Vec<(&'static str, Item, i64)>> {
             let mut out = Vec::new();
             for (folder, rel, path, given, heard) in c.shorter_than_heard(SHORT_SLACK_MS)? {
@@ -946,7 +950,7 @@ impl App {
     /// The albums of every library in use lacking what the library requires (the owner, 2026-11-02: Music's and
     /// Incoming's alike; Incoming's are marked there too).
     async fn check_library(&self) -> anyhow::Result<Vec<Finding>> {
-        let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
+        let Some(served) = self.0.served().clone() else { return Ok(Vec::new()) };
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
         let (rows, numbering, matched, released) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
             Ok((lib.lacking()?, lib.numbering()?, ud.renumber_matched()?, ud.album_discs()?))
@@ -1033,7 +1037,7 @@ impl App {
         if found.is_empty() && gaps.is_empty() {
             return Ok(Vec::new());
         }
-        let marks = super::requests::marks(self, served).await.ok();
+        let marks = self.0.request_marks(served).await.ok();
         let mut items: Vec<Item> = found
             .into_iter()
             .map(|(album, name, artist, i)| {
@@ -1085,7 +1089,7 @@ impl App {
 
     /// One's own playlists' tracks whose file is gone (the Repair view, one playlist at a time).
     async fn check_playlists(&self) -> anyhow::Result<Vec<Finding>> {
-        let lists = self.playlists.view(None).await?;
+        let lists = self.0.playlists().view(None).await?;
         let broken: Vec<_> = lists.iter().filter(|p| p.mine && p.dead > 0).collect();
         let missing: u64 = broken.iter().map(|p| p.dead as u64).sum();
         if missing == 0 {
@@ -1105,9 +1109,9 @@ impl App {
     }
 
     async fn check_incoming(&self) -> anyhow::Result<Vec<Finding>> {
-        let view = self.albums(None).await;
+        let view = self.0.albums(None).await;
         let (mut better, mut twice) = standing(view.sources.iter().map(|s| (s.id.as_str(), s.library_info.as_slice(), s.albums.as_slice())));
-        let jobs: Vec<_> = self.incoming.jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
+        let jobs: Vec<_> = self.0.incoming().jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
         let mut out = incoming(better.len() as u64, twice.len() as u64, jobs.len() as u64);
         // Each copy waiting, with the copy it stands against; each conversion failed, with why.
         for f in &mut out {
@@ -1123,13 +1127,13 @@ impl App {
                 _ => {}
             }
         }
-        out.extend(arrived(&super::intake_card::waiting(self).await));
+        out.extend(arrived(&self.0.intake_waiting().await));
         Ok(out)
     }
 
     /// How far AudioMuse has heard the library (decision 0054): while it has not heard all of it.
     async fn check_analysis(&self) -> anyhow::Result<Vec<Finding>> {
-        let cat = self.library.catalogue();
+        let cat = self.0.library().catalogue();
         let facts = crate::run::spawn_blocking(move || cat.crate_facts()).await??;
         let tracks = facts.iter().filter(|f| f.track.is_some()).count() as u64;
         let heard = facts.iter().filter(|f| f.track.is_some() && f.sound.is_some()).count() as u64;
@@ -1171,7 +1175,7 @@ impl App {
     /// Each server switched on that cannot be reached, and Lidarr; and settings that cannot be saved (no data folder:
     /// About showed it until the owner, 2026-10-24).
     async fn check_servers(&self) -> anyhow::Result<Vec<Finding>> {
-        let view = self.settings.view().await?;
+        let view = self.0.settings().view().await?;
         let settings = || Some(Open { page: "settings", switch: None, thing: None });
         let mut out = Vec::new();
         if view.settings_file.is_none() {
@@ -1201,9 +1205,9 @@ impl App {
     /// of Lidarr's Incoming, the library it fetches into: what it fetches comes to Incoming only from there. Nothing to
     /// say while Lidarr is off or no library is Lidarr's.
     async fn check_lidarr_root(&self) -> anyhow::Result<Option<Finding>> {
-        let (cfg, client) = self.incoming.lidarr_state();
+        let (cfg, client) = self.0.incoming().lidarr_state();
         let (Some(cfg), Some(client)) = (cfg.filter(|c| c.enabled), client) else { return Ok(None) };
-        let live = self.library.live();
+        let live = self.0.library().live();
         let incoming = live.iter().find_map(|a| {
             let id = a.cfg.libraries.fetched_by("lidarr")?;
             a.placement.libraries.iter().find(|l| l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
@@ -1222,7 +1226,7 @@ impl App {
     fn check_players(&self) -> Vec<Finding> {
         let at = now();
         let mut out = Vec::new();
-        for p in self.play_on.list() {
+        for p in self.0.play_on().list() {
             if let Some(why) = &p.held {
                 let mut f = finding("players", format!("players:held:{}", p.name), Level::Warning, 1, format!("{} held back a play", p.name));
                 f.thing = Some(p.name.clone());

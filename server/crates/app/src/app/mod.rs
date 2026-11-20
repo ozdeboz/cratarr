@@ -28,6 +28,7 @@ mod first_start;
 pub mod step_017;
 mod follow;
 pub mod health;
+mod app_health;
 pub mod length_fixes;
 pub mod backup_list;
 mod incoming;
@@ -86,6 +87,8 @@ pub use cratarr_gate::app::moment;
 pub mod refind;
 pub mod related;
 pub mod search;
+pub mod features_host;
+mod app_features;
 pub mod requests;
 // What counts against each user's room (AL01).
 pub mod room;
