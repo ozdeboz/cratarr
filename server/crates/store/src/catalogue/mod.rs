@@ -5026,7 +5026,7 @@ mod tests {
     fn the_shared_rule_is_one() {
         assert!(SHARED_WITH.contains("o.size = f.size") && SHARED_WITH.contains("o.mtime = f.mtime"), "{SHARED_WITH}");
         assert!(SHARED_WITH.contains("o.shared = 0") && SHARED_WITH.contains("o.trashed IS NULL") && SHARED_WITH.contains("json_each(:kept)"), "{SHARED_WITH}");
-        let source = include_str!("mod.rs");
+        let source = include_str!("mod.rs").replace("\r\n", "\n");
         let at = source.find("pub fn shared_copies").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
         assert!(body.contains("{SHARED_WITH}") && !body.contains("f.shared ="), "shared_copies reads the backup's one rule: {body}");
@@ -5104,7 +5104,7 @@ mod tests {
             st.query_map(params![0, "A/1.flac"], |r| r.get::<_, String>(3)).unwrap().map(Result::unwrap).collect()
         };
         assert!(!plan.is_empty() && plan.iter().all(|p| p.starts_with("SEARCH analysis_shape USING") && p.ends_with("(folder=? AND rel=?)")), "{plan:?}");
-        let source = include_str!("mod.rs");
+        let source = include_str!("mod.rs").replace("\r\n", "\n");
         let at = source.find("pub fn copy_kept_band_wave").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
         assert!(body.contains("db.query_row(KEPT_BAND_WAVE, params![folder, rel]") && !body.contains("analysis_shape"), "the shape read once, by its key: {body}");
