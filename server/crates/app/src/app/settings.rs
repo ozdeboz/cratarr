@@ -8,7 +8,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::incoming::{IncomingService, LidarrView, lidarr_pair};
+use super::incoming::IncomingService;
+use super::incoming_base::{LidarrView, lidarr_pair};
 use super::library::{Active, Library, derive_folders, epoch_now, label_of};
 use super::playlists::PlaylistService;
 use super::{ToggleError, VERSION};

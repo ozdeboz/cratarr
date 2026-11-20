@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use super::file_runs::{self, Proposal, flat};
+use super::file_runs;
+use super::file_runs_base::{Proposal, flat};
 use super::words::store::{Kind, Source};
 use crate::journal::{FileWrite, RunRecord};
 
@@ -105,7 +106,7 @@ fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind:
     for row in rows {
         let (album, title, artist, song, folder, rel, track) = row?;
         // A copy with tracks of its own has no `songs` row, and the record's words are its too.
-        let track = track.unwrap_or_else(|| super::renumber::file_name(&rel));
+        let track = track.unwrap_or_else(|| super::renumber_base::file_name(&rel));
         if albums.is_some_and(|a| !a.contains(&album)) {
             continue;
         }

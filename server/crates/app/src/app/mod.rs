@@ -109,6 +109,12 @@ pub use cratarr_gate::app::switches;
 pub use cratarr_gate::app::reach;
 pub mod tracks;
 pub mod visuals;
+// Base's parts of the modules above it, moved down for the split's phase 2 (each named for its origin).
+pub mod file_facts_base;
+pub mod file_runs_base;
+mod incoming_base;
+mod playlists_base;
+pub mod renumber_base;
 
 use std::sync::Arc;
 
@@ -118,7 +124,8 @@ use serde::Serialize;
 pub use albums::{AlbumsView, ReplaceAsk};
 pub use collection::{CollectionService, CollectionView};
 pub use error::{ToggleError, plain};
-pub use incoming::{AlbumFate, CopySheet, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview, ReplaceSheet, shown_jobs as incoming_jobs_shown};
+pub use incoming::{AlbumFate, CopySheet, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, ReplacePreview, ReplaceSheet, shown_jobs as incoming_jobs_shown};
+pub use incoming_base::LidarrView;
 pub use insights::InsightsService;
 pub use library::{FreshIds, Library, SourceTab};
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};

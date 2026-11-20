@@ -95,7 +95,7 @@ fn kind_name(kind: &str) -> Result<&'static str> {
 /// Whether a kind is written to the files: type and year as 0.13's switch; the others as chosen, genre by default.
 pub fn writes(serve: &crate::serve::Serve, kind: &str) -> bool {
     match kind {
-        "type" | "year" => crate::app::file_facts::is_on(serve),
+        "type" | "year" => crate::app::file_facts_base::is_on(serve),
         k => match serve.userdata.import_choice(&write_choice(k)).ok().flatten() {
             Some(c) => c == "1",
             None => k == "genre",
@@ -157,7 +157,7 @@ pub fn set_kind(serve: &crate::serve::Serve, kind: &str, write: Option<bool>, so
     let name = kind_name(kind)?;
     if let Some(w) = write {
         match name {
-            "type" | "year" => crate::app::file_facts::set_on(serve, w)?,
+            "type" | "year" => crate::app::file_facts_base::set_on(serve, w)?,
             k => serve.userdata.set_import_choice(&write_choice(k), if w { "1" } else { "0" })?,
         }
     }

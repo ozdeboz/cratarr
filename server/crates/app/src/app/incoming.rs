@@ -20,6 +20,8 @@ mod carry_on;
 mod queue;
 mod replace;
 pub use queue::JobView;
+pub use super::incoming_base::LidarrView;
+pub(super) use super::incoming_base::{LidarrPair, lidarr_pair};
 pub use replace::{ReplacePreview, ReplaceSheet};
 #[cfg(test)]
 pub(crate) use replace::{rows_back_of_copy, rows_of_copy};
@@ -234,22 +236,6 @@ pub struct IncomingView {
     pub music: Option<String>,
 }
 
-/// Lidarr on the Settings page. The key is never sent.
-#[derive(Debug, Clone, Serialize)]
-pub struct LidarrView {
-    pub url: String,
-    pub key_set: bool,
-    /// Switched on; off, not asked.
-    pub enabled: bool,
-    /// What Discover's Want adds an album with (`settings::LidarrConfig`); none: as the artists Lidarr has.
-    pub quality_profile: Option<i64>,
-    pub metadata_profile: Option<i64>,
-    pub root_folder: Option<String>,
-    /// Lidarr's version when it answered.
-    pub version: Option<String>,
-    pub error: Option<String>,
-}
-
 /// The used library of a server whose files lie in a catalogue folder (its id), if any.
 fn library_in(a: &Active, folder: &std::path::Path) -> Option<String> {
     a.placement.libraries.iter().find(|l| a.used(&l.id) && l.folders.iter().any(|f| std::path::Path::new(f) == folder)).map(|l| l.id.clone())
@@ -347,21 +333,6 @@ struct IncomingDir {
     folder: i64,
     dir: String,
     release_group: Option<String>,
-}
-
-/// A Lidarr connection and its client (`None` when the key cannot be used in a header).
-pub(super) type LidarrPair = (Option<settings::LidarrConfig>, Option<crate::lidarr::Lidarr>);
-
-pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
-    // Switched off: kept, not used.
-    let client = cfg.as_ref().filter(|c| c.enabled).and_then(|c| match crate::lidarr::Lidarr::new(&c.url, &c.api_key) {
-        Ok(l) => Some(l),
-        Err(e) => {
-            tracing::warn!("Lidarr: {e:#}");
-            None
-        }
-    });
-    (cfg, client)
 }
 
 /// Album actions going on in this process, by their journal ids.

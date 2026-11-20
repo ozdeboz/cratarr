@@ -487,7 +487,7 @@ impl SyncService {
         })
         .await??;
         if removed {
-            super::playlists::tell_sources(&self.lib, vec![(name.to_string(), PlaylistChange::Deleted)]);
+            super::playlists_base::tell_sources(&self.lib, vec![(name.to_string(), PlaylistChange::Deleted)]);
         }
         Ok(())
     }

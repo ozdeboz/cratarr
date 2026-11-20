@@ -28,16 +28,7 @@ use serde::Serialize;
 
 use crate::journal::{EventId, FileRun, FileWrite, Journal, RunFailed, RunRecord};
 
-/// What a writer proposes: its kind and title, its records, each file's change.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Proposal {
-    pub kind: String,
-    pub title: String,
-    pub records: Vec<RunRecord>,
-    pub files: Vec<FileWrite>,
-    /// Records set aside before the run (their sheet's stamp no longer matching, `ticked`).
-    pub failed: Vec<RunFailed>,
-}
+pub use super::file_runs_base::{Proposal, flat};
 
 /// A record's stamp: what the sheet showed of it (each file's place and fields before and after), so an apply can tell
 /// whether that is still what would be written.
@@ -220,21 +211,6 @@ pub fn state_of(album: &str, now: i64) -> Option<FilesState> {
 pub fn busy(journal: &Journal, what: &str) -> bool {
     let key = journal.key();
     LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|l| l.iter().any(|((j, _), s)| *j == key && s.what == what && s.state != "done"))
-}
-
-/// A field's values as compared: each item split where several are kept in one (ID3v2's NUL, a "; "), trimmed, a
-/// byte-order mark left off, in lower case, in order; a number as its number ("03" is 3, "3/12" is 3).
-pub fn flat(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .flat_map(|v| v.split(['\0', ';']))
-        .map(|v| v.trim().trim_start_matches('\u{feff}').to_lowercase())
-        .filter(|v| !v.is_empty())
-        .map(|v| match v.split('/').next().and_then(|n| n.trim().parse::<u32>().ok()) {
-            Some(n) if v.chars().all(|c| c.is_ascii_digit() || c == '/' || c == ' ') => n.to_string(),
-            _ => v,
-        })
-        .collect()
 }
 
 /// The fields of a file named in `names`, each with its values as items (the tag reader's names).

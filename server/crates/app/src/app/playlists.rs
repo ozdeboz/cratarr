@@ -16,7 +16,7 @@ use cratarr_rules::names::{name_key, natural_keys};
 use crate::serve::listener::Listener;
 use crate::journal::{Change, EventId, Journal, TextChange, fingerprint};
 use crate::playlists::{Edited, PlaylistView, Repair, Repairs, Store};
-use crate::source::{self, PlaylistChange, PlaylistEvent};
+use crate::source::{self, PlaylistChange};
 use crate::sync_state::Kind;
 
 mod ops;
@@ -4502,23 +4502,6 @@ impl PlaylistService {
         for store in self.lib.all_stores() {
             store.refresh_dead().await;
         }
-    }
-}
-
-/// Best effort, in the background: every connected source hears about changed playlist files, each with the file's
-/// path as it sees it.
-pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>) {
-    let Some(music) = lib.music() else { return };
-    for (a, s) in lib.connected() {
-        let events: Vec<PlaylistEvent> = changes
-            .iter()
-            .map(|(name, change)| PlaylistEvent { name: name.clone(), path: a.placement.playlist_path(&music, name), change: *change })
-            .collect();
-        crate::run::spawn(async move {
-            if let Err(e) = s.playlists_changed(events).await {
-                tracing::warn!("source {}: could not pass on playlist changes: {e:#}", a.cfg.id);
-            }
-        });
     }
 }
 
