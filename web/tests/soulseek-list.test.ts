@@ -2,8 +2,10 @@
 // ticked and what Fetch sends (lib/soulseekRules); the fetchers' lists, siblings, each where it is connected.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
-const { approvePayload, folderLine, itemLine, itemTone, recordOf, searchable, tickable, underWay } = await import('../src/lib/soulseekRules.ts');
+const { approvePayload, folderLine, GROUPS, grouped, itemLine, itemTone, recordOf, searchable, tickable, underWay } = await import('../src/lib/soulseekRules.ts');
+const src = (f: string) => readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 const folder = (user: string, lossless = true) => ({ user, dir: `Music\\${user}\\Late Set`, format: lossless ? 'flac' : 'mp3', lossless, free_slot: true, queue: 0, speed: 2_500_000, extra: 0 });
 const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
@@ -84,6 +86,74 @@ test('a found record waiting for room or space says so; one picked by Cratarr re
   assert.equal(itemLine(picked), 'Glass Harbour · 2012 · To be fetched');
   assert.equal(itemLine(picked, 0, [picked, other]), "Glass Harbour · 2012 · Waiting for peer-a's other record");
   assert.equal(itemLine(item('4', 'fetching', { record: glass, folders: [f], chosen: 0, percent: 42, auto: true })), 'Glass Harbour · 2012 · Fetching · 42%');
+});
+
+// LI1 (SCENARIOS-DC2; the owner, 2026-11-20 ~16:10: "something that is being looked for is not on its way"): the groups replaced by
+// the owner's decision. Looking for it at the top, then Found, On its way (only what is really coming), Not found yet, Stuck, and
+// Done (placed) folded at the end; each item in one group by its state, an empty group not shown, within a group as asked.
+test('the list groups as the owner decided', () => {
+  assert.deepEqual(
+    GROUPS.map((g: { title: string; states: string[] }) => [g.title, g.states]),
+    [
+      ['Looking for it', ['searching']],
+      ['Found', ['found']],
+      ['On its way', ['approved', 'fetching', 'checking']],
+      ['Not found yet', ['waiting']],
+      ['Stuck', ['stuck']],
+      ['Done', ['placed']],
+    ],
+  );
+  for (const s of ['waiting', 'searching', 'found', 'approved', 'fetching', 'checking', 'placed', 'stuck'])
+    assert.equal(GROUPS.filter((g: { states: string[] }) => g.states.includes(s)).length, 1, `${s} is in one group`);
+  // Items in every state, in the list's order (as asked); a held one stays in its state's group (LI2).
+  const items = [
+    item('a', 'checking'),
+    item('b', 'searching'),
+    item('c', 'waiting', { misses: 2 }),
+    item('d', 'found'),
+    item('e', 'approved', { why: 'The server is short of space' }),
+    item('f', 'placed'),
+    item('g', 'fetching', { percent: 30 }),
+    item('h', 'searching'),
+    item('i', 'stuck'),
+    item('j', 'waiting'),
+  ];
+  const ids = (list: typeof items) => grouped(list).map((g: { title: string; items: typeof items }) => [g.title, g.items.map((i) => i.id)]);
+  assert.deepEqual(ids(items), [
+    ['Looking for it', ['b', 'h']],
+    ['Found', ['d']],
+    ['On its way', ['a', 'e', 'g']],
+    ['Not found yet', ['c', 'j']],
+    ['Stuck', ['i']],
+    ['Done', ['f']],
+  ]);
+  assert.deepEqual(ids([item('a', 'fetching'), item('b', 'searching')]), [
+    ['Looking for it', ['b']],
+    ['On its way', ['a']],
+  ], 'never a Searching item under On its way; no empty group');
+  // The page draws the list through these groups, none of its own.
+  const panel = src('RequestsPanel.svelte');
+  assert.ok(panel.includes('grouped(slskShown)'), 'RequestsPanel groups by grouped()');
+  assert.ok(!panel.includes('{#each GROUPS'), 'no grouping of the panel\'s own');
+});
+
+// LI3 (SB21, F22; OQ-DC2-1 (a)): a placed item never leaves the list, by itself or by hand. Kept as history in Done, folded at the
+// list's end, newest first; no Clear, and the page never asks the server to clear.
+test('done folds with no clear', () => {
+  const list = [item('p1', 'placed'), item('s', 'searching'), item('p2', 'placed'), item('w', 'waiting'), item('p3', 'placed')];
+  const groups = grouped(list);
+  const done = groups.at(-1);
+  assert.equal(done.title, 'Done');
+  assert.equal(done.folded, true, 'Done folds');
+  assert.deepEqual(done.items.map((i: { id: string }) => i.id), ['p3', 'p2', 'p1'], 'newest first, every one kept');
+  assert.ok(groups.slice(0, -1).every((g: { folded: boolean }) => !g.folded), 'only Done folds');
+  const panel = src('RequestsPanel.svelte');
+  assert.ok(!panel.includes('clearPlaced') && !/>Clear</.test(panel), 'no Clear');
+  assert.ok(!src('soulseek.svelte.ts').includes('clearPlaced'));
+  assert.ok(!src('api.ts').includes("request<import('./soulseekRules').SoulseekView>('/api/soulseek', { method: 'DELETE' })"), 'nothing asks to clear');
+  // A folded group is a list's section (lib/Section), folded at first; the others are the list's groups.
+  assert.ok(panel.includes('let slskDoneOpen = $state(false);'));
+  assert.match(panel, /\{#if g\.folded\}\s*<Section title=\{g\.title\} count=\{plural\(g\.items\.length, 'record'\)\} bind:open=\{slskDoneOpen\}>/);
 });
 
 test("a picked record held by the floor says so, never its user's other record (as its request reads it)", () => {

@@ -112,14 +112,25 @@ export const searchable = (i: SoulseekItem) => i.state === 'waiting' || i.state 
 export const itemTone = (i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 'bad' | 'warn' | null =>
   i.state === 'stuck' ? 'bad' : (i.state === 'waiting' && i.misses) || held(i, now) ? 'warn' : null;
 
-/** The list's parts, in this order: found (to tick), on its way, not found yet, stuck, placed. */
-export const GROUPS: { title: string; states: SoulseekState[] }[] = [
+/** The list's groups (the owner, 2026-11-20), in this order: what is looked for, found (to tick), on its way (only what is really
+ *  coming), not found yet, stuck, and Done: placed, kept as history, folded at the end. */
+export const GROUPS: { title: string; states: SoulseekState[]; folded?: true }[] = [
+  { title: 'Looking for it', states: ['searching'] },
   { title: 'Found', states: ['found'] },
-  { title: 'On its way', states: ['approved', 'fetching', 'checking', 'searching'] },
+  { title: 'On its way', states: ['approved', 'fetching', 'checking'] },
   { title: 'Not found yet', states: ['waiting'] },
   { title: 'Stuck', states: ['stuck'] },
-  { title: 'In Incoming', states: ['placed'] },
+  { title: 'Done', states: ['placed'], folded: true },
 ];
+
+/** The list in its groups: each item in its state's group, an empty group left out. Within a group as the list holds them (as
+ *  asked); Done newest first. */
+export function grouped<T extends Pick<SoulseekItem, 'state'>>(items: readonly T[]): { title: string; folded: boolean; items: T[] }[] {
+  return GROUPS.map((g) => {
+    const these = items.filter((i) => g.states.includes(i.state));
+    return { title: g.title, folded: !!g.folded, items: g.folded ? these.reverse() : these };
+  }).filter((g) => g.items.length);
+}
 
 /** What Fetch sends: the ticked found records, each with the folder picked for it (else the server's best). */
 export function approvePayload(items: readonly SoulseekItem[], ticked: ReadonlySet<string>, picks: Readonly<Record<string, number>>): { id: string; folder?: number }[] {
