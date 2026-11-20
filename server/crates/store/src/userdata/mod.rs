@@ -857,6 +857,7 @@ impl UserData {
         // Offline writes (0.12, decision 0087): what is counted and made once, kept 30 days.
         conn.execute_batch(offline::SCHEMA).context("keeping the plays counted and the changes made")?;
         offline::migrate(&conn).context("bringing the change log up to date")?;
+        offline::record_triggers(&conn).context("logging the records' views' changes")?;
         // The playlists (0.16, decision 0101): in the database, their `.m3u` files brought in once by the store.
         conn.execute_batch(playlists::SCHEMA).context("creating the playlists' tables")?;
         // The person's preferences on the account (0.16, decision 0101 point 14).

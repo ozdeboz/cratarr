@@ -126,6 +126,39 @@ pub fn rights(serve: &Serve) -> Permissions {
     serve.current_user().and_then(|n| serve.users.get(&n)).map(|u| u.permissions).unwrap_or_default()
 }
 
+/// Who asks, once per request (CN8): the domain's viewer, its role decided in one place (`Role::of`) from the account's flag and
+/// whether a key brought it (a key that reads or controls: a full key acts as its account signed in, as `access::signed_in` has
+/// it), its permissions read once (`rights`). No one signed in, only while signing in is off: the one administrator.
+pub fn viewer(serve: &Serve) -> cratarr_domain::can::Viewer {
+    use cratarr_domain::can::{May, Scope, Viewer};
+    let (account, admin, key) = match crate::serve::who::current() {
+        Some(w) => {
+            let key = match w.scope {
+                crate::serve::who::Scope::Full => None,
+                crate::serve::who::Scope::Control => Some(Scope::Control),
+                crate::serve::who::Scope::Read => Some(Scope::Read),
+            };
+            (w.user, w.admin, key)
+        }
+        None => (String::new(), crate::serve::access::administering(), None),
+    };
+    let p = rights(serve);
+    Viewer::new(&account, admin, key, May { request: p.request, offline: p.offline, playlists: p.playlists }, None)
+}
+
+/// Want's right, by `decide()` at the top of each Want (CN2, CN9): without "Request albums", or by a key that changes nothing, it
+/// is refused as a right (a 403) in the table's words, and no request is made. Its state (had, one's own request open) is the
+/// request's own to answer: asked again, the open request is the answer (CN11), and a record had is judged as it is asked for. The
+/// record's facts come with RS01's actions (DC1a): here none are read, and none is needed for a right.
+fn may_want(serve: &Serve) -> Result<()> {
+    use cratarr_domain::can::{Action, Decision, Record, Why, decide};
+    let not_had = Record { copies: Vec::new(), plays: None, preview: false, holding: cratarr_domain::holding::Holding::NotHad, open_requests: Vec::new() };
+    match decide(&viewer(serve), &Action::Want, &not_had) {
+        Decision::Deny(Why::Right(words)) => Err(crate::app::ToggleError::Forbidden(words.into()).into()),
+        _ => Ok(()),
+    }
+}
+
 /// The fetcher approved requests are handed to: Lidarr, where it is connected and switched on, with the profiles and
 /// root folder chosen on its page in Connections.
 pub fn fetcher(app: &dyn RequestsHost) -> Option<Box<dyn Fetcher>> {
@@ -162,9 +195,7 @@ pub async fn ask<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, ke
 
 /// [`ask`], on its host.
 async fn ask_on(app: &dyn RequestsHost, serve: &Serve, account: &str, key: &str) -> Result<Request> {
-    if !rights(serve).request {
-        bail!("Requesting albums is not on for this account");
-    }
+    may_want(serve)?;
     let s = super::discover::suggestion(serve, account, key)?.context("That suggestion is gone; look again")?;
     if let Some(r) = open_request(serve, account, &s.key)? {
         return Ok(r);
@@ -185,9 +216,7 @@ pub async fn ask_album<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &s
 /// [`ask_album`], on its host.
 #[allow(clippy::too_many_arguments)]
 async fn ask_album_on(app: &dyn RequestsHost, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<Request> {
-    if !rights(serve).request {
-        bail!("Requesting albums is not on for this account");
-    }
+    may_want(serve)?;
     // An album with no title would be a record named nothing for life (W6).
     if album.trim().is_empty() {
         bail!("An album needs its title");
@@ -212,9 +241,7 @@ pub async fn ask_record<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &
 
 /// [`ask_record`], handed with `h`.
 pub(crate) async fn ask_record_with(h: &Hands<'_>, serve: &Serve, account: &str, record: i64) -> Result<Request> {
-    if !rights(serve).request {
-        bail!("Requesting albums is not on for this account");
-    }
+    may_want(serve)?;
     asked_record(h, serve, account, record, None, None).await
 }
 

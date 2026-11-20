@@ -1,16 +1,15 @@
-//! The domain's tables, read whole (SCENARIOS-DC1 CN1; TY4). `decide`'s spec is the policy table: tests/policy.json holds
-//! CN1's rows as the scenario writes them, and every row is asked of `decide` for every viewer. It sits beside the crate
-//! until the tables are wired; then the same rows are written to shared/policy.json for the page (TY4), the assertions
-//! unchanged.
+//! The domain's tables, read whole (SCENARIOS-DC1 CN1; TY4). `decide`'s spec is the policy table: shared/policy.json holds
+//! CN1's rows as the scenario writes them, the page's tests read the same file, and every row is asked of `decide` for every
+//! viewer. The file is kept in its written form: a table edited by hand and not written again fails.
 
 use std::collections::BTreeSet;
 
 use cratarr_domain::arrival::Arrival;
 use cratarr_domain::can::{Action as A, ArrivalFacts, Decision, May, Record, RecordCopy, Scope, Target, Viewer, Why, can, decide};
 use cratarr_domain::holding::{CopyFacts, Fetcher, Holding, Library, On, holding};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-const POLICY: &str = include_str!("policy.json");
+const POLICY: &str = include_str!("../../../../shared/policy.json");
 
 // SCENARIOS-DC1's libraries, by their catalogue folders.
 const MUSIC: i64 = 0;
@@ -21,14 +20,14 @@ const MORE: i64 = 4;
 const IN2: i64 = 5;
 const UPL: i64 = 6;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Table {
     about: String,
     viewers: Vec<String>,
     rows: Vec<Row>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Row {
     state: String,
     action: String,
@@ -188,6 +187,17 @@ fn the_policy_table_is_the_spec() {
             }
         }
     }
+}
+
+/// TY4: the policy table as shared JSON, in its written form, for the page's tests to read (shared/policy.json; shared/words.json is
+/// 0097's). Red first: the table sat beside the crate (crates/domain/tests/policy.json), where no page test reads it.
+#[test]
+fn the_tables_are_written_and_current() {
+    let table: Table = serde_json::from_str(POLICY).unwrap();
+    let written = serde_json::to_string_pretty(&table).unwrap() + "\n";
+    assert_eq!(POLICY.replace('\r', ""), written, "shared/policy.json is not in its written form");
+    let beside = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/policy.json");
+    assert!(!beside.exists(), "one copy of a table: none beside the crate");
 }
 
 /// CN1's Never: an action on an upload offered to anyone the upload is hidden from.
