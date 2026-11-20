@@ -39,6 +39,10 @@ const PLACE_SECS: i64 = 5;
 const SEARCH_FOR: Duration = Duration::from_secs(60);
 /// Reads of slskd that may fail in a row before a fetch is given up.
 const READS: u32 = 15;
+/// Between two looks at a search's state, at a transfer, and after a read that failed.
+const SEARCHED_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 1_000 });
+const TRANSFER_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 2_000 });
+const READ_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 4_000 });
 /// How long a fetch may wait in an uploader's queue before it is given up.
 const QUEUED_FOR: Duration = Duration::from_secs(30 * 60);
 /// Staged files left from before (a restart, a fetch never added) go after this long.
@@ -350,18 +354,7 @@ pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Re
     });
     let job = id.clone();
     crate::run::spawn(async move {
-        let found = async {
-            let sid = slskd.search(&text).await?;
-            let started = std::time::Instant::now();
-            while !slskd.searched(&sid).await? && started.elapsed() < SEARCH_FOR {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            let answers = slskd.answers(&sid).await;
-            slskd.forget(&sid).await;
-            // FLAC and MP3 only: the library's formats, which Cratarr writes tags into.
-            anyhow::Ok(crate::slskd::candidates(answers?, length_ms).into_iter().filter(|c| matches!(c.format.as_str(), "flac" | "mp3")).enumerate().map(|(i, c)| Candidate { id: i, ..c }).collect::<Vec<_>>())
-        }
-        .await;
+        let found = searched_through(&slskd, &text, length_ms).await;
         jobs(|j| {
             if let Some(s) = j.searches.get_mut(&job) {
                 match found {
@@ -372,6 +365,19 @@ pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Re
         });
     });
     Ok(id)
+}
+
+/// A single track's search through this slskd: its candidates, FLAC and MP3 only (the library's formats, which Cratarr writes tags
+/// into).
+async fn searched_through(slskd: &Slskd, text: &str, length_ms: Option<i64>) -> Result<Vec<Candidate>> {
+    let sid = slskd.search(text).await?;
+    let started = std::time::Instant::now();
+    while !slskd.searched(&sid).await? && started.elapsed() < SEARCH_FOR {
+        tokio::time::sleep(SEARCHED_AGAIN).await;
+    }
+    let answers = slskd.answers(&sid).await;
+    slskd.forget(&sid).await;
+    Ok(crate::slskd::candidates(answers?, length_ms).into_iter().filter(|c| matches!(c.format.as_str(), "flac" | "mp3")).enumerate().map(|(i, c)| Candidate { id: i, ..c }).collect())
 }
 
 pub fn search_view(id: &str) -> Option<SearchView> {
@@ -388,7 +394,22 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
     let (slskd, folder) = slskd().await?;
     let s = served()?;
     let staging = Path::new(s.data_dir.as_deref().context("Cratarr's data folder is needed")?).join("track-fetch");
+    fetch_through(&slskd, folder, staging, wanted, c).await
+}
+
+/// Tests elsewhere: a single file of `user`'s fetched as [`fetch`] fetches one (single-track fetch, and the bulk queue through it),
+/// through this slskd; the fetch's id.
+#[cfg(test)]
+pub(crate) async fn fetch_through_for_tests(slskd: &Slskd, folder: PathBuf, staging: PathBuf, user: &str, file: crate::slskd::Offered) -> Result<String> {
+    let wanted = Wanted { album: "al-1".into(), track: track_for(1, 1, "Slack Water", "Glass Harbour", None, ""), replace: None };
+    let c = Candidate { id: 0, user: user.into(), file: file.filename.clone(), format: "flac".into(), lossless: true, bitrate: None, sample_rate: None, bit_depth: None, size: file.size, length_ms: None, free_slot: true, queue: 0, speed: 1, offered: file };
+    fetch_through(slskd, folder, staging, wanted, c).await
+}
+
+/// [`fetch`]'s fetch of candidate `c` through this slskd (its POST in slskd's lane), followed into `staging` and gated.
+async fn fetch_through(slskd: &Slskd, folder: PathBuf, staging: PathBuf, wanted: Wanted, c: Candidate) -> Result<String> {
     tidy(&staging);
+    let slskd = slskd.clone();
     let batch = slskd.fetch(&c.user, &c.offered).await?;
     let id = new_id();
     jobs(|j| {
@@ -490,12 +511,17 @@ async fn follow(slskd: &Slskd, c: &Candidate, batch: &str, folder: &Path, stage:
                 failed_reads = 0;
                 t
             }
+            // slskd busy (a 429 from a proxy before it): read again, and no failed read (M2).
+            Err(e) if e.is::<crate::slskd::Busy>() => {
+                tokio::time::sleep(READ_AGAIN).await;
+                continue;
+            }
             Err(e) => {
                 failed_reads += 1;
                 if failed_reads >= READS {
                     return Err(e);
                 }
-                tokio::time::sleep(Duration::from_secs(4)).await;
+                tokio::time::sleep(READ_AGAIN).await;
                 continue;
             }
         };
@@ -507,7 +533,7 @@ async fn follow(slskd: &Slskd, c: &Candidate, batch: &str, folder: &Path, stage:
             bail!("{} did not send it", c.user);
         }
         told(t.percent_complete);
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(TRANSFER_AGAIN).await;
     };
     if !t.succeeded() {
         slskd.drop_transfer(&c.user, &t.id).await;
@@ -571,10 +597,49 @@ pub fn track_for(disc: u32, position: u32, title: &str, artist: &str, length_ms:
     }
 }
 
-/// The gate for a release's track (a record fetched whole, 0.15): as [`gate`], but AcoustID is not asked while background reading
-/// is paused (Y7): the file is not judged (`NotAsked`), and its record holds at its check.
+/// The gate for a release's track (a record fetched whole, 0.15: Soulseek's check): as [`gate`], but AcoustID is not asked while
+/// background reading is paused (Y7): the file is not judged (`NotAsked`), and its record holds at its check. And what its sound
+/// was heard to have refuses it only when it is a fault (SK5, the owner 2026-11-19: `refused_for_soulseek`): clipping, clicks and a
+/// pop at the very end are notes, which its arrival's card in Incoming shows.
+#[cfg(test)]
 pub async fn gate_track(file: &Path, track: &ReleaseTrack) -> Result<f32> {
-    gate_with(file, track, |print| unless_paused(looked_up, print)).await
+    gate_track_with(file, track, |print| unless_paused(looked_up, print)).await
+}
+
+/// Soulseek's gate for a file, as [`gate_track_with`], with the notes its sound was heard to have (`Findings::notes()`: clipping,
+/// clicks, a pop at the very end), which pass it and show on its arrival (SK6.3), `lookup` asked what AcoustID knows of it.
+pub(super) async fn gate_track_noted<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<(f32, Option<String>)>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
+    let print = printed(file).await?;
+    let notes = print.flaws.notes();
+    Ok((judge_track(print, track, lookup).await?, notes))
+}
+
+/// [`gate_track`], with the notes its sound was heard to have (`gate_track_noted`).
+pub(super) async fn gate_track_and_notes(file: &Path, track: &ReleaseTrack) -> Result<(f32, Option<String>)> {
+    gate_track_noted(file, track, |print| unless_paused(looked_up, print)).await
+}
+
+/// [`gate_track`], asking `lookup` what AcoustID knows of the file (the tests' stands in).
+#[cfg(test)]
+async fn gate_track_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
+    judge_track(printed(file).await?, track, lookup).await
+}
+
+/// [`gate_track`]'s verdict on a file already heard (`print`): Soulseek's tests script what their files were heard to have.
+pub(super) async fn judge_track<F, Fut>(print: crate::acoustid::Print, track: &ReleaseTrack, lookup: F) -> Result<f32>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
+    judged(print, track, refused_for_soulseek, lookup).await
 }
 
 /// AcoustID asked through `lookup`, unless background reading is paused (Y7): then asked nothing, saying so.
@@ -621,9 +686,23 @@ where
     F: FnOnce(crate::acoustid::Print) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
 {
+    judged(printed(file).await?, track, refused_for, lookup).await
+}
+
+/// The file decoded whole and heard (`acoustid::print`), off the runtime's threads.
+async fn printed(file: &Path) -> Result<crate::acoustid::Print> {
     let f = file.to_path_buf();
-    let print = crate::run::spawn_blocking(move || crate::acoustid::print(&f)).await??;
-    refused_for(&print, track.length_ms)?;
+    crate::run::spawn_blocking(move || crate::acoustid::print(&f)).await?
+}
+
+/// A heard file judged: refused by `refused` before AcoustID is asked (single-track fetch's rule, or Soulseek's), else held against
+/// its track's recording by what `lookup` says AcoustID knows of it; its score.
+async fn judged<F, Fut>(print: crate::acoustid::Print, track: &ReleaseTrack, refused: fn(&crate::acoustid::Print, Option<i64>) -> Result<()>, lookup: F) -> Result<f32>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
+    refused(&print, track.length_ms)?;
     // A list with no recordings (Discogs', Bandcamp's, C51b): no recording to hold the file against, so AcoustID's check is
     // skipped and the file passes on its sound and length, as its folder was judged by titles and lengths (OQ9 (a), Q29).
     if track.recording.is_empty() {
@@ -638,9 +717,21 @@ where
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
 
-/// Why a file is refused before AcoustID is asked: a damaged frame, a length not the recording's, or what its sound was
-/// heard to have wrong with it (highs that stop at a lossy encoder's wall, clicks, a pop at the end, clipping).
+/// Why single-track fetch's gate refuses a file before AcoustID is asked, and so the bulk queue's (OQ-SK5: both add into an album
+/// in Music with no review, the bulk queue by itself): a fault (`refused_for_soulseek`), or a note its sound was heard to have
+/// (clicks, a pop at the very end, clipping).
 fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result<()> {
+    refused_for_soulseek(print, length_ms)?;
+    if let Some(why) = print.flaws.notes() {
+        bail!("{why}");
+    }
+    Ok(())
+}
+
+/// Why Soulseek's check refuses a file before AcoustID is asked (SK5, the owner 2026-11-19): a fault alone. A damaged frame, a
+/// length not the recording's, highs that stop at a lossy encoder's wall. Clipping, clicks and a pop at the very end are notes:
+/// its arrival is reviewed in Incoming, whose card shows them.
+fn refused_for_soulseek(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result<()> {
     if print.damaged > 0 {
         bail!("{} frames would not decode", print.damaged);
     }
@@ -650,7 +741,7 @@ fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result
             bail!("It is {:.0} s {} than the recording", off.abs() as f64 / 1000.0, if off > 0 { "longer" } else { "shorter" });
         }
     }
-    if let Some(why) = print.flaws.why() {
+    if let Some(why) = print.flaws.fault() {
         bail!("{why}");
     }
     Ok(())
@@ -1154,6 +1245,32 @@ pub fn undo_at(file: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The review of round 1.3's part 2, M2 (SK2.2 (d)): single-track fetch's reads meeting slskd busy (a 429, a proxy before it)
+    /// are read again: never a failed search, never a failed read of its transfer, never "429" in its why.
+    #[tokio::test]
+    async fn single_track_reads_meeting_a_busy_slskd_go_on() {
+        let answers = serde_json::json!([{ "username": "peer-s", "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100,
+            "files": [{ "filename": r"x\Glass Harbour\01 Slack Water.flac", "size": 1000, "length": 100 }] }]);
+        let slskd = crate::slskd::scripted::Scripted::new().read_busy(2).answers(answers.as_array().unwrap().clone()).responses_busy(1);
+        let found = searched_through(&slskd.client(), "Glass Harbour Slack Water", None).await.expect("no failed search for slskd busy");
+        assert_eq!(found.len(), 1);
+        let d = std::env::temp_dir().join(format!("cratarr-single-busy-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let slskd = crate::slskd::scripted::Scripted::new().read_busy(READS + 5).writes_to(&d, None);
+        let file = crate::slskd::Offered { filename: r"x\01 Slack Water.flac".into(), size: 1, extension: None, bit_rate: None, bit_depth: None, sample_rate: None, length: None, is_locked: false };
+        let id = fetch_through_for_tests(&slskd.client(), d.clone(), d.join("staging"), "peer-s", file).await.unwrap();
+        let started = std::time::Instant::now();
+        while fetch_view(&id).is_some_and(|v| matches!(v.state, Fetching::Queued | Fetching::Downloading | Fetching::Checking)) && started.elapsed() < Duration::from_secs(10) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let v = fetch_view(&id).unwrap();
+        let why = v.why.clone().unwrap_or_default();
+        assert!(!why.contains("429") && !why.contains("slskd"), "followed to its end, then judged by the gate alone: {v:?}");
+        assert!(matches!(v.state, Fetching::Passed | Fetching::Refused), "{v:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     /// What a Better copy leaves: `added` in its album, the replaced track `old` named for the trash (paths relative to
     /// the library), and what its Undo reads.
@@ -1690,5 +1807,88 @@ mod tests {
             (gain * (TAU * 220.0 * t).sin()) as f32
         });
         assert_eq!(heard(&path).unwrap_err().to_string(), "Clipped at 0:01");
+    }
+
+    // ---- Soulseek's gate (SK5, the owner 2026-11-19): clipping, a pop at the very end and clicks are notes, not refusals
+
+    /// A tone driven past full scale from 1.5 s to 2.5 s, as `a_clipped_stretch_is_refused_with_when_it_starts` has it.
+    fn clipped(name: &str) -> PathBuf {
+        wav(name, 4.0, |t| {
+            let gain = if (1.5..2.5).contains(&t) { 1.6 } else { 0.5 };
+            (gain * (TAU * 220.0 * t).sin()) as f32
+        })
+    }
+
+    /// Music; a click out of the silence after it at 1.5 s; music again; then near-silence to a burst in its last 50 ms: a click
+    /// mid-track and a pop at the very end.
+    fn clicked_and_popped(name: &str) -> PathBuf {
+        let tone = |t: f64| 0.3 * (TAU * 440.0 * t).sin();
+        wav(name, 7.0, move |t| {
+            let v = if at(t, 1.5) {
+                0.8
+            } else if t < 1.0 || (2.5..4.0).contains(&t) {
+                tone(t)
+            } else if t >= 6.95 {
+                0.9 * noise(t)
+            } else if t >= 4.0 {
+                0.000_04 * noise(t)
+            } else {
+                0.0
+            };
+            v as f32
+        })
+    }
+
+    /// SK5.1, the gate's half (OQ-SK4): through Soulseek's gate a clipped file, and one with a click mid-track and a pop at the very
+    /// end, each pass, AcoustID asked about each, their bytes as they came. Single-track fetch's gate refuses both, AcoustID not
+    /// asked, in the words their arrival's card shows them in (SK5.3).
+    #[tokio::test]
+    async fn clipping_a_pop_and_clicks_are_notes_not_refusals() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let asked = AtomicUsize::new(0);
+        let asked = &asked;
+        let knows = |recording: &'static str| {
+            let says = acoustid_says(0.97, recording);
+            move |p| {
+                asked.fetch_add(1, SeqCst);
+                says(p)
+            }
+        };
+        let track = |n: u32, title: &str, secs: i64| track_for(1, n, title, "Glass Harbour", Some(secs * 1000), &format!("rec-{n}"));
+        let (neap, spring) = (clipped("gate-notes-neap"), clicked_and_popped("gate-notes-spring"));
+        let before = (std::fs::read(&neap).unwrap(), std::fs::read(&spring).unwrap());
+        let passed = (gate_track_with(&neap, &track(2, "Neap", 4), knows("rec-2")).await, gate_track_with(&spring, &track(3, "Spring Tide", 7), knows("rec-3")).await);
+        let refused = (gate_with(&neap, &track(2, "Neap", 4), never_asked).await, gate_with(&spring, &track(3, "Spring Tide", 7), never_asked).await);
+        let after = (std::fs::read(&neap).unwrap(), std::fs::read(&spring).unwrap());
+        std::fs::remove_file(&neap).ok();
+        std::fs::remove_file(&spring).ok();
+        assert_eq!((passed.0.unwrap(), passed.1.unwrap()), (0.97, 0.97), "both pass Soulseek's gate");
+        assert_eq!(asked.load(SeqCst), 2, "AcoustID asked about both");
+        assert_eq!(refused.0.unwrap_err().to_string(), "Clipped at 0:01");
+        assert_eq!(refused.1.unwrap_err().to_string(), "A click at 0:01; a pop at the very end");
+        assert!(before == after, "nothing written into the files");
+    }
+
+    /// SK5.5 (OQ-SK5): single-track fetch's gate, which the bulk queue fetches through too (`fetch` → `gate`), keeps refusing a
+    /// file for its notes: both add into an album in Music with no review, the bulk queue by itself. Soulseek's rule passes it.
+    #[tokio::test]
+    async fn the_other_gates_keep_refusing_notes() {
+        use crate::analysis::flaws::Findings;
+        let print_of = |flaws: Findings| crate::acoustid::Print { fingerprint: String::new(), duration_secs: 240.0, damaged: 0, flaws };
+        let notes = [
+            (print_of(Findings { clips: 5, first_clip: Some(106.0), ..Default::default() }), "Clipped at 1:46"),
+            (print_of(Findings { clicks: vec![130.0], ..Default::default() }), "A click at 2:10"),
+            (print_of(Findings { pop_at_end: true, ..Default::default() }), "A pop at the very end"),
+        ];
+        for (print, words) in &notes {
+            assert_eq!(refused_for(print, Some(240_000)).unwrap_err().to_string(), *words);
+            assert!(refused_for_soulseek(print, Some(240_000)).is_ok(), "{words}: Soulseek's check lets it through");
+        }
+        // The gate itself, as the bulk queue's fetch calls it: refused before AcoustID, which it never reaches.
+        let path = clipped("gate-other-gates");
+        let err = gate(&path, &track_for(1, 2, "Neap", "Glass Harbour", Some(4_000), "rec-2")).await.unwrap_err();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(err.to_string(), "Clipped at 0:01");
+        assert!(!err.is::<NotAsked>(), "a refusal, not a check stopped short");
     }
 }

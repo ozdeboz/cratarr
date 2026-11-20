@@ -90,3 +90,18 @@ answer unless the owner chose otherwise, as noted.
   is Stuck, and says why. A file with no MusicBrainz recording is judged by its sound, title and length, and AcoustID is
   not asked.
 - **A request names its record,** found by its id, group, Bandcamp page or names, never by a title alone.
+
+## Amended 2026-11-20: artist relations (the owner, by question; for 0.18)
+
+Three relations between artists, as MusicBrainz and Discogs keep them:
+
+- **An alias** is another name of the same artist. It folds into that artist's names, for search and matching only; a
+  name never moves or merges an id (0104's hard limits).
+- **A performance name** is one person under another name: a separate artist on purpose, linked to the person.
+- **A group membership** is a band the person is in: the group is an artist of its own, linked to its members.
+
+The relations are facts with their sources (0105): MusicBrainz's artist relationships, Discogs' aliases, groups and
+members. On a person's page each group they were in shows as a section with its records ("With <group>"). The group
+keeps its own page, which lists its members as the usual artist chips, each opening that member's page; a member with
+no records here has a page too, as the artists of records not had above. Names only, no years or instruments. Built with
+artists and labels, the domain core's third run (0104); nothing changes in 0.17.

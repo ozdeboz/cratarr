@@ -1,4 +1,4 @@
-//! The one-time pass over a whole library on another computer (decision 0035: the ThinkBook, over the Music share):
+//! The one-time pass over a whole library on another computer (decision 0035: a PC, over the Music share):
 //! `cratarr-server --analyse <folder> --out <file> [--threads N]`. Every audio file under the folder is analysed, on
 //! every core, and written as one JSON line, `{"rel":…,"size":…,"mtime":…,"analysis":{…}}`, which the server's
 //! import (`POST /api/analysis/import`) takes while the file is as it was.

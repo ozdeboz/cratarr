@@ -1,5 +1,5 @@
 // A player driven through the server as the page counts it on (lib/drivenCourse; the owner, 2026-10-30: the tablet
-// driving the ThinkPad "doesn't show reality", gliding to a wind's first report and standing): its speed as it says
+// driving the laptop "doesn't show reality", gliding to a wind's first report and standing): its speed as it says
 // it, else 1 playing and 0 paused, and through a wind as measured between its reports; then counted on from when each
 // place was so (`position_at`, read as the app's deckAtMs is), each correction fading in. A host winding at 8× and
 // reporting every 250 ms, its reports reaching the page late by a varying amount: the place shown stays near the

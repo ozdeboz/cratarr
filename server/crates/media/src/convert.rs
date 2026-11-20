@@ -238,8 +238,7 @@ pub fn to_flac_told(input: &Path, output: &Path, limit: Limit, progress: impl Fn
     }
 }
 
-/// [`to_flac_told`] at CD format, quietly: the tests'.
-#[cfg(any(test, feature = "test-support"))]
+/// [`to_flac_told`] at CD format, quietly: the tests', and the gate cases' (`--make-gate-cases`, `fixtures::gate`).
 pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
     to_flac_told(input, output, CD, |_| {})
 }

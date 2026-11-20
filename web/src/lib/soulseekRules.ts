@@ -25,6 +25,10 @@ export type SoulseekItem = {
   placed?: string | null;
   /** Folders set aside, each file's why. */
   set_aside: { user: string; path: string; why: Record<string, string> }[];
+  /** slskd's batch asked for or downloading. */
+  batch?: string | null;
+  /** Picked by Cratarr itself, its folder certain (round 1.3): it reads as any picked record. */
+  auto?: boolean;
 };
 export type SoulseekView = { items: SoulseekItem[]; library?: string | null };
 
@@ -50,8 +54,21 @@ export function againIn(due: number, now: number): string | null {
 /** Held on its way: slskd or AcoustID could not be asked, and it is tried again at `due` (the server's `hold`). */
 const held = (i: SoulseekItem, now: number) => !!i.why && i.due > now && (i.state === 'approved' || i.state === 'fetching' || i.state === 'checking');
 
-/** Its row's line: the artist and year, then where it stands. */
-export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): string {
+/** What a user's picked record held by the disk floor says (the server's `SHORT_OF_SPACE`). */
+const SHORT_OF_SPACE = 'The server is short of space';
+
+/** The words a found record waiting for its asker's room or for space keeps (the Want's own, `requests::WAITS_FOR_*`). */
+const WAITS = ['Waits for room', 'Waits for space'];
+
+/** The user whose other record holds a picked one's turn (never two of one user at once), worked out from the list. */
+function waitingFor(i: SoulseekItem, items: readonly SoulseekItem[]): string | null {
+  const user = i.folders[i.chosen ?? 0]?.user;
+  const busy = (o: SoulseekItem) => o.id !== i.id && (o.state === 'fetching' || (o.state === 'approved' && !!o.batch)) && o.folders[o.chosen ?? 0]?.user === user;
+  return user && !i.batch && items.some(busy) ? user : null;
+}
+
+/** Its row's line: the artist and year, then where it stands; `items`, the list it is in. */
+export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000), items: readonly SoulseekItem[] = []): string {
   const head = [i.record.artist, i.record.year ? String(i.record.year) : null];
   const best = i.folders[i.chosen ?? 0];
   const where = ((): (string | null)[] => {
@@ -62,9 +79,13 @@ export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 
       case 'searching':
         return ['Looking for it'];
       case 'found':
-        return [best ? folderLine(best) : 'Found'];
-      case 'approved':
-        return ['To be fetched'];
+        return [best ? folderLine(best) : 'Found', i.why && WAITS.includes(i.why) ? i.why : null];
+      case 'approved': {
+        // Held by the disk floor (AL03.2): its own words, as its request reads them (`word_in`), never its user's other record.
+        if (i.why === SHORT_OF_SPACE) return [i.why];
+        const user = waitingFor(i, items);
+        return [user ? `Waiting for ${user}'s other record` : 'To be fetched'];
+      }
       case 'fetching':
         return [`Fetching · ${Math.round(i.percent)}%`];
       case 'checking':

@@ -1,4 +1,4 @@
-//! Decision 0035: the NAS keeps the analysis up to date. The first pass over the whole library is the ThinkBook's
+//! Decision 0035: the NAS keeps the analysis up to date. The first pass over the whole library is a PC's
 //! (`cratarr-server --analyse`, its results imported by file); after it, this pass analyses what comes or changes (a
 //! new album, a replaced file, a newer analysis version), one file at a time, resting three times as long as each
 //! took: about a quarter of one core, so Cratarr answers as fast as ever meanwhile.
@@ -18,8 +18,8 @@
 //! beside one still running: one decode for the visuals takes about half a gigabyte for a moment, and two at once, or
 //! one beside an import, went over the NAS's 768 MB (eighteen restarts, 2026-10-23/24).
 //!
-//! `CRATARR_ANALYSIS`: `keep` (the default: waits until most of the library has an analysis, as after the ThinkBook's
-//! import, then keeps up), `all` (does the first pass itself, when no ThinkBook is at hand), `off`.
+//! `CRATARR_ANALYSIS`: `keep` (the default: waits until most of the library has an analysis, as after a PC's
+//! import, then keeps up), `all` (does the first pass itself, when no PC is at hand), `off`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -296,7 +296,7 @@ async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): 
 }
 
 /// The one decode at a time (see the top). A turn moves into the blocking work and ends with it.
-static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+pub(crate) static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
 /// Winding's own turns (Tape rewind, a wind, decision 0074), apart from [`HEAVY`]: a wind decodes a few seconds of a
 /// file at a time (a few MB), so it never waits behind a whole file's decode, which takes about half a gigabyte for a

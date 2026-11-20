@@ -3440,7 +3440,7 @@ mod tests {
         }
     }
 
-    /// T1.1 as T1c has it (OQ-D, the coordinator's decision): a copied file rewritten since refuses a Copy to's Undo whole, naming
+    /// T1.1 as T1c has it (OQ-D): a copied file rewritten since refuses a Copy to's Undo whole, naming
     /// the file and saying to delete the copy instead. Nothing goes to the trash: the copied file, the rewritten one and a cover
     /// added since all in place, the rows as they were, the entry not undone. Never a short album; never a file not as copied taken.
     #[tokio::test]
@@ -3508,7 +3508,7 @@ mod tests {
         }
     }
 
-    /// AL01.5's (e), read as the coordinator reads it (T1c: refused whole): root's Copy to of a 10-file album into bob's own music,
+    /// AL01.5's (e), as T1c has it (refused whole): root's Copy to of a 10-file album into bob's own music,
     /// every copy sharing Music's blocks; a cover fix rewrote 3 of the copies since, and a file was added to the folder. Bob's room
     /// counts the 3 rewritten (their own bytes now) and the added file, never the 7 still Music's bytes. Root's Undo is refused
     /// whole: all ten copies and the added file in place, nothing in the trash, his room as it was. Never a short album left in

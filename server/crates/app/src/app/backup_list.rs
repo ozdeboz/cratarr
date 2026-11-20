@@ -243,7 +243,7 @@ mod tests {
         assert_eq!(covered(&cat).len(), 1, "his Undo covers it again");
     }
 
-    /// T2b (the coordinator: two copies never cover each other on the list): Music's original M, Ann's copy A and Bob's copy B. M
+    /// T2b (two copies never cover each other on the list): Music's original M, Ann's copy A and Bob's copy B. M
     /// deleted and its trash emptied: A and B hold the same bytes, yet neither is an original, so neither covers the other and both
     /// are backed up.
     #[test]

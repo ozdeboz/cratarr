@@ -42,3 +42,18 @@ found, none should be chosen automatically. The same week showed:
   - the tracklist mark by rule 4;
   - credits as facts.
 - Soulseek takes any whole version. A request is judged by the shortest list.
+
+## Amended 2026-11-20: a site's stamp is no value; artists' names (the owner, by question; for 0.18)
+
+- **A value a download site stamped into a tag is no value.** Where the files' tags become facts, one pure rule cleans
+  them: a value that is only a web address, a bare domain or "ripped by" is no value, and one trailing a real value is
+  cut. The raw tag stays recorded. Health lists the files whose tags carry a website, opening the write sheet (0092).
+- **An artist's name is a fact with sources too** (rule 6 grown): in 0.18 artists' names become facts with sources, the
+  hand, then the files, then the services, and an artist can be renamed, by hand too. No tags are written for this in
+  0.17.
+- **Open, for the owner: an artist's name where the files pair it with another artist's id** (a group's record whose
+  tags name the person). Recommended: an artist's name comes from its own id. The files' name counts for an artist only
+  where it sits beside that artist's id; elsewhere the services' name for the id shows, and the files line offers the
+  write; a hand rename is a hand fact, with Reset. The other answers: the hand, then the files, strictly, so both show the
+  person's name, told apart by their numbers, until the tags are written or a hand renames; or write those records'
+  artist tags in 0.18's first run.

@@ -502,6 +502,38 @@ mod tests {
         }
     }
 
+    /// SK2.4 (kind 6): a Soulseek record, the bulk queue's ti-1 and root's single-track fetch start at once: their three POSTs go
+    /// one after another through slskd's one lane, and the 429 one meets is asked again, never refused for it (today's "slskd would
+    /// not fetch it: 429 …"). The bulk queue's POST is single-track fetch's (`track_intake::fetch` → `track_fetch::fetch`). The
+    /// one-user rule is Soulseek's records' alone (SC02.9; the review of part 2, L2): ti-1, of the record's own peer, starts beside
+    /// the record's download.
+    #[tokio::test]
+    async fn the_bulk_queue_and_single_tracks_wait_their_turn_in_slskds_lane() {
+        let slskd = crate::slskd::scripted::Scripted::new().slow(200).busy(1).hold_all(10.0).singles(&[r"z\07 Track.flac", r"z\03 Single.flac"]);
+        let d = std::env::temp_dir().join(format!("cratarr-intake-lane-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        super::super::soulseek::picked_for_tests("ss-sk24", 9_024, "peer-a");
+        let file = |name: &str| crate::slskd::Offered { filename: format!(r"z\{name}"), size: 1, extension: None, bit_rate: None, bit_depth: None, sample_rate: None, length: None, is_locked: false };
+        let client = slskd.client();
+        let (record, bulk, single) = tokio::join!(
+            super::super::soulseek::start_for_tests("ss-sk24", &client, &d),
+            super::super::track_fetch::fetch_through_for_tests(&client, d.clone(), d.join("ti-1"), "peer-a", file("07 Track.flac")),
+            super::super::track_fetch::fetch_through_for_tests(&client, d.clone(), d.join("single"), "peer-s", file("03 Single.flac"))
+        );
+        assert!(record, "the record under way");
+        assert!(bulk.is_ok() && single.is_ok(), "neither refused for a 429: {bulk:?} {single:?}");
+        assert!(slskd.never_overlapped() && slskd.violations().is_empty(), "{:?}", slskd.violations());
+        let mut taken: Vec<String> = slskd.posts().into_iter().filter(|o| o.status == 200).map(|o| o.user).collect();
+        taken.sort();
+        assert_eq!(taken, ["peer-a", "peer-a", "peer-s"], "three POSTs, one after another");
+        let record = super::super::soulseek::item_for_tests("ss-sk24").and_then(|i| i.batch).unwrap();
+        assert!(slskd.going().contains(&record), "ti-1 of peer-a taken while the record's batch of peer-a downloads");
+        assert_eq!(slskd.posts().iter().filter(|o| o.status == 429).count(), 1, "the one 429 asked again");
+        assert!(super::super::soulseek::item_for_tests("ss-sk24").is_some_and(|i| i.why.is_none() && i.failed.is_empty()));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn a_fetch_with_no_verdict_blames_no_user_and_fetches_nothing_more() {
         let mut i = item("v", State::Checking);

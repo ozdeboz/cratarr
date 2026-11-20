@@ -89,7 +89,7 @@
   }
   const yearOk = $derived(yearOf(yearTyped) !== null);
 
-  // Secondary types: MusicBrainz's twelve only, the ones Cratarr keeps (a5, 2026-10-31: any other is refused); one a
+  // Secondary types: MusicBrainz's twelve only, the ones Cratarr keeps (2026-10-31: any other is refused); one a
   // record carries from elsewhere is not offered and not sent back.
   const secondary = $derived(shownOf(records, draft, 'secondary'));
   const secondaryNow = $derived<string[]>(((secondary.mixed || secondary.reset ? [] : (secondary.value as string[] | null)) ?? []).filter(isSecondary));
