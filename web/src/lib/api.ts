@@ -1434,6 +1434,8 @@ export type Permissions = {
   /** Requests (decision 0070): ask for albums (a Want goes ahead with no one's yes since 0.17), answer everyone's. */
   request: boolean;
   manage_requests: boolean;
+  /** Upload music (UP01): their own files into Incoming, theirs until kept; administrators always may. */
+  upload?: boolean;
 };
 /** A device that belongs to an account (it plays only on its own, decision 0051): `id` is its player's name. One that is
  *  connected, or a Kodi (removed under Players), is not taken away. */
@@ -1488,6 +1490,20 @@ export const pairRefuse = (code: string) => post<unknown>('/api/pair/refuse', { 
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
 /** About Cratarr: its version, since when it runs, its licence (SPDX) and where its source is. */
 export const getAbout = () => quietly<{ version: string; started: number; licence?: string; source?: string }>('/api/about');
+/** An upload (UP02, UP04): its id, the picked folder's name, each file's number, name, size and the bytes the server has of it,
+ *  and once a pass has read them in, the records it placed. */
+export type Upload = { id: string; folder: string | null; files: { n: number; name: string; size: number; received: number }[]; placed?: { album: string; title: string }[] };
+/** The pick made an upload (refused with the server's words: its room, its floor, a name). */
+export const createUpload = (folder: string | null, files: { name: string; size: number }[]) => post<Upload>('/api/uploads', { folder, files });
+/** What the server has of it: the count every piece goes on from. */
+export const uploadStatus = (id: string) => request<Upload>(`/api/uploads/${encodeURIComponent(id)}`);
+/** A piece of file `n` at `offset`, with its SHA-256 (OQ-U1 (a)): the server checks it, keeps it, and counts it. */
+export const uploadPiece = (id: string, n: number, offset: number, piece: Blob, digest: string) =>
+  request<unknown>(`/api/uploads/${encodeURIComponent(id)}/${n}?offset=${offset}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream', 'Content-Digest': digest },
+    body: piece,
+  });
 /** What's New (UC02, UC03): what this account has not seen, newest first (lib/whatsNewRule); marked seen up to a version. */
 export const getWhatsNew = () => quietly<import('./whatsNewRule').WhatsNew>('/api/whats-new');
 export const whatsNewSeen = (version: string) => post<unknown>('/api/whats-new/seen', { version });
