@@ -1,0 +1,42 @@
+{
+  "about": "Cratarr's genres (decision 0097, amended 2026-11-20), one list for the server, the page and a device: the rules crate compiles it in (server/rules/src/genres.rs). The 26, each with the words that mean it, compared as search reads words (case, marks and everything but letters and digits count for nothing: \"R&B\" is \"r b\", \"Hip-Hop\" is \"hip hop\"). Any other word a caller (Discogs, MusicBrainz, a file's GENRE) names a genre or a style is a style; the rest are tags. The exceptions are written forms read as the words they are, before the split on \"/\", \";\" and \",\". The links give a style the genres it counts toward, and are never shown; these are the fixed ones, and a style with no link gives no genre.",
+  "genres": [
+    { "name": "Rock", "words": ["rock"] },
+    { "name": "Pop", "words": ["pop"] },
+    { "name": "Electronic", "words": ["electronic"] },
+    { "name": "Dance", "words": ["dance", "electronic dance music", "edm"] },
+    { "name": "Ambient", "words": ["ambient"] },
+    { "name": "Experimental", "words": ["experimental"] },
+    { "name": "Jazz", "words": ["jazz"] },
+    { "name": "Blues", "words": ["blues"] },
+    { "name": "Soul", "words": ["soul"] },
+    { "name": "Funk", "words": ["funk"] },
+    { "name": "R&B", "words": ["r&b", "rnb", "r n b"] },
+    { "name": "Hip Hop", "words": ["hip hop", "hiphop", "rap"] },
+    { "name": "Reggae", "words": ["reggae"] },
+    { "name": "Latin", "words": ["latin"] },
+    { "name": "Folk", "words": ["folk"] },
+    { "name": "Country", "words": ["country"] },
+    { "name": "World", "words": ["world", "world music"] },
+    { "name": "Classical", "words": ["classical"] },
+    { "name": "Metal", "words": ["metal"] },
+    { "name": "Punk", "words": ["punk"] },
+    { "name": "Soundtrack", "words": ["soundtrack"] },
+    { "name": "Spoken Word", "words": ["spoken word"] },
+    { "name": "Children's", "words": ["children's", "children's music"] },
+    { "name": "Religious", "words": ["religious"] },
+    { "name": "Easy Listening", "words": ["easy listening"] },
+    { "name": "New Age", "words": ["new age"] }
+  ],
+  "exceptions": [
+    { "value": "RnB/Swing", "words": ["R&B", "New Jack Swing"] },
+    { "value": "Cut-up/DJ", "words": ["Turntablism"] }
+  ],
+  "links": [
+    { "style": "New Jack Swing", "genres": ["R&B"] },
+    { "style": "Turntablism", "genres": ["Hip Hop", "Electronic"] },
+    { "style": "Stage & Screen", "genres": ["Soundtrack"] },
+    { "style": "Non-Music", "genres": ["Spoken Word"] },
+    { "style": "Brass & Military", "genres": [] }
+  ]
+}

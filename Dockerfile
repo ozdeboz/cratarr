@@ -24,6 +24,8 @@ RUN rustup target add wasm32-unknown-unknown
 ARG CARGO_BUILD_JOBS
 WORKDIR /app
 COPY server/ server/
+# The rules crate compiles shared/genres.json in (the 26 genres, 0.18's GEN), so every stage that builds needs it.
+COPY shared/ shared/
 WORKDIR /app/server
 # The same build settings in every stage that compiles the server's own crates (tests, e2e): a stage that differs
 # compiles them again (0.13: the e2e stage rebuilt them for 15 minutes beside the tests'). Release is not incremental.
