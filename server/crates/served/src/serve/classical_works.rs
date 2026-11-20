@@ -5,7 +5,7 @@ use serde::Serialize;
 
 /// A work as Other versions names it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
 pub struct WorkRef {
     pub mbid: String,
@@ -16,15 +16,15 @@ pub struct WorkRef {
 /// number there, where MusicBrainz says. A classical record's tracks only (0.13: MusicBrainz has works for almost every
 /// song, so a soundtrack listed its songs as works).
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "test-support"), derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
 pub struct RowWork {
     pub mbid: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub parent: Option<WorkRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
+    #[cfg_attr(any(test, feature = "test-support"), ts(optional))]
     pub part_number: Option<u32>,
 }

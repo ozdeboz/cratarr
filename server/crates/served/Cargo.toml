@@ -1,0 +1,43 @@
+[package]
+name = "cratarr-served"
+description = "Cratarr's served library: Serve, users, sessions, access, sign-in, LDAP, playlists, files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-gate/test-support", "dep:ts-rs"]
+
+[dependencies]
+cratarr-gate.workspace = true
+cratarr-rules.workspace = true
+anyhow.workspace = true
+argon2.workspace = true
+axum.workspace = true
+getrandom.workspace = true
+ldap3.workspace = true
+md-5.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+# The page's types: the app's hold `serve::classical_works`' (test-support only, as a dev-dependency today).
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+cratarr-gate = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
+tower.workspace = true
+tracing-subscriber.workspace = true
+ts-rs.workspace = true

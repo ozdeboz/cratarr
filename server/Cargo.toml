@@ -88,6 +88,7 @@ cratarr-media = { path = "crates/media" }
 cratarr-store = { path = "crates/store" }
 cratarr-clients = { path = "crates/clients" }
 cratarr-gate = { path = "crates/gate" }
+cratarr-served = { path = "crates/served" }
 cratarr-app = { path = "crates/app" }
 cratarr-api = { path = "crates/api" }
 ts-rs = "12.0.1"
@@ -106,6 +107,7 @@ tracing-subscriber.workspace = true
 # Every crate's test helpers and hooks (`test-support`): one feature set for the unit tests, `all` and e2e (SPLIT-PLAN 5.4).
 cratarr-api = { workspace = true, features = ["test-support"] }
 cratarr-app = { workspace = true, features = ["test-support"] }
+cratarr-served = { workspace = true, features = ["test-support"] }
 cratarr-gate = { workspace = true, features = ["test-support"] }
 cratarr-clients = { workspace = true, features = ["test-support"] }
 cratarr-store = { workspace = true, features = ["test-support"] }

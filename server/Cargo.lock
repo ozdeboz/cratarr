@@ -459,17 +459,15 @@ version = "0.17.0"
 dependencies = [
  "alac-encoder",
  "anyhow",
- "argon2",
  "axum",
  "base64 0.22.1",
- "cratarr-gate",
  "cratarr-rules",
+ "cratarr-served",
  "flacenc",
  "flate2",
  "getrandom 0.3.4",
  "image",
  "ipnet",
- "ldap3",
  "libc",
  "lofty",
  "md-5",
@@ -578,6 +576,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratarr-served"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "axum",
+ "cratarr-gate",
+ "cratarr-rules",
+ "getrandom 0.3.4",
+ "ldap3",
+ "md-5",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "ts-rs",
+]
+
+[[package]]
 name = "cratarr-server"
 version = "0.17.0"
 dependencies = [
@@ -590,6 +614,7 @@ dependencies = [
  "cratarr-gate",
  "cratarr-media",
  "cratarr-rules",
+ "cratarr-served",
  "cratarr-store",
  "flate2",
  "image",

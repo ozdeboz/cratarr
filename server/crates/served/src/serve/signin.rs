@@ -50,7 +50,7 @@ impl Throttle {
     }
 
     /// Seconds until `keys` may try again; none: now.
-    pub(super) fn wait(&self, keys: &[String], now: i64) -> Option<i64> {
+    pub fn wait(&self, keys: &[String], now: i64) -> Option<i64> {
         let mut failed = self.lock();
         failed.retain(|_, times| {
             times.retain(|t| now - t < WINDOW);
@@ -59,7 +59,7 @@ impl Throttle {
         keys.iter().filter_map(|k| failed.get(k)).filter(|t| t.len() >= LIMIT).map(|t| (t[t.len() - LIMIT] + WINDOW - now).max(1)).max()
     }
 
-    pub(super) fn failed(&self, keys: &[String], now: i64) {
+    pub fn failed(&self, keys: &[String], now: i64) {
         let mut failed = self.lock();
         for k in keys {
             let times = failed.entry(k.clone()).or_default();
@@ -70,7 +70,7 @@ impl Throttle {
         }
     }
 
-    pub(super) fn succeeded(&self, keys: &[String]) {
+    pub fn succeeded(&self, keys: &[String]) {
         let mut failed = self.lock();
         for k in keys {
             failed.remove(k);

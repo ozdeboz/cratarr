@@ -687,7 +687,7 @@ pub(crate) fn page_read_of(cat: &Arc<Catalogue>, record: i64) -> Option<bool> {
 }
 
 /// A source switched off: moved down for the turn's class (`references_turn`).
-pub use cratarr_gate::app::references_turn::SwitchedOff;
+pub use super::references_turn::SwitchedOff;
 
 /// A reference's list, read from its source (C51a, `tracklist`'s reader): a MusicBrainz release's own; a release group's, one
 /// of its releases (the first official one with tracks, else the first with tracks, as 0.16's Soulseek chose); a Discogs

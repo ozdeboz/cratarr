@@ -1,5 +1,5 @@
 // A stand-in for Cratarr, for the browser tests with no built server (`pnpm run e2e:standin`, e2e/standin-run.mjs; the real
-// one is scripts/browser-e2e.sh): sign-in and its session as server/crates/app/src/serve/signin.rs makes them, the 401 of access.rs,
+// one is scripts/browser-e2e.sh): sign-in and its session as server/crates/served/src/serve/signin.rs makes them, the 401 of access.rs,
 // /api/me, preferences, an account's few reads, a player's connection and reports, kept for a test to read at
 // /api/standin/reports, and the library's index, its feed and each account's own, the rules crate's own bytes
 // (server/rules/tests/vectors/index), with small covers in their plain form: it stands at rev 5 until a test moves it to 9 by /api/standin/index-moves, which adds one cover.
@@ -13,7 +13,7 @@ import { createServer } from 'node:http';
 
 const COOKIE = 'cratarr-session';
 const challenge = `Cookie realm="Cratarr", form-action="/signin", cookie-name="${COOKIE}"`;
-const script = readFileSync(new URL('../../server/crates/app/src/serve/signin.rs', import.meta.url), 'utf8')
+const script = readFileSync(new URL('../../server/crates/served/src/serve/signin.rs', import.meta.url), 'utf8')
   .match(/<script nonce="\{nonce\}">([\s\S]*?)<\/script>/)[1]
   .replaceAll('{{', '{')
   .replaceAll('}}', '}');

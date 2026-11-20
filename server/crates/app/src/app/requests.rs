@@ -511,7 +511,7 @@ pub const WAITS_FOR_RELEASE: &str = "Waits for its release:";
 pub const STOPPED_ON_ARRIVAL: &str = "Lidarr told to stop: it arrived";
 
 /// The day a release date names: moved down for the turn's HTTP dates (`requests_turn`).
-pub use cratarr_gate::app::requests_turn::release_day;
+pub use super::requests_turn::release_day;
 
 /// When each fetcher was last found out of reach and has stayed so (X1: a dead fetcher raises a Health item), by its name.
 static DOWN: std::sync::Mutex<std::collections::BTreeMap<&'static str, i64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());

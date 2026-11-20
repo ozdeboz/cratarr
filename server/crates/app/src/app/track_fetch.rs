@@ -662,7 +662,7 @@ async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid:
 
 /// The gate stopped short of a verdict, and what it found wrong with a file itself: moved down for the turn's class
 /// (`track_fetch_turn`).
-pub use cratarr_gate::app::track_fetch_turn::{NotAsked, Unfit};
+pub use super::track_fetch_turn::{NotAsked, Unfit};
 
 /// [`gate`], asking `lookup` what AcoustID knows of the file (the tests' stands in for AcoustID).
 pub(crate) async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
