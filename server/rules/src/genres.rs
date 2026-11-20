@@ -5,9 +5,13 @@
 //! - **A word's genre** ([`Genres::genre_of`]): by its [`key`], as search reads words ("Hip-Hop", "HipHop" and "Rap" are
 //!   Hip Hop; "R'n'B" is R&B). Any other word a caller names a genre or a style is a style, the rest are tags: that sort
 //!   is the words store's.
-//! - **The one split** ([`Genres::split`]): every words field (GENRE, STYLE, MOOD, Grouping) and every service's stored
-//!   word, on every path. The exceptions first, then a library's keep list, then "/", ";" and ","; never "&", and a
-//!   part's leading "&" or "and" dropped.
+//! - **The one split** ([`Genres::split`]): every words field (GENRE, STYLE, MOOD, Grouping), every service's stored word
+//!   and every typed word, on every path, in three layers (the owner, 2026-11-20, "Three layers"):
+//!   1. the exceptions, shared, first, on the whole written form ("RnB/Swing" is R&B and New Jack Swing everywhere);
+//!   2. the rule of where the value was written, passed in, never read here: a library's files by that library's own
+//!      separators and keep list, each service by its shipped rule ([`rules`]), a typed word whole. "&" never splits,
+//!      and a "," split drops a part's leading "&" or "and";
+//!   3. the meaning after it, shared: a word's genre, the sort, the links.
 //! - **The links** ([`Genres::links`]): the genres a style counts toward, never shown.
 //!
 //! Read by hand, as the matcher's JSON is ([`crate::matcher::json`]): no serde_json in the page's WebAssembly.
@@ -18,8 +22,29 @@ use rustc_hash::FxHashMap;
 
 use crate::matcher::json::{self, Value};
 
-/// The words fields' separators (the owner, 2026-11-20: "split everywhere"). Never "&".
-pub const SEPARATORS: [char; 3] = ['/', ';', ','];
+/// Each service's split rule (GEN-DESIGN §4, OQ-GEN-20): shipped, the same for everyone, since a service writes its words
+/// the same way for every library, and passed to the split where that service's words are read; never a library's
+/// setting. Each is separators alone, its keep list empty. A library's files are split by that library's own rules, which
+/// the library's settings hold.
+pub mod rules {
+    /// Discogs' compound genres and styles ("Funk / Soul", "Folk, World, & Country"): "/" and ",".
+    pub const DISCOGS: &[&str] = &["/", ","];
+    /// MusicBrainz's tags come one by one; a "/" inside one joins two ("pop/rock").
+    pub const MUSICBRAINZ: &[&str] = &["/"];
+    /// Last.fm's tags, each one value already: no split.
+    pub const LASTFM: &[&str] = &[];
+    /// Bandcamp's tags, each one value already: no split.
+    pub const BANDCAMP: &[&str] = &[];
+    /// AudioMuse's names, one by one from its own labels: no split.
+    pub const AUDIOMUSE: &[&str] = &[];
+    /// A word typed into a record's or a track's words: one value, so no split (the exceptions still apply).
+    pub const TYPED: &[&str] = &[];
+
+    /// A rule's separators as the split takes them.
+    pub fn separators(rule: &[&str]) -> Vec<String> {
+        rule.iter().map(|s| s.to_string()).collect()
+    }
+}
 
 /// `shared/genres.json` as Cratarr ships it.
 pub const SHIPPED: &str = include_str!("../../../shared/genres.json");
@@ -62,8 +87,8 @@ pub fn shipped() -> &'static Genres {
 }
 
 /// [`Genres::split`] by the list Cratarr ships.
-pub fn split(value: &str, keep: &[String]) -> Vec<String> {
-    shipped().split(value, keep)
+pub fn split(value: &str, separators: &[String], keep: &[String]) -> Vec<String> {
+    shipped().split(value, separators, keep)
 }
 
 /// A word's key: its words as search reads them ([`crate::matcher::words`]), so "Hip-Hop", "hip hop" and "HIP HOP" are
@@ -155,13 +180,20 @@ impl Genres {
         self.by_key.get(k).map(|&at| self.genres[at].name.as_str())
     }
 
-    /// A words field's value as its words: the one split, on every path (the owner, 2026-11-20, "split everywhere").
-    /// The exceptions are read first, each a form read as the words it is ("RnB/Swing": R&B, New Jack Swing); then a
-    /// library's keep list (`keep`: its own forms kept whole); each ignoring case and inside a longer value, longest first,
-    /// and none where a form before it took the stretch. Then the rest splits on "/", ";" and ",", never on "&", and a
-    /// part's leading "&" or "and" is dropped ("Folk, World, & Country": Folk, World, Country), the word "and" only
-    /// ("Andean Music" is whole). Each word trimmed, none empty; a repeat (ignoring case) dropped, its first spelling kept.
-    pub fn split(&self, value: &str, keep: &[String]) -> Vec<String> {
+    /// A value as its words: the one split, on every path, by the rule of where the value was written (the owner,
+    /// 2026-11-20, "Three layers"). The caller passes that rule: a library's files its `separators` and keep list, a
+    /// service its shipped rule ([`rules`]) with no keep list, a typed word no separators.
+    ///
+    /// The exceptions are read first, under every rule, each a form read as the words it is ("RnB/Swing": R&B, New Jack
+    /// Swing); then the keep list (`keep`: forms kept whole); each ignoring case and inside a longer value, longest first,
+    /// and none where a form before it took the stretch. The rest splits on `separators`, never on "&": a separator
+    /// holding "&" is passed over, as "&" sits inside genres (Drum & Bass, R&B). Where "," is among the separators, a
+    /// part's leading "&" or "and" is dropped, the rest of "A, B, & C" ("Folk, World, & Country": Folk, World, Country),
+    /// the word "and" only ("Andean Music" is whole). Each word trimmed, none empty; a repeat (ignoring case) dropped,
+    /// its first spelling kept.
+    pub fn split(&self, value: &str, separators: &[String], keep: &[String]) -> Vec<String> {
+        let separators: Vec<&str> = separators.iter().map(String::as_str).filter(|s| !s.is_empty() && !s.contains('&')).collect();
+        let comma = separators.iter().any(|s| s.trim() == ",");
         let mut taken: Vec<Taken> = Vec::new();
         let mut exceptions: Vec<usize> = (0..self.exceptions.len()).collect();
         exceptions.sort_by_key(|&e| std::cmp::Reverse(self.exceptions[e].value.len()));
@@ -182,24 +214,23 @@ impl Genres {
             if let Some(t) = next.next_if(|t| t.from == at) {
                 match t.exception {
                     Some(e) => {
-                        push_word(&mut words, &part);
+                        push_word(&mut words, &part, comma);
                         part.clear();
                         words.extend(self.exceptions[e].words.iter().cloned());
                     }
                     None => part.push_str(&value[t.from..t.to]),
                 }
                 at = t.to;
+            } else if let Some(separator) = separators.iter().find(|s| value[at..].starts_with(**s)) {
+                push_word(&mut words, &part, comma);
+                part.clear();
+                at += separator.len();
             } else {
-                if SEPARATORS.contains(&c) {
-                    push_word(&mut words, &part);
-                    part.clear();
-                } else {
-                    part.push(c);
-                }
+                part.push(c);
                 at += c.len_utf8();
             }
         }
-        push_word(&mut words, &part);
+        push_word(&mut words, &part, comma);
         dedupe(words)
     }
 }
@@ -242,9 +273,10 @@ fn matched(value: &str, at: usize, form: &str) -> Option<usize> {
     Some(len)
 }
 
-/// A part as a word, trimmed and its leading "&" or "and" dropped, if anything is left of it.
-fn push_word(words: &mut Vec<String>, part: &str) {
-    let word = without_joining(part.trim());
+/// A part as a word, trimmed, its leading "&" or "and" dropped where "," splits (`comma`), if anything is left of it.
+fn push_word(words: &mut Vec<String>, part: &str, comma: bool) {
+    let part = part.trim();
+    let word = if comma { without_joining(part) } else { part };
     if !word.is_empty() {
         words.push(word.to_string());
     }
