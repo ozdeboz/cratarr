@@ -1435,7 +1435,7 @@ export type Permissions = {
   request: boolean;
   manage_requests: boolean;
   /** Upload music (UP01): their own files into Incoming, theirs until kept; administrators always may. */
-  upload?: boolean;
+  upload: boolean;
 };
 /** A device that belongs to an account (it plays only on its own, decision 0051): `id` is its player's name. One that is
  *  connected, or a Kodi (removed under Players), is not taken away. */
