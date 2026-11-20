@@ -64,6 +64,7 @@ pub mod beyond;
 pub mod labels;
 pub use cratarr_gate::app::excluded_artists;
 pub mod around;
+pub mod around_records;
 pub mod words;
 pub mod harvest;
 pub mod fixes;
