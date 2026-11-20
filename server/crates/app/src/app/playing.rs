@@ -111,7 +111,7 @@ async fn own_artist(served: &Arc<crate::serve::Serve>, account: &str, id: Option
     let Some(asked) = asked else {
         let Some(id) = id else { return Ok(None) };
         let (c, i) = (served.catalogue().clone(), id.to_string());
-        let gone = crate::run::spawn_blocking(move || super::retention::unknown_artist(&c, &i)).await.ok().flatten();
+        let gone = crate::run::spawn_blocking(move || super::retention_base::unknown_artist(&c, &i)).await.ok().flatten();
         return Err(gone.unwrap_or_else(|| ToggleError::Refused("That is not an artist.".into())));
     };
     let works = crate::source::cratarr::artist_works_of(served, account, &asked.id).await.map_err(|e| {
@@ -487,6 +487,8 @@ pub struct PlayingService {
     /// and one asks at a time: the pages (and the live channel) asking often, or a page caught in a loop, cost the media
     /// server one question at a time at most (2026-10-14: one tab's loop of 200 a second took it down).
     state_kept: tokio::sync::Mutex<Option<(std::time::Instant, StateKey, StateView)>>,
+    /// Cratarr's own records' files' state, once the app is up (`set_file_facts`): the artist view lists them with it.
+    file_facts: std::sync::OnceLock<Arc<dyn super::playing_host::FileFacts>>,
 }
 
 /// A state is its account's (their player, their favourites: decision 0051) for the source followed.
@@ -501,7 +503,12 @@ const STATE_REUSE: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl PlayingService {
     pub(super) fn new(lib: Arc<Library>, playlists: Arc<PlaylistService>) -> Self {
-        Self { lib, playlists, info: Mutex::new(None), state_kept: tokio::sync::Mutex::new(None) }
+        Self { lib, playlists, info: Mutex::new(None), state_kept: tokio::sync::Mutex::new(None), file_facts: Default::default() }
+    }
+
+    /// The records' files' state as Incoming tells it (`super::playing_host::FileFacts`), set as the app is made.
+    pub fn set_file_facts(&self, files: Arc<dyn super::playing_host::FileFacts>) {
+        let _ = self.file_facts.set(files);
     }
 
     /// What plays and which playlists hold it: as worked out within the last second, else afresh.
@@ -971,7 +978,7 @@ impl PlayingService {
             Err(e) => {
                 if source_id == crate::source::cratarr::KIND.id {
                     let (c, id) = (self.lib.catalogue(), album_id.to_string());
-                    if let Ok(Some(gone)) = crate::run::spawn_blocking(move || super::retention::unknown_album(&c, &id)).await {
+                    if let Ok(Some(gone)) = crate::run::spawn_blocking(move || super::retention_base::unknown_album(&c, &id)).await {
                         return Err(gone);
                     }
                     // A record not had is no album of the library: its page answers from the catalogue (C54, `record_view`).
@@ -1182,8 +1189,10 @@ impl PlayingService {
         }
         super::classical::tell(source_id, &mut albums).await;
         super::classical::tell(source_id, &mut appears_on).await;
-        super::file_facts::tell(source_id, &mut albums);
-        super::file_facts::tell(source_id, &mut appears_on);
+        if let Some(files) = self.file_facts.get() {
+            files.tell(source_id, &mut albums);
+            files.tell(source_id, &mut appears_on);
+        }
         Ok(ArtistView {
             source: source_id.to_string(),
             name: name.to_string(),

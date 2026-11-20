@@ -26,3 +26,9 @@ pub trait PlayingHost: Send + Sync + 'static {
     /// (`IncomingService::album_fate`).
     fn album_moved_to<'a>(&'a self, source: &'a str, id: &'a str) -> Asked<'a, Option<String>>;
 }
+
+/// Cratarr's own records said with their files' state (`file_facts::tell`, Incoming's), as the artist view lists them: a slot
+/// on `PlayingService` the app sets as it is made (`PlayingService::set_file_facts`), never a static.
+pub trait FileFacts: Send + Sync {
+    fn tell(&self, source: &str, albums: &mut [crate::source::Album]);
+}

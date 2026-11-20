@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::App;
-use super::playing_host::{Asked, PlayingHost};
+use super::playing_host::{Asked, FileFacts, PlayingHost};
 
 impl PlayingHost for App {
     fn library(&self) -> &Arc<super::library::Library> {
@@ -37,5 +37,14 @@ impl PlayingHost for App {
                 _ => None,
             }
         })
+    }
+}
+
+/// The records' files' state as Incoming tells it (`file_facts::tell`), for the artist view (`PlayingService`'s slot).
+pub struct AppFileFacts;
+
+impl FileFacts for AppFileFacts {
+    fn tell(&self, source: &str, albums: &mut [crate::source::Album]) {
+        super::file_facts::tell(source, albums);
     }
 }

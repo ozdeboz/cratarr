@@ -100,6 +100,7 @@ mod served_tests_requests;
 pub mod room;
 // Records not had that nobody sees, forgotten (RT01).
 pub mod retention;
+pub mod retention_base;
 pub mod queue_requests;
 pub mod spotify;
 pub mod radio;
@@ -239,6 +240,7 @@ impl App {
         incoming.listen();
         incoming.work();
         let playing = PlayingService::new(library.clone(), playlists.clone());
+        playing.set_file_facts(Arc::new(app_playing::AppFileFacts));
         let settings = SettingsService::new(
             library.clone(),
             files,
