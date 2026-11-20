@@ -205,7 +205,7 @@ pub fn gate_cases(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// The gate cases made once a run, for the tests that hear them (SK6's unit twins, the pin below): where they are.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn gate_cases_once() -> &'static Path {
     static MADE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     MADE.get_or_init(|| {

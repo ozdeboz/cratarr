@@ -264,7 +264,7 @@ pub fn size_text(bytes: u64) -> String {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) mod tests {
+pub mod tests {
     // Shared with the tests of the crates above (test-support): the helpers only its own tests call are idle there.
     #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;

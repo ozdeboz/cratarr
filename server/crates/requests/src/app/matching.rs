@@ -351,7 +351,7 @@ fn files_of_match(record: &[super::renumber_base::Track], written: &[super::renu
 }
 
 /// A match's fix of one album, where `finding` has one. Blocking.
-pub(super) fn fix_of(served: &crate::serve::Serve, finding: &str, album: &str, m: &Match, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
+pub fn fix_of(served: &crate::serve::Serve, finding: &str, album: &str, m: &Match, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
     let record = super::renumber_base::files_in(served, album, None)?;
     let written = if at.is_some() { super::renumber_base::files_in(served, album, at)? } else { record.clone() };
     let certainty = if m.certain { "certain" } else { "likely" };

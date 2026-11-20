@@ -502,7 +502,7 @@ fn state_key(served: Option<&crate::serve::Serve>, want: Option<&str>) -> StateK
 const STATE_REUSE: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl PlayingService {
-    pub(super) fn new(lib: Arc<Library>, playlists: Arc<PlaylistService>) -> Self {
+    pub fn new(lib: Arc<Library>, playlists: Arc<PlaylistService>) -> Self {
         Self { lib, playlists, info: Mutex::new(None), state_kept: tokio::sync::Mutex::new(None), file_facts: Default::default() }
     }
 

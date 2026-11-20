@@ -83,7 +83,7 @@ fn forgetting_waits(cat: &Catalogue, now: i64) -> bool {
 /// status (`UserData::request_records`), every record on Soulseek's list, and, as an artist is kept (`protected_artists`, Z5),
 /// anything the user data names it in (`UserData::records_named`: a heart, plays, a rating, words, tags) and the stores in the
 /// data folder `data` (`stores_name`). Blocking.
-pub(crate) fn protected(ud: &UserData, data: Option<&std::path::Path>) -> Result<BTreeSet<i64>> {
+pub fn protected(ud: &UserData, data: Option<&std::path::Path>) -> Result<BTreeSet<i64>> {
     let mut kept = protected_here(ud, data)?;
     kept.extend(super::soulseek::item_records());
     Ok(kept)

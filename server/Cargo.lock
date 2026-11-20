@@ -459,30 +459,22 @@ dependencies = [
 name = "cratarr-app"
 version = "0.17.0"
 dependencies = [
- "alac-encoder",
  "anyhow",
  "axum",
- "base64 0.22.1",
- "cratarr-records",
+ "cratarr-playing",
+ "cratarr-requests",
  "cratarr-rules",
- "flacenc",
  "flate2",
- "getrandom 0.3.4",
  "image",
  "ipnet",
  "libc",
  "lofty",
- "mp3lame-encoder",
  "realfft",
  "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
- "sha2",
- "symphonia",
- "thiserror",
  "tokio",
- "tokio-stream",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -605,6 +597,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratarr-playing"
+version = "0.17.0"
+dependencies = [
+ "alac-encoder",
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "cratarr-records",
+ "cratarr-rules",
+ "flacenc",
+ "flate2",
+ "getrandom 0.3.4",
+ "image",
+ "lofty",
+ "mp3lame-encoder",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "symphonia",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
 name = "cratarr-records"
 version = "0.17.0"
 dependencies = [
@@ -621,6 +643,28 @@ dependencies = [
  "tokio",
  "tracing",
  "ts-rs",
+]
+
+[[package]]
+name = "cratarr-requests"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "cratarr-records",
+ "getrandom 0.3.4",
+ "image",
+ "lofty",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -674,7 +718,9 @@ dependencies = [
  "cratarr-gate",
  "cratarr-listening",
  "cratarr-media",
+ "cratarr-playing",
  "cratarr-records",
+ "cratarr-requests",
  "cratarr-rules",
  "cratarr-served",
  "cratarr-store",

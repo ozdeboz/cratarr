@@ -154,7 +154,7 @@ fn seen_by(serve: &Serve, facts: &[Facts], index: Index, libraries: &[index::Lib
 }
 
 /// The index `account` can see, as it stands, and the reading it was made of. Blocking.
-pub(super) fn whole_of(serve: &Serve, libraries: &[index::Library], account: Option<&str>) -> Result<(Index, Arc<Vec<Facts>>)> {
+pub fn whole_of(serve: &Serve, libraries: &[index::Library], account: Option<&str>) -> Result<(Index, Arc<Vec<Facts>>)> {
     let mut turn = serve.device_turn();
     let cat = serve.catalogue();
     let read_at = cat.index_rev()?;

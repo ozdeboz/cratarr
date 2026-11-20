@@ -1179,7 +1179,7 @@ pub(crate) async fn deliver(serve: &Serve) -> Vec<Closed> {
 /// the requests whose record it is or holds (a Keep's: OQ-D1). Never one that waits for room or for space (RF17, the review of run
 /// 13, RM1): a Want the house meets waits for its asker's copy, though Music's copy makes the album done for everyone; it is
 /// delivered once its copy is made. Each as it was, for an Undo (`undeliver`). Blocking.
-pub(crate) fn deliver_in(ud: &crate::userdata::UserData, cat: &crate::catalogue::Catalogue, kinds: &[(i64, crate::settings::LibraryKind)], record: Option<i64>) -> Vec<Closed> {
+pub fn deliver_in(ud: &crate::userdata::UserData, cat: &crate::catalogue::Catalogue, kinds: &[(i64, crate::settings::LibraryKind)], record: Option<i64>) -> Vec<Closed> {
     let approved = ud.requests(None, Some(APPROVED), usize::MAX).unwrap_or_default();
     let of = match records_held(cat, &approved, kinds) {
         Ok(of) => of,
@@ -1821,7 +1821,7 @@ fn requesters_now(serve: &Serve) -> HashMap<i64, Requester> {
 
 /// Who asked first for each approved request's record (`requesters`), read now from the user data `ud` and the catalogue `cat`,
 /// each catalogue folder's library as `kinds` says: what room counts a copy in Incoming for (AL01) as well. Blocking.
-pub(crate) fn requesters_in(cat: &crate::catalogue::Catalogue, ud: &crate::userdata::UserData, kinds: &[(i64, crate::settings::LibraryKind)]) -> HashMap<i64, Requester> {
+pub fn requesters_in(cat: &crate::catalogue::Catalogue, ud: &crate::userdata::UserData, kinds: &[(i64, crate::settings::LibraryKind)]) -> HashMap<i64, Requester> {
     let approved = ud.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
     let of = records_held(cat, &approved, kinds).unwrap_or_else(|e| {
         tracing::debug!("the requests' records not read: {e:#}");
@@ -1911,7 +1911,7 @@ pub fn holding_of(q: &crate::catalogue::records::Requested, kind: impl Fn(i64) -
 
 /// What each catalogue folder's library is, as the running server holds them; none where there is no server (a test), and
 /// `kind_in`'s own rule holds: the first folder Music, the others Incoming.
-pub(crate) fn library_kinds() -> Vec<(i64, crate::settings::LibraryKind)> {
+pub fn library_kinds() -> Vec<(i64, crate::settings::LibraryKind)> {
     crate::serve::instance().map(|s| s.library.kinds()).unwrap_or_default()
 }
 
@@ -2082,7 +2082,7 @@ pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
 
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) mod tests {
+pub mod tests {
     // Shared with the tests of the crates above (test-support): the helpers only its own tests call are idle there.
     #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
@@ -3145,7 +3145,7 @@ pub(crate) mod tests {
     async fn a_want_copies_only_a_copy_not_known_short() {
         use crate::catalogue::identity::{Judged, lacks};
         use crate::serve::copies::{Copy, Kind};
-        use super::super::albums::{Chosen, want_copy};
+        use super::super::albums_base::{Chosen, want_copy};
         let serve = served();
         let owned = serve.catalogue().record_for_tests("Other Room", 8);
         // Music's three files saying eight (folder 0), and five more saying no total (folder 1).
@@ -4311,7 +4311,7 @@ pub(crate) mod tests {
     /// are delivered at the first round, their count in the log.
     #[tokio::test]
     async fn a_delivered_request_has_no_say_over_a_later_copy() {
-        use super::super::albums::{default_target, may_add, requester_of};
+        use super::super::albums_base::{default_target, may_add, requester_of};
         use crate::settings::{Libraries, LibraryKind, LibrarySetting, SourceConfig};
         const R: &str = "00000000-0000-4000-8000-000000000441";
         const R2: &str = "00000000-0000-4000-8000-000000000442";

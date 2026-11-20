@@ -44,9 +44,9 @@ const SEARCH_FOR: Duration = Duration::from_secs(60);
 /// Reads of slskd that may fail in a row before a fetch is given up.
 const READS: u32 = 15;
 /// Between two looks at a search's state, at a transfer, and after a read that failed.
-const SEARCHED_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 1_000 });
-const TRANSFER_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 2_000 });
-const READ_AGAIN: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 4_000 });
+const SEARCHED_AGAIN: Duration = Duration::from_millis(if cfg!(any(test, feature = "test-support")) { 10 } else { 1_000 });
+const TRANSFER_AGAIN: Duration = Duration::from_millis(if cfg!(any(test, feature = "test-support")) { 10 } else { 2_000 });
+const READ_AGAIN: Duration = Duration::from_millis(if cfg!(any(test, feature = "test-support")) { 0 } else { 4_000 });
 /// How long a fetch may wait in an uploader's queue before it is given up.
 const QUEUED_FOR: Duration = Duration::from_secs(30 * 60);
 /// Staged files left from before (a restart, a fetch never added) go after this long.
@@ -270,8 +270,8 @@ pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Re
 
 /// Tests: a search for the album's `track` started through this slskd, as [`search`] starts one (its release and slskd as the test
 /// has them); its id.
-#[cfg(test)]
-pub(crate) fn search_through(album: &str, track: ReleaseTrack, slskd: Slskd) -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn search_through(album: &str, track: ReleaseTrack, slskd: Slskd) -> String {
     searching(Wanted { album: album.to_string(), track, replace: None }, slskd)
 }
 
@@ -327,16 +327,16 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
 
 /// Tests elsewhere: a single file of `user`'s fetched as [`fetch`] fetches one (single-track fetch, and the bulk queue through it),
 /// through this slskd; the fetch's id.
-#[cfg(test)]
-pub(crate) async fn fetch_through_for_tests(slskd: &Slskd, folder: PathBuf, staging: PathBuf, user: &str, file: crate::slskd::Offered) -> Result<String> {
+#[cfg(any(test, feature = "test-support"))]
+pub async fn fetch_through_for_tests(slskd: &Slskd, folder: PathBuf, staging: PathBuf, user: &str, file: crate::slskd::Offered) -> Result<String> {
     let wanted = Wanted { album: "al-1".into(), track: track_for(1, 1, "Slack Water", "Glass Harbour", None, ""), replace: None };
     let c = Candidate { id: 0, user: user.into(), file: file.filename.clone(), format: "flac".into(), lossless: true, bitrate: None, sample_rate: None, bit_depth: None, size: file.size, length_ms: None, free_slot: true, queue: 0, speed: 1, offered: file };
     fetching(wanted, c, slskd.clone(), folder, staging, |file, track| async move { gate(&file, &track).await }).await
 }
 
 /// Tests: [`fetch`] through this slskd, its completed-downloads folder and this staging, the file gated by `gate`.
-#[cfg(test)]
-pub(crate) async fn fetch_through<G, Fut>(search: &str, candidate: usize, slskd: Slskd, folder: PathBuf, staging: PathBuf, gate: G) -> Result<String>
+#[cfg(any(test, feature = "test-support"))]
+pub async fn fetch_through<G, Fut>(search: &str, candidate: usize, slskd: Slskd, folder: PathBuf, staging: PathBuf, gate: G) -> Result<String>
 where
     G: FnOnce(PathBuf, ReleaseTrack) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<f32>> + Send + 'static,
@@ -416,7 +416,7 @@ pub fn check_again(id: &str) -> bool {
 }
 
 /// [`check_again`], the file gated by `gate` (the tests' stands in).
-pub(crate) fn check_again_with<G, Fut>(id: &str, gate: G) -> bool
+pub fn check_again_with<G, Fut>(id: &str, gate: G) -> bool
 where
     G: FnOnce(PathBuf, ReleaseTrack) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<f32>> + Send + 'static,
@@ -594,7 +594,7 @@ pub fn track_for(disc: u32, position: u32, title: &str, artist: &str, length_ms:
 /// background reading is paused (Y7): the file is not judged (`NotAsked`), and its record holds at its check. And what its sound
 /// was heard to have refuses it only when it is a fault (SK5, the owner 2026-11-19: `refused_for_soulseek`): clipping, clicks and a
 /// pop at the very end are notes, which its arrival's card in Incoming shows.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn gate_track(file: &Path, track: &ReleaseTrack) -> Result<f32> {
     gate_track_with(file, track, looked_up).await
 }
@@ -618,7 +618,7 @@ pub(super) async fn gate_track_and_notes(file: &Path, track: &ReleaseTrack) -> R
 
 /// [`gate_track`], asking `lookup` what AcoustID knows of the file, background reading's switch with it (the tests' stand in for
 /// AcoustID).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn gate_track_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
     F: FnOnce(crate::acoustid::Print) -> Fut,
@@ -665,7 +665,7 @@ async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid:
 pub use super::track_fetch_turn::{NotAsked, Unfit};
 
 /// [`gate`], asking `lookup` what AcoustID knows of the file (the tests' stands in for AcoustID).
-pub(crate) async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
+pub async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
     F: FnOnce(crate::acoustid::Print) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,

@@ -62,7 +62,7 @@ use crate::slskd::{Answer, Offered, Slskd};
 /// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
 pub const FETCHER: &str = "soulseek";
 /// Between two searches: gentle with Soulseek.
-const PACE: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 5 });
+const PACE: Duration = Duration::from_secs(if cfg!(any(test, feature = "test-support")) { 0 } else { 5 });
 /// A search is followed this long at most.
 const SEARCH_AT_MOST: Duration = Duration::from_secs(120);
 /// A fetch nobody's queue starts in this long is given up on that user.
@@ -72,9 +72,9 @@ const FETCH_AT_MOST: Duration = Duration::from_secs(4 * 3600);
 /// Reads of slskd that may fail in a row before a fetch is given up.
 const READS: u32 = 15;
 /// Between two such reads.
-const READ_AGAIN: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 4 });
+const READ_AGAIN: Duration = Duration::from_secs(if cfg!(any(test, feature = "test-support")) { 0 } else { 4 });
 /// A record held for slskd is tried again after this long.
-pub(super) const SLSKD_AGAIN: i64 = 300;
+pub const SLSKD_AGAIN: i64 = 300;
 /// Fetches failed on Cratarr's own side in a row after which a record holds a day (Y9): its folder is not asked of its user every
 /// five minutes all day.
 const LOCAL_AT_MOST: u32 = 3;
@@ -83,11 +83,11 @@ const LOCAL_HOLD: i64 = 86_400;
 /// Folders a record shows, best first.
 const SHOWN: usize = 5;
 /// The shortest wait between two rounds of searches for one record (the ladder's "at once" still waits this).
-pub(crate) const ROUND_AT_LEAST: i64 = 15 * 60;
+pub const ROUND_AT_LEAST: i64 = 15 * 60;
 /// A file's length may be this far from its track's.
 const LENGTH_SLACK_MS: i64 = crate::slskd::LENGTH_SLACK_MS;
 /// A record held at its check is checked again after this long: each time decodes a file to ask AcoustID about it.
-pub(super) const CHECK_AGAIN: i64 = 15 * 60;
+pub const CHECK_AGAIN: i64 = 15 * 60;
 /// A record whose placing failed is placed again from its checked files after this long (X4).
 const PLACE_AGAIN: i64 = 15 * 60;
 /// Placings failed in a row after which a record holds a day (Y12): one that fails for good is not tried every fifteen minutes.
@@ -290,7 +290,7 @@ static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
 /// Where it is kept: the data folder's `soulseek.json`, once known.
 static FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     // A test's own list (`tests::own_list`): kept in its folder's `soulseek.json` on the test's thread alone, read from there when
     // its memory is empty, so no other test's items mix with it and the store can be read as written.
@@ -300,7 +300,7 @@ thread_local! {
 }
 
 fn kept<T>(f: impl FnOnce(&mut Kept) -> T) -> T {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if OWN.with(|o| o.borrow().is_some()) {
         return OWN.with(|o| {
             let mut o = o.borrow_mut();
@@ -437,8 +437,8 @@ pub fn frozen() -> bool {
 }
 
 /// Tests elsewhere: a start's load of the queue at `p` (`load`): how many items it holds, and whether it froze.
-#[cfg(test)]
-pub(super) fn load_for_tests(p: &Path) -> (usize, bool) {
+#[cfg(any(test, feature = "test-support"))]
+pub fn load_for_tests(p: &Path) -> (usize, bool) {
     let k = load(p);
     (k.items.len(), k.frozen)
 }
@@ -1145,7 +1145,7 @@ pub fn change_for_tests(id: &str, f: impl FnOnce(&mut Item)) {
 }
 
 /// Tests elsewhere: an item of `record` on the list as `id`, picked for `user`'s folder of one file ("01 Slack Water.flac").
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn picked_for_tests(id: &str, record: i64, user: &str) {
     list_for_tests(id, record);
     let file = Offered { filename: r"d\01 Slack Water.flac".into(), size: 1000, extension: None, bit_rate: None, bit_depth: None, sample_rate: None, length: Some(100), is_locked: false };
@@ -1154,14 +1154,14 @@ pub fn picked_for_tests(id: &str, record: i64, user: &str) {
 }
 
 /// Tests elsewhere: a picked item's batch asked for, as the downloads' worker does.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn start_for_tests(id: &str, slskd: &Slskd, folder: &Path) -> bool {
     start_downloads(&|i: &Item| i.id == id, slskd, folder, &Look::roomy()).await;
     item(id).is_some_and(|i| i.state == State::Fetching)
 }
 
 /// Tests elsewhere: item `id` as the list holds it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn item_for_tests(id: &str) -> Option<Item> {
     item(id)
 }
@@ -1217,7 +1217,7 @@ pub fn forget_placed(record: i64) {
 
 /// The Incoming library whose fetcher is Soulseek (its folder, as Cratarr sees it).
 fn library() -> Result<PathBuf> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(lib) = OWN_LIBRARY.with(|l| l.borrow().clone()) {
         return Ok(lib);
     }
@@ -1678,7 +1678,7 @@ fn copy_gone(i: &Item, held: &BTreeMap<i64, (super::requests::Holding, bool)>) -
 }
 
 /// The next record to search: waiting and due, the longest waiting first.
-pub(crate) fn next_search() -> Option<String> {
+pub fn next_search() -> Option<String> {
     let t = now();
     kept(|k| next_to_search(k, t))
 }
@@ -1691,7 +1691,7 @@ fn next_to_search(k: &Kept, t: i64) -> Option<String> {
 
 /// The next item a worker takes up at `now`, as the tests read it: a follower or the checks one whose fetch a restart left under way,
 /// then the downloads an approved one; one held waits for its time. Pure.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn next_of(items: &[Item], now: i64) -> Option<String> {
     let due = || items.iter().filter(|i| i.due <= now);
     due()
@@ -1761,7 +1761,7 @@ async fn search(id: &str) {
 }
 
 /// [`search`], its list read through `read`, slskd as `ready` gives it (the tests' stand in).
-pub(crate) async fn search_in<R, F>(id: &str, cat: &Arc<crate::catalogue::Catalogue>, read: R, ready: impl std::future::Future<Output = Result<Slskd>>)
+pub async fn search_in<R, F>(id: &str, cat: &Arc<crate::catalogue::Catalogue>, read: R, ready: impl std::future::Future<Output = Result<Slskd>>)
 where
     R: Fn(crate::catalogue::records::Ref) -> F,
     F: std::future::Future<Output = Result<Option<super::references::Read>>>,
@@ -1956,7 +1956,9 @@ impl Look {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+// Shared with the tests of the crates above (test-support): the stand-ins only this crate's tests call are idle there.
+#[cfg_attr(not(test), allow(dead_code))]
 impl Look {
     /// Room on every disk, the floor far below, nothing held: the tests' stand-in.
     pub(crate) fn roomy() -> Self {
@@ -2493,7 +2495,7 @@ where
 }
 
 /// Between two reads of a download's transfers.
-const FOLLOW_EVERY: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 3_000 });
+const FOLLOW_EVERY: Duration = Duration::from_millis(if cfg!(any(test, feature = "test-support")) { 10 } else { 3_000 });
 
 /// What one read of a download's follower came to (`follow_step`).
 enum Followed {
@@ -2840,7 +2842,7 @@ where
 }
 
 /// The files anywhere under `dir`.
-pub(crate) fn files_under(dir: &Path) -> Vec<PathBuf> {
+pub fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut todo = vec![dir.to_path_buf()];
     while let Some(d) = todo.pop() {
@@ -3143,8 +3145,10 @@ fn set_aside(dir: &Path, id: &str, user: &str, why: &BTreeMap<String, String>, d
     Some(to.display().to_string())
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests {
+    // Shared with the tests of the crates above (test-support): idle where no test calls it.
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
 
     /// Whose turn it is (round 1.3's review: M3's room and space arm, L3, L4).
@@ -5692,7 +5696,7 @@ pub(crate) mod tests {
 
     /// The workers' seams in turn for one item, as 0.17's one fetcher took it up (`fetch_from`, which the tests before round 1.3
     /// drove; they assert what they did): its start (the disks as they are), its download followed to its end, its check and placing.
-    pub(crate) async fn fetch_from<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, gate: G)
+    pub async fn fetch_from<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, gate: G)
     where
         G: Fn(PathBuf, ReleaseTrack) -> Fut,
         Fut: std::future::Future<Output = Result<f32>>,
@@ -7092,7 +7096,7 @@ pub(crate) mod tests {
     use bulk::{Clock, FakeAcoustid, FakeSlskd, T0};
 
     /// A folder of the test's own with its list in it (`items`, its `soulseek.json`) and its Soulseek library, on this thread.
-    pub(crate) fn own_list(name: &str, items: Vec<Item>) -> PathBuf {
+    pub fn own_list(name: &str, items: Vec<Item>) -> PathBuf {
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-own-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
         std::fs::create_dir_all(&d).unwrap();
@@ -7104,20 +7108,20 @@ pub(crate) mod tests {
     }
 
     /// The test done: its list and its library kept nowhere, its folder gone.
-    pub(crate) fn own_done(d: &Path) {
+    pub fn own_done(d: &Path) {
         OWN.with(|o| *o.borrow_mut() = None);
         OWN_LIBRARY.with(|l| *l.borrow_mut() = None);
         std::fs::remove_dir_all(d).ok();
     }
 
     /// `soulseek.json` as written, its items by id.
-    pub(crate) fn on_disk(d: &Path) -> HashMap<String, Item> {
+    pub fn on_disk(d: &Path) -> HashMap<String, Item> {
         let k: Kept = serde_json::from_slice(&std::fs::read(d.join("soulseek.json")).unwrap()).unwrap();
         k.items.into_iter().map(|i| (i.id.clone(), i)).collect()
     }
 
     /// "Tide Tables"' list as a record's, each track ten seconds long, its recording as AcoustID's fake knows it.
-    pub(crate) fn tide_list() -> Vec<Track> {
+    pub fn tide_list() -> Vec<Track> {
         [(1, "Slack Water", "rec-slack"), (2, "Neap", "rec-neap"), (3, "Spring Tide", "rec-spring")]
             .into_iter()
             .map(|(n, title, rec)| Track { disc: 1, position: n, title: title.into(), length_ms: Some(10_000), recording: Some(rec.into()) })
@@ -7141,12 +7145,12 @@ pub(crate) mod tests {
     }
 
     /// slskd's answers to a search for `album`: `user`'s folder of it.
-    pub(crate) fn answers_of(user: &str, album: &str) -> serde_json::Value {
+    pub fn answers_of(user: &str, album: &str) -> serde_json::Value {
         serde_json::json!([{ "username": user, "files": folder_of(user, album).files, "hasFreeUploadSlot": true, "queueLength": 0, "uploadSpeed": 100 }])
     }
 
     /// Glass Harbour's `album` on the list as `id`, at `state`, its list read; its record and its request both `record`.
-    pub(crate) fn tn_item(id: &str, record: i64, album: &str, state: State) -> Item {
+    pub fn tn_item(id: &str, record: i64, album: &str, state: State) -> Item {
         Item {
             id: id.into(),
             record: Record { record, artist: "Glass Harbour".into(), album: album.into(), year: None, request: record },
@@ -7177,13 +7181,13 @@ pub(crate) mod tests {
     }
 
     /// `i` ticked: its folders `users`' (the first chosen), its batch `batch`.
-    pub(crate) fn ticked(i: Item, users: &[&str], batch: Option<&str>) -> Item {
+    pub fn ticked(i: Item, users: &[&str], batch: Option<&str>) -> Item {
         let folders = users.iter().map(|u| folder_of(u, &i.record.album)).collect();
         Item { folders, chosen: Some(0), batch: batch.map(Into::into), ..i }
     }
 
     /// `album`'s three files as slskd lands a batch of them (`<slskd>/cratarr/<batch>`), each a copy of `tone`.
-    pub(crate) fn landed(slskd_dir: &Path, batch: &str, album: &str, tone: &Path) {
+    pub fn landed(slskd_dir: &Path, batch: &str, album: &str, tone: &Path) {
         let at = slskd_dir.join(crate::slskd::FOLDER).join(batch);
         std::fs::create_dir_all(&at).unwrap();
         for f in folder_of("peer-a", album).files {
@@ -7192,13 +7196,13 @@ pub(crate) mod tests {
     }
 
     /// slskd as Soulseek's rounds have it (`track_fetch::slskd_on`): `slskd` while it is switched on, else why not.
-    pub(crate) async fn ready(slskd: &Slskd) -> Result<Slskd> {
+    pub async fn ready(slskd: &Slskd) -> Result<Slskd> {
         super::super::track_fetch::slskd_on()?;
         Ok(slskd.clone())
     }
 
     /// The next item the downloads' or the checks' worker takes up now (`next_of`): one held waits for its time.
-    pub(crate) fn next_fetch() -> Option<String> {
+    pub fn next_fetch() -> Option<String> {
         let t = now();
         kept(|k| next_of(&k.items, t))
     }
@@ -7217,7 +7221,7 @@ pub(crate) mod tests {
     }
 
     /// The gate as the server's (`gate_track`, background reading's switch with it), AcoustID asked through `heard` in `turn`.
-    pub(crate) fn gate_through(turn: Arc<Turn>, heard: Arc<FakeAcoustid>) -> impl Fn(PathBuf, ReleaseTrack) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f32>>>> {
+    pub fn gate_through(turn: Arc<Turn>, heard: Arc<FakeAcoustid>) -> impl Fn(PathBuf, ReleaseTrack) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f32>>>> {
         move |file, track| {
             let (turn, heard) = (turn.clone(), heard.clone());
             Box::pin(async move {

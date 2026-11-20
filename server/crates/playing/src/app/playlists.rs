@@ -393,8 +393,8 @@ fn shared_alike(files: &Arc<Vec<crates::Facts>>, membership: &HashMap<String, Ve
     made
 }
 
-pub(super) struct CrateLibrary {
-    pub(super) source: String,
+pub struct CrateLibrary {
+    pub source: String,
     /// Every library's files (`Catalogue::crate_facts`); `files()` leaves out those switched off.
     files: Arc<Vec<crates::Facts>>,
     /// The catalogue folders of the libraries switched off (decision 0024, amended 2026-10-23).
@@ -438,7 +438,7 @@ impl CrateLibrary {
     }
 
     /// The files of the libraries switched on, newest first.
-    pub(super) fn files(&self) -> impl Iterator<Item = &crates::Facts> {
+    pub fn files(&self) -> impl Iterator<Item = &crates::Facts> {
         self.files.iter().filter(|f| crates::on_for(&f.folders, &self.switched_off))
     }
 
@@ -448,7 +448,7 @@ impl CrateLibrary {
     }
 
     /// What the axes test about the library as a whole.
-    pub(super) fn world(&self) -> crates::World<'_> {
+    pub fn world(&self) -> crates::World<'_> {
         crates::World {
             membership: &self.membership,
             favourites: self.favourites.as_ref(),
@@ -460,22 +460,22 @@ impl CrateLibrary {
     }
 
     /// Which of one's own playlists hold each line.
-    pub(super) fn membership(&self) -> &HashMap<String, Vec<String>> {
+    pub fn membership(&self) -> &HashMap<String, Vec<String>> {
         &self.membership
     }
 
     /// What the viewer did with each line, when known.
-    pub(super) fn uses(&self) -> Option<&HashMap<String, crates::Use>> {
+    pub fn uses(&self) -> Option<&HashMap<String, crates::Use>> {
         self.uses.as_ref()
     }
 
     /// The conditions with their Sounds like worked out (`crates::View::resolved`), once for all the files.
-    pub(super) fn resolved(&self, conditions: &[crates::Condition]) -> Vec<crates::Condition> {
+    pub fn resolved(&self, conditions: &[crates::Condition]) -> Vec<crates::Condition> {
         self.view().resolved(&one_spelling(conditions), false)
     }
 
     /// The crate's lines, newest first; a Sounds like crate's closest first (`crates::closest_first`).
-    pub(super) fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
+    pub fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
         self.view().select(&one_spelling(conditions), false)
     }
 
@@ -1631,7 +1631,7 @@ impl FavouritesKept {
 }
 
 impl PlaylistService {
-    pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>, served: Option<Arc<crate::serve::Serve>>) -> Self {
+    pub fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>, served: Option<Arc<crate::serve::Serve>>) -> Self {
         let crate_stores = CrateStores::new(lib.data_dir());
         let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json")), served.clone()));
         let s = Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default(), fits: FitsKept::default(), served };
@@ -1645,7 +1645,7 @@ impl PlaylistService {
     }
 
     /// The account whose playlists and crates the running request's are (`asking_account`).
-    pub(crate) fn asking_account(&self) -> Option<String> {
+    pub fn asking_account(&self) -> Option<String> {
         asking_account(self.served.as_deref())
     }
 
@@ -1901,7 +1901,7 @@ impl PlaylistService {
 
     /// Every playlist, marked where it holds `entry` (the playing track's line), with its links.
     /// The asking account's own, and the ones others share (decision 0051), each by its id (decision 0101).
-    pub(super) async fn view(&self, entry: Option<&str>) -> Result<Vec<PlaylistView>> {
+    pub async fn view(&self, entry: Option<&str>) -> Result<Vec<PlaylistView>> {
         let Ok(own) = self.lib.store_for(asking_account(self.served.as_deref()).as_deref()) else { return Ok(Vec::new()) };
         let shared = self.shared_keys();
         let mut list = own.view(entry).await?;
@@ -1971,7 +1971,7 @@ impl PlaylistService {
     }
 
     /// The asking account's playlists and the ones others share, with their lines and when each last changed, by id.
-    pub(super) async fn visible_lines(&self) -> Result<Vec<(String, i64, Vec<String>)>, ToggleError> {
+    pub async fn visible_lines(&self) -> Result<Vec<(String, i64, Vec<String>)>, ToggleError> {
         let Ok(own) = self.lib.store_for(asking_account(self.served.as_deref()).as_deref()) else { return Ok(Vec::new()) };
         let mut out = own.lines_of_all().await?;
         let shared = self.shared_keys();
@@ -2308,7 +2308,7 @@ impl PlaylistService {
     }
 
     /// Rows for these lines (a playlist's, or a page of a crate's), with what the catalogue knows of their files.
-    pub(super) async fn rows_of(&self, entries: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
+    pub async fn rows_of(&self, entries: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
         self.rows_as(entries.clone(), entries, source).await
     }
 
@@ -2927,7 +2927,7 @@ impl PlaylistService {
 
     /// The library these conditions are worked out on, with what they need of the favourites (refused when those
     /// cannot be read): a crate's, a filter's (decision 0061).
-    pub(super) async fn crate_library_for(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<CrateLibrary, ToggleError> {
+    pub async fn crate_library_for(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<CrateLibrary, ToggleError> {
         // Refused before any work (0.13, decision 0088): all of on an axis a track has one value on.
         if let Some(why) = crates::not_taken(conditions) {
             return Err(ToggleError::Unanswerable(why));
@@ -2963,7 +2963,7 @@ impl PlaylistService {
 
     /// A crate's conditions as its toggles show it (as given, else as saved), with its left-out tracks and the filter on
     /// it.
-    pub(super) async fn crate_shown(&self, id: &str, look: &CrateLook) -> Result<Vec<crates::Condition>, ToggleError> {
+    pub async fn crate_shown(&self, id: &str, look: &CrateLook) -> Result<Vec<crates::Condition>, ToggleError> {
         Ok(self.crate_causes(id, look).await?.0)
     }
 
@@ -3445,7 +3445,7 @@ impl PlaylistService {
 
     /// The lines these conditions select, in `look`'s order, and the server they are for: what Play plays as the list
     /// shows it.
-    pub(super) async fn crate_lines_in_order(&self, conditions: &[crates::Condition], want: Option<&str>, look: &CrateLook) -> Result<(String, Vec<String>), ToggleError> {
+    pub async fn crate_lines_in_order(&self, conditions: &[crates::Condition], want: Option<&str>, look: &CrateLook) -> Result<(String, Vec<String>), ToggleError> {
         let (lib, lines) = self.crate_selection(conditions, want, &look.without).await?;
         let lines = self.crate_in_order(&lib, lines, conditions, look).await?;
         Ok((lib.source.clone(), lines.to_vec()))
@@ -3658,7 +3658,7 @@ impl PlaylistService {
     }
 
     /// One's own playlists' names: the membership axis' values.
-    pub(super) async fn own_playlist_names(&self) -> Result<Vec<String>, ToggleError> {
+    pub async fn own_playlist_names(&self) -> Result<Vec<String>, ToggleError> {
         Ok(self.own_store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect())
     }
 

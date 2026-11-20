@@ -2499,7 +2499,7 @@ impl PlayOn {
     /// The playlist a name means, as its id, which Play On then asks for (X6: ids are `pl-<hex>` since 0.16, and Home Assistant
     /// plays playlists by their spoken names): among the asking account's own playlists and those others share (`reach`'s), as
     /// `named_in` finds it ("Restaurant de Lift" for "Restaurant De Lift").
-    async fn playlist_named(&self, playlist: &str) -> Result<String, ToggleError> {
+    pub async fn playlist_named(&self, playlist: &str) -> Result<String, ToggleError> {
         let list: Vec<(String, String, bool)> = self.playlists.view(None).await?.into_iter().map(|p| (p.id, p.name, p.mine)).collect();
         named_in(&list, playlist).ok_or(ToggleError::UnknownPlaylist)
     }
@@ -3119,26 +3119,6 @@ mod tests {
         assert_eq!(v.track.map(|t| t.id).as_deref(), Some("tr-9"));
         assert_eq!(v.ids, TrackIds::default(), "never the last album's ids beside this track");
         assert_ne!(key(e.queue.tracks.first()), e.ids.0, "a new track to look up when the player reports");
-    }
-
-    /// X6: Home Assistant names a playlist as it is spoken: Play On finds it by its name, whatever its capitals, and asks for it by
-    /// its id. A name no playlist has is said to be none.
-    #[tokio::test]
-    async fn play_on_plays_a_playlist_by_its_name_regardless_of_capitals() {
-        let app = super::super::every_copy::app("playon-named").await;
-        app.playlists.create("Restaurant de Lift").await.unwrap();
-        let id = app.playlists.view(None).await.unwrap().into_iter().find(|p| p.name == "Restaurant de Lift").unwrap().id;
-        assert!(id.starts_with("pl-"), "{id}");
-        let p = &app.play_on;
-        let _page = p.connect_browser("Laptop", Some("tab-1")).unwrap();
-        let play = |name: &str| Command::Play { from: PlayFrom { playlist: Some(name.into()), ..PlayFrom::default() }, tracks: None, index: 0, position_ms: 0, shuffle: false, paused: false, queue_id: None, queue_name: None };
-        // Found and read, by its id: it holds nothing that plays (no library here), which is all it can say.
-        for asked in ["Restaurant de Lift", "restaurant DE lift"] {
-            let r = p.command("Laptop", play(asked)).await;
-            assert!(matches!(&r, Err(ToggleError::Refused(_))), "{asked}: {r:?}");
-        }
-        assert!(matches!(p.command("Laptop", play("Restaurant de Gare")).await, Err(ToggleError::UnknownPlaylist)));
-        assert_eq!(p.playlist_named("restaurant DE lift").await.unwrap(), id);
     }
 
     /// X6: two playlists alike but for their capitals (one's own and another's shared) need the exact name; of two of one name, the
