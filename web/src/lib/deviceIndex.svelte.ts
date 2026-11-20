@@ -20,7 +20,7 @@ let settle: Settle = answered;
 let looking: ReturnType<typeof setTimeout> | null = null;
 
 /** Where reads come from now. */
-export const readsNow = (): ReadsFrom => readsFrom({ unreachable: settle.failed === 2, noNetwork: reach.noNetwork });
+export const readsNow = (): ReadsFrom => readsFrom({ unreachable: settle.failed === 2, noNetwork: reach.noNetwork, mobileOff: reach.mobileOff });
 
 /** Called when reads move, either way: what a page showed came from the other place. */
 export const whenReadsMove = new Set<() => void>();

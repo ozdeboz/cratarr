@@ -22,3 +22,13 @@ export function creditsOf(artist: string | null | undefined): string[] {
 /** The artist's key as the server keeps it: the name loosely, accents and case aside, spaces as one. */
 export const artistKey = (name: string) =>
   name.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/** An album artist's credits, lower case: "A & B, C feat. D" is a, b, c and d (and the credit whole): what More from matches an
+ *  artist by (lib/albumMore). */
+export const artistCredits = (artist: string | null) =>
+  (artist ?? '')
+    .toLowerCase()
+    .split(/\s*(?:,|;|\/|&|\band\b|\bx\b|\bfeat\.?|\bft\.|\bfeaturing\b|\bvs\.?|\bwith\b)\s*/)
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .concat((artist ?? '').toLowerCase().trim());

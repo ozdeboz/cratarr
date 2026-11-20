@@ -5,6 +5,7 @@
 // administrators see (`admin`).
 import type { Settings } from './api';
 import type { IconName } from './Icon.svelte';
+import { listedInBasic } from './settings/tiers';
 
 export type SettingsSection =
   | 'device'
@@ -76,11 +77,19 @@ export const SETTINGS_GROUPS = [
 /** The group a part is in for someone: a part of the server's that anyone opens (Connections) is Personal for someone
  *  not an administrator. */
 export const keptFor = (x: (typeof SECTIONS)[number], admin: boolean): SettingsKept => (x.admin && !admin ? 'personal' : x.kept);
-/** The parts someone sees, in their groups' order (Settings' list, and its picker in the glass): the app's in the app
- *  (Sync in the installed page too: 0.9.8, its own downloads), the server's for administrators (and those anyone opens). */
+/** The parts someone sees, in their groups' order: the app's in the app (Sync in the installed page too: 0.9.8, its own
+ *  downloads), the server's for administrators (and those anyone opens). */
 export function partsFor(admin: boolean, app: boolean, installed: boolean): (typeof SECTIONS)[number][] {
   const allowed = SECTIONS.filter((x) => (!x.app || app || (x.id === 'sync' && installed)) && (!x.admin || admin || x.everyone));
   return SETTINGS_GROUPS.flatMap((g) => allowed.filter((x) => keptFor(x, admin) === g.kept));
+}
+/** The parts listed (CU23: one decision for the five places that each made their own: Settings' list and its search, the
+ *  pickers in a part's glass, a part's search through the others, the part opened beside the list, and the global search):
+ *  `partsFor`'s, and in Basic (`basic`, lib/settings/basic) only those with a Basic row (lib/settings/tiers). A part opened by
+ *  its address is not asked here: it shows whole. */
+export function partsShown(admin: boolean, app: boolean, installed: boolean, basic: boolean): (typeof SECTIONS)[number][] {
+  const parts = partsFor(admin, app, installed);
+  return basic ? parts.filter((x) => listedInBasic(x.id)) : parts;
 }
 
 export const settingsSaved = $state({ n: 0 });

@@ -49,3 +49,16 @@ test('no second copy: Start and stop and levelling read and changed through thei
     if (!writers.has(rel(f))) assert.ok(!writes.test(src), `${rel(f)}: writes a copy past its owner`);
   }
 });
+
+// CU13 (Q4 (a); red first: Sync had a "Download over mobile data" switch): one "Mobile data" choice in Sync, the app's, of three:
+// All, Not downloads (as before, the default) and None; it replaces the switch everywhere the page has it.
+test("Sync's Mobile data: one choice of three in place of the download switch, the app's to keep", () => {
+  const sync = readFileSync(join(SRC, 'lib/settings/SyncPart.svelte'), 'utf8');
+  assert.match(sync, /<ChoiceRow\s+name="Mobile data"[^>]*options=\{MOBILE\}\s+value=\{appInfo\.mobileData\}\s+onchange=\{\(v\) => setDevice\(\{ mobileData: v \}\)\}/);
+  assert.match(sync, /\{ value: 'all', label: 'All' \},\s+\{ value: 'notDownloads', label: 'Not downloads' \},\s+\{ value: 'none', label: 'None' \},/);
+  assert.ok(sync.includes("{ name: 'Mobile data', now: () => appInfo.mobileData, def: 'notDownloads',"), 'its Reset puts back Not downloads');
+  assert.equal(DEVICE_SETTINGS.find((s) => s.id === 'sync')?.appKeys?.includes('mobileData'), true);
+  for (const f of files(SRC)) assert.ok(!/downloadOverMobile|Download over mobile data/.test(readFileSync(f, 'utf8')), `${rel(f)}: the switch it replaces`);
+  const app = readFileSync(join(SRC, 'lib/app.svelte.ts'), 'utf8');
+  assert.ok(app.includes("appInfo.mobileData = m.mobileData === 'all' ? 'all' : m.mobileData === 'none' ? 'none' : 'notDownloads';"));
+});

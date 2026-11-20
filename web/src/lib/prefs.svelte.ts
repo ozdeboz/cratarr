@@ -273,6 +273,10 @@ export type Prefs = {
   settingsPart: string;
   /** The Health problem last open beside its list. */
   healthPart: string;
+  /** Settings shown whole (Advanced) or only their Basic rows (CU22, CU23; the owner, 2026-11-06): the account's, kept on it as
+   *  `settings_advanced` (lib/accountPrefs). None held yet: Advanced, so nothing hides before the account says (Q5: existing
+   *  accounts start on Advanced, new ones on Basic, by the server's default). */
+  settingsAdvanced: boolean | null;
   /** Each kind of list's columns in the owner's order (decision 0042, lib/columns), by id. */
   columns: Partial<Record<string, string[]>>;
   /** Where music plays (decisions 0022, 0031): in this browser or app (`local`), or on one of Cratarr's own players by
@@ -517,6 +521,7 @@ export const DEFAULTS: Prefs = {
   navFolded: false,
   settingsPart: '',
   healthPart: '',
+  settingsAdvanced: null,
   columns: {},
   // This browser (it falls back to a player where a browser cannot play): Cratarr's own source has no server-side
   // player, which a page's first play went to, and failed (2026-10-16).
@@ -548,7 +553,7 @@ export const DEFAULTS: Prefs = {
 };
 
 /** The person's own (decision 0101): about their music, their players, their crates, never this device's look. */
-const PERSONAL = ['pinned', 'hiddenLibraries', 'filters', 'crateViews', 'crateDrafts', 'homeParts', 'homeCrates', 'serverHome', 'radioLast', 'discoverMode', 'output', 'source'] as const;
+const PERSONAL = ['pinned', 'hiddenLibraries', 'filters', 'crateViews', 'crateDrafts', 'homeParts', 'homeCrates', 'serverHome', 'radioLast', 'discoverMode', 'output', 'source', 'settingsAdvanced'] as const;
 
 /** The device's settings as kept, with those of [PERSONAL] the account's (`who`, lib/account's whoOf) on top. */
 // Fields as JSON.parse's: each is checked by read().
@@ -694,6 +699,7 @@ function parse(kept: string | null): Prefs {
       if (typeof saved.navFolded === 'boolean') p.navFolded = saved.navFolded;
       if (typeof saved.settingsPart === 'string') p.settingsPart = saved.settingsPart;
       if (typeof saved.healthPart === 'string') p.healthPart = saved.healthPart;
+      if (typeof saved.settingsAdvanced === 'boolean') p.settingsAdvanced = saved.settingsAdvanced;
       if (saved.columns && typeof saved.columns === 'object')
         for (const [k, v] of Object.entries(saved.columns))
           if (Array.isArray(v)) p.columns[k] = v.filter((x: unknown): x is string => typeof x === 'string');
@@ -751,7 +757,17 @@ export const fromSaved = <K extends keyof Prefs>(key: K, value: unknown): Prefs[
 
 /** Back to the default look; the followed source, the pins and crates being made are not display matters and stay. */
 export function resetPrefs() {
-  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned, crateDrafts: prefs.crateDrafts, panelSorts: {}, filters: {} });
+  Object.assign(prefs, {
+    ...DEFAULTS,
+    signals: { ...DEFAULTS.signals },
+    source: prefs.source,
+    hiddenLibraries: prefs.hiddenLibraries,
+    pinned: prefs.pinned,
+    crateDrafts: prefs.crateDrafts,
+    settingsAdvanced: prefs.settingsAdvanced,
+    panelSorts: {},
+    filters: {},
+  });
 }
 
 /** Pin a playlist to the top of the Playlists page (after those pinned before it), or unpin it. */

@@ -81,6 +81,59 @@ test('F25.6 (b): the hand stops a place coming back at once, and its place stand
   }
 });
 
+// The review of 1.2, low 13 (red first: placeBack listened for keys on the list alone, and returned no way to tell it runs).
+test('low 13: a key anywhere stops a place coming back, not only one on the list', () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const { s, at } = scroller(600);
+    const keys = new EventTarget();
+    const restore = placeBack({ ...at, keys }, 2400);
+    advance(150);
+    keys.dispatchEvent(new Event('keydown'));
+    const asked = s.asked;
+    s.height = 4000;
+    advance(5000);
+    assert.equal(s.asked, asked, 'PageDown with the body focused is not fought for');
+    assert.equal(restore.running(), false);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('low 13: a place coming back says whether it still runs: until it lands, the hand stops it, or it is cancelled', () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const { s, at } = scroller(600);
+    const restore = placeBack(at, 840);
+    assert.equal(restore.running(), true, 'the list not yet long enough');
+    advance(250);
+    assert.equal(restore.running(), true);
+    s.height = 2000;
+    advance(150);
+    assert.equal(restore.running(), false, 'landed');
+    const other = placeBack(scroller(600).at, 2400);
+    other();
+    assert.equal(other.running(), false, 'cancelled, its step left');
+    const landed = placeBack(scroller(4000).at, 840);
+    assert.equal(landed.running(), false, 'there at the first try');
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("low 13: nothing is written while a place comes back, so a step left mid-way keeps the place, not where it had got to", () => {
+  const keeps = src('lib/keepsPlace.ts');
+  assert.match(keeps, /const write = \(\) => \{\n      if \(restore\?\.running\(\)\) return;\n      here\.keep\(/);
+  assert.match(keeps, /restore = placeBack\(/);
+  // Left: no more writes once the step is gone, then the tries stopped.
+  assert.match(keeps, /unleave\(\);\n      restore\?\.\(\);/);
+  const app = src('App.svelte');
+  assert.match(app, /const keep = \(\) => \{\n      clearTimeout\(t\);\n      if \(restoring\?\.running\(\)\) return;/);
+  assert.match(app, /restoring = placeBack\(\{ scrollTo: \(to\) => window\.scrollTo\(0, to\)/);
+  // Its keys felt on the window by default.
+  assert.match(src('lib/placeBack.ts'), /keys\?\.addEventListener\('keydown', cancel/);
+});
+
 test('F25.2: every panel attaches the one place keeper to its list, and none brings its place back by its own code', () => {
   for (const f of ['lib/RequestsPanel.svelte', 'lib/HealthPanel.svelte', 'lib/PlaylistView.svelte', 'lib/InsightsPanel.svelte', 'lib/DownloadsPanel.svelte', 'lib/SettingsPanel.svelte']) {
     const s = src(f);

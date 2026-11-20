@@ -16,7 +16,9 @@
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { untrack } from 'svelte';
-  import { narrowSettings } from './settings/narrow';
+  import { basicSettings, narrowSettings } from './settings/narrow';
+  import { settingsBasic, settingsListed, toggleAdvanced } from './settings/basic.svelte';
+  import { basicResets, listedInBasic, TIERED } from './settings/tiers';
   import { matchesSearch, pageView, searchElsewhere, searchNone } from './pageView.svelte';
   import { words } from './search';
   import Crumbs from './Crumbs.svelte';
@@ -30,7 +32,7 @@
   import type { Level, Siblings } from './Crumbs.svelte';
   import { groupsOf, landingOf, remembered } from './groupCrumb';
   import { prefs } from './prefs.svelte';
-  import { keptFor, partsFor, SECTIONS, SETTINGS_GROUPS, thingTitle, type SettingsSection } from './settingsSections.svelte';
+  import { keptFor, partsShown, SECTIONS, SETTINGS_GROUPS, thingTitle, type SettingsSection } from './settingsSections.svelte';
   import { installed } from './offline.svelte';
   import { ed } from './settings/editor.svelte';
   import { resetRows, runReset } from './settings/reset.svelte';
@@ -65,12 +67,19 @@
   // On a phone the part's name is a picker of the other parts of its group, and its group's a picker of the groups
   // (lib/Crumbs, lib/groupCrumb; the owner, 2026-11-02: Settings › Device › Appearance, one list of every part was "way
   // too tall"): a move sideways, a group's landing on the part last seen in it, else its top one.
-  const parts = $derived(partsFor(me.admin, inApp, installed).map((x) => ({ id: x.id as string, group: keptFor(x, me.admin) as string, title: x.id === 'device' ? deviceName() : x.title })));
+  const parts = $derived(
+    partsShown(me.admin, inApp, installed, settingsBasic()).map((x) => ({ id: x.id as string, group: keptFor(x, me.admin) as string, title: x.id === 'device' ? deviceName() : x.title })),
+  );
+  /** To another part from within Settings (its pickers, its search through the others): one reached so is narrowed by Basic. */
+  const toPart = (id: string) => {
+    settingsListed.part = id as SettingsSection;
+    viewSibling(SETTINGS + id);
+  };
   const groupNow = $derived(parts.find((x) => x.id === section)?.group ?? null);
   const groupTitle = (kept: string) => SETTINGS_GROUPS.find((g) => g.kept === kept)?.title ?? kept;
   const siblings = $derived.by<Siblings | null>(() => {
     const own = parts.filter((x) => x.group === groupNow);
-    return own.length > 1 ? { menuLabel: `${groupTitle(groupNow ?? '')} shows`, options: own.map((x) => ({ id: x.id, label: x.title })), chosen: section, onchoose: (id) => viewSibling(SETTINGS + id) } : null;
+    return own.length > 1 ? { menuLabel: `${groupTitle(groupNow ?? '')} shows`, options: own.map((x) => ({ id: x.id, label: x.title })), chosen: section, onchoose: toPart } : null;
   });
   const groupLevel = $derived<Level | null>(
     groupNow
@@ -82,7 +91,7 @@
             chosen: groupNow,
             onchoose: (g) => {
               const to = g === groupNow ? null : landingOf(parts, g, prefs.groupLast[`settings/${g}`]);
-              if (to) viewSibling(SETTINGS + to);
+              if (to) toPart(to);
             },
           },
         }
@@ -125,6 +134,16 @@
     return () => clearTimeout(t);
   });
 
+  // Basic (CU23; lib/settings/basic, tiers): the part narrowed to its Basic rows while the account is on Basic and it was reached
+  // from Settings' list or its pickers. A thing's page, a part opened by its address, and one Basic does not list (open as Basic
+  // came on) show whole.
+  const basicPart = $derived(settingsBasic() && !thing && settingsListed.part === section && TIERED.includes(section) && listedInBasic(section) ? section : null);
+  basicSettings(() => basicPart);
+  /** What its Reset lists in Basic: only what shows. */
+  const resetShows = $derived(basicPart ? (name: string) => basicResets(section, name) : undefined);
+  /** Q5's foot line: how many of what the part keeps are hidden in Basic and not at their defaults. */
+  const moreSet = $derived(basicPart ? resetRows(section).length - resetRows(section, resetShows).length : 0);
+
   // A part's Reset (lib/settings/reset): asked once more, in a sheet, before its preferences go back to their defaults.
   let resetting = $state(false);
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
@@ -136,7 +155,7 @@
   // None here or in another part (decision 0095): the pill says so from the magnifier, not the panel's own words.
   // Its own rows read as the other parts' are (lib/settingsSearch), once the words are known.
   searchNone(
-    () => narrowing && !!settingsWords.by && !settingsMatches(section, partTitle, words(pageView.query)).rows.length && { n: settingsWords.by[section]?.length ?? 0, one: 'setting' },
+    () => narrowing && !!settingsWords.by && !settingsMatches(section, partTitle, words(pageView.query), !!basicPart).rows.length && { n: settingsWords.by[section]?.length ?? 0, one: 'setting' },
     'panel',
   );
   narrowSettings(() => narrowing);
@@ -151,15 +170,17 @@
     if (!narrowing) return [];
     void settingsWords.by;
     const w = words(pageView.query);
-    return SECTIONS.filter((x) => x.id !== section && (!x.app || inApp) && (!x.admin || me.admin || x.everyone))
-      .map((x) => ({ id: x.id, title: x.title, found: settingsMatches(x.id, x.title, w) }))
+    const basic = settingsBasic();
+    return partsShown(me.admin, inApp, installed, basic)
+      .filter((x) => x.id !== section)
+      .map((x) => ({ id: x.id, title: x.title, found: settingsMatches(x.id, x.title, w, basic) }))
       .filter((x) => x.found.title || x.found.rows.length);
   });
   searchElsewhere(() => elsewhere.length > 0);
 
   // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
   // its own beside it).
-  const resetAction = () => (resetRows(section).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
+  const resetAction = () => (resetRows(section, resetShows).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
   const pill = () => (!thing ? { filter: false, view: false, search: 'settings', action: resetAction() } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
@@ -180,7 +201,10 @@
   {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
   <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar; handed to App's
        glass, it is the pill's own button. -->
-  {#if !thing && !handed && resetRows(section).length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
+  <!-- Basic or Advanced (CU22, Q6): one switch for the account, on every part, lit while on Advanced; beside the list on a roomy
+       window this one alone, as Settings' own pill shows it only on a phone. -->
+  {#if !thing}<span class="navpill"><button class="advanced" aria-label="Advanced" title="Advanced" aria-pressed={!settingsBasic()} onclick={toggleAdvanced}><Icon name="advanced" size={22} /></button></span>{/if}
+  {#if !thing && !handed && resetRows(section, resetShows).length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
   {#if !beside}<PanelPlace />{/if}
 {/snippet}
 
@@ -240,9 +264,12 @@
       <ImportPart {thing} />
     {/if}
 
-    {#if resetting && resetRows(section).length}
-      <!-- What Reset puts back, each one now → its default (lib/settings/ResetSheet). -->
-      <ResetSheet title={`Reset ${title}`} rows={resetRows(section)} onconfirm={() => runReset(section)} onclose={() => (resetting = false)} />
+    <!-- In Basic, what is set among the rows it hides (Q5): said once at its foot, so nothing changed is out of sight unsaid. -->
+    {#if moreSet}<p class="foot">{moreSet} more set in Advanced</p>{/if}
+
+    {#if resetting && resetRows(section, resetShows).length}
+      <!-- What Reset puts back, each one now → its default (lib/settings/ResetSheet); in Basic only what shows. -->
+      <ResetSheet title={`Reset ${title}`} rows={resetRows(section, resetShows)} onconfirm={() => runReset(section, resetShows)} onclose={() => (resetting = false)} />
     {/if}
 
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
@@ -252,7 +279,7 @@
       <div class="elsewhere" aria-label="In other parts">
         {#each elsewhere as e (e.id)}
           <Group title={e.title}>
-            {#each e.found.rows.length ? e.found.rows : [e.title] as row (row)}<Item name={row} onclick={() => viewSibling(SETTINGS + e.id)} />{/each}
+            {#each e.found.rows.length ? e.found.rows : [e.title] as row (row)}<Item name={row} onclick={() => toPart(e.id)} />{/each}
           </Group>
         {/each}
       </div>
@@ -305,6 +332,17 @@
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
     box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
+  }
+
+  /* Lit while on Advanced, as a filter that applies lights the funnel (Q6). */
+  .navpill button.advanced[aria-pressed='true'] {
+    color: var(--accent-ink);
+  }
+
+  .foot {
+    margin: 16px 4px 0;
+    color: var(--muted);
+    font-size: 13px;
   }
 
   .navpill button,

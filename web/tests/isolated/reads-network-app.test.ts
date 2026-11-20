@@ -28,3 +28,18 @@ test('its saying there is one again moves them back', () => {
   fromApp({ type: 'network', online: true, validated: true, kind: 'wifi' });
   assert.deepEqual(readsNow(), { from: 'server', why: 'answers' });
 });
+
+// CU13 (red first: the app's word carried no Mobile data): on mobile data with Sync's Mobile data set to None, the app says so in its
+// network word, and reads come from the device at once, with nothing to settle; off mobile data, or set otherwise, back to Cratarr.
+test("the app saying Mobile data is None while on it moves the reads to the device, saying why", () => {
+  fromApp({ type: 'network', online: true, validated: true, kind: 'cellular', mobileOff: true });
+  assert.deepEqual(readsNow(), { from: 'device', why: 'mobile' });
+  fromApp({ type: 'network', online: true, validated: true, kind: 'wifi', mobileOff: false });
+  assert.deepEqual(readsNow(), { from: 'server', why: 'answers' });
+});
+
+test('no network says so over Mobile data', () => {
+  fromApp({ type: 'network', online: false, validated: false, kind: 'none', mobileOff: true });
+  assert.deepEqual(readsNow(), { from: 'device', why: 'no-network' });
+  fromApp({ type: 'network', online: true, validated: true, kind: 'wifi', mobileOff: false });
+});

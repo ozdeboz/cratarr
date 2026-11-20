@@ -1,11 +1,11 @@
 <script lang="ts">
-  // Sync (decision 0038): how this device keeps music: the storage budget, over which network, only while charging,
-  // and in which quality. This device's own; it acts at once. Only in the app. Its Reset: all four back to their
+  // Sync (decision 0038): how this device keeps music: the storage budget, what it does on mobile data (CU13), only while
+  // charging, and in which quality. This device's own; it acts at once. Only in the app. Its Reset: all four back to their
   // defaults (lib/settings/reset); what is kept stays. With more than one account's downloads here (decision 0101: one
   // budget for the device, a file two hold stored once), each account's share, and its Remove.
   import ChoiceRow from './ChoiceRow.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import { appInfo, inApp, setDevice, toApp } from '../app.svelte';
+  import { appInfo, inApp, setDevice, toApp, type MobileData } from '../app.svelte';
   import { kept, sharesShow } from '../kept.svelte';
   import { downloadedSize } from './editor.svelte';
   import Group from './Group.svelte';
@@ -21,6 +21,13 @@
     { value: '100', label: '100 GB' },
     { value: '0', label: 'No limit' },
   ];
+  // Mobile data (CU13; Q4 (a)): one choice in place of the download switch. None: on mobile data Cratarr is out of reach, and
+  // what plays and shows comes from this device.
+  const MOBILE: { value: MobileData; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'notDownloads', label: 'Not downloads' },
+    { value: 'none', label: 'None' },
+  ];
   const QUALITY: { value: 'original' | 'smaller'; label: string }[] = [
     { value: 'original', label: 'Originals' },
     { value: 'smaller', label: 'Smaller copies' },
@@ -32,7 +39,7 @@
       ? [
           { name: 'Storage', now: () => appInfo.syncBudgetGb, def: 20, set: (v: number) => setDevice({ syncBudgetGb: v }), say: (v: number) => BUDGETS.find((b) => b.value === String(v))?.label ?? `${v} GB` },
           { name: 'Quality', now: () => appInfo.downloadQuality, def: 'smaller', set: (v: string) => setDevice({ downloadQuality: v }), say: (v: string) => (v === 'original' ? 'Original' : v) },
-          { name: 'Download over mobile data', now: () => !!appInfo.downloadOverMobile, def: false, set: (v: boolean) => setDevice({ downloadOverMobile: v }) },
+          { name: 'Mobile data', now: () => appInfo.mobileData, def: 'notDownloads', set: (v: MobileData) => setDevice({ mobileData: v }), say: (v: MobileData) => MOBILE.find((m) => m.value === v)?.label ?? v },
           { name: 'Only while charging', now: () => !!appInfo.syncOnlyCharging, def: false, set: (v: boolean) => setDevice({ syncOnlyCharging: v }) },
         ]
       : null,
@@ -59,7 +66,13 @@
       value={appInfo.downloadQuality}
       onchange={(v) => setDevice({ downloadQuality: v })}
     />
-    <Item name="Download over mobile data" toggle={{ checked: appInfo.downloadOverMobile, onchange: (on) => setDevice({ downloadOverMobile: on }) }} />
+    <ChoiceRow
+      name="Mobile data"
+      more="All: everything, downloads too. Not downloads: everything but downloads, which wait for Wi-Fi. None: on mobile data Cratarr is out of reach, and only what is on this device plays."
+      options={MOBILE}
+      value={appInfo.mobileData}
+      onchange={(v) => setDevice({ mobileData: v })}
+    />
     <Item name="Only while charging" toggle={{ checked: appInfo.syncOnlyCharging, onchange: (on) => setDevice({ syncOnlyCharging: on }) }} />
   </Group>
   {#if sharesShow()}
