@@ -1279,14 +1279,7 @@ pub fn start(app: &Arc<super::App>) {
     if STARTED.set(()).is_err() {
         return;
     }
-    // What a restart left half done: a search starts again, a fetch is followed again. And once, before the round's first sweep of
-    // the set-asides, 0.16.3's users set aside for notes alone are asked again (SK5.6), in this first write.
-    kept(|k| {
-        for i in k.items.iter_mut().filter(|i| i.state == State::Searching) {
-            i.state = State::Waiting;
-        }
-        notes_pass(k);
-    });
+    restarted();
     let round_app = app.clone();
     crate::run::spawn(async move {
         let app = round_app;
@@ -1316,6 +1309,20 @@ pub fn start(app: &Arc<super::App>) {
         sweep_at_start().await;
         crate::run::spawn(checks());
         downloads().await;
+    });
+}
+
+/// What a restart left half done, taken up as the list is first read at the start (`start`): a search starts again, a fetch is
+/// followed again. One held (at its check, or for its source) waits for its time as it was kept, its batch and its files where they
+/// are (TN.9): nothing of it is sent back, and the start's sweep (`sweep_at_start`) is of the library's hidden folders alone. And once,
+/// before the round's first sweep of the set-asides, 0.16.3's users set aside for notes alone are asked again (SK5.6), in this first
+/// write.
+fn restarted() {
+    kept(|k| {
+        for i in k.items.iter_mut().filter(|i| i.state == State::Searching) {
+            i.state = State::Waiting;
+        }
+        notes_pass(k);
     });
 }
 
@@ -1390,9 +1397,11 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
     // The owner's 6 November order (X1): Lidarr first, Soulseek five minutes after, or at once where Lidarr is not connected or did
     // not take it; an album not out yet waits for its release.
     let lidarr = super::requests::fetcher(app);
-    let firsts: Vec<i64> = approved.iter().zip(&of).map(|(r, o)| first_search(r, o.as_ref().and_then(|o| o.released.as_deref()).and_then(super::requests::release_day), lidarr.is_some())).collect();
+    let firsts = firsts_of(&approved, &of, lidarr.is_some());
     *NOT_BEFORE.lock().unwrap_or_else(|e| e.into_inner()) = approved.iter().map(|r| r.id).zip(firsts.iter().copied()).collect();
-    let taken = kept(|k| take_requests(k, &approved, &of, &firsts));
+    // The first arrival stops the other (X1), and a request that left takes its item with it (Y2): a fetch, a check or a placing
+    // under way is cancelled, in slskd and on disk, at once.
+    take_in(&approved, &of, &firsts, super::track_fetch::slskd_ready()).await;
     // Lidarr's grab failed or stalls, or it does not know the album, or does not want it: Soulseek's turn now, its release come.
     if let Some(f) = lidarr {
         let t = now();
@@ -1406,16 +1415,31 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
             kept(|k| bring_forward(&mut k.items, &groups, &unreleased, &progress, t));
         }
     }
-    // The first arrival stops the other (X1), and a request that left takes its item with it (Y2): a fetch, a check or a placing
-    // under way is cancelled, in slskd and on disk.
+    Ok(())
+}
+
+/// When each of these requests' records may first be searched (`first_search`, X1), Lidarr connected or not. Pure.
+fn firsts_of(approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>], lidarr: bool) -> Vec<i64> {
+    approved.iter().zip(of).map(|(r, o)| first_search(r, o.as_ref().and_then(|o| o.released.as_deref()).and_then(super::requests::release_day), lidarr)).collect()
+}
+
+/// The list taken by the approved requests (`take_requests`, each record's first search in `firsts`), and the fetches of the items it
+/// took off stopped (X1: the first arrival stops the other; Y2: a request that left takes its item with it), slskd and its folder as
+/// `ready` gives them: a fetch, a check or a placing under way cancelled, in slskd and on disk (`cancel_fetch`), at once.
+async fn take_in(
+    approved: &[crate::userdata::Request],
+    of: &[Option<super::requests::RecordOf>],
+    firsts: &[i64],
+    ready: impl std::future::Future<Output = Result<(Slskd, PathBuf)>>,
+) {
+    let taken = kept(|k| take_requests(k, approved, of, firsts));
     if !taken.is_empty()
-        && let Ok((slskd, downloads)) = super::track_fetch::slskd_ready().await
+        && let Ok((slskd, downloads)) = ready.await
     {
         for it in &taken {
             cancel_fetch(&slskd, &downloads, it).await;
         }
     }
-    Ok(())
 }
 
 /// The requests Soulseek's list is kept by (`take_requests`), each with its record as `records_held` reads it: every approved
@@ -2383,10 +2407,14 @@ async fn checks() {
     }
 }
 
+/// Why a record whose checked files went while it waited is fetched again (X4, TN.9): no user's failure.
+const FILES_GONE: &str = "Its checked files were gone: fetched again";
+
 /// One record checked and placed (SK1.3): a placing a stop cut after its rename taken as placed (Y10); checked files whose placing
-/// failed placed again from them (X4); else its downloaded files gated one at a time, each on the one decode turn (`HEAVY`, the light
-/// rule), then placed. A file that fails sets its folder aside and fails its user, the next folder after. One whose item left the list
-/// meanwhile (SK1.6) is checked no further, and placed and set aside nowhere.
+/// failed placed again from them (X4); one held at its check whose files went meanwhile fetched again (X4, TN.9); else its downloaded
+/// files gated one at a time, each on the one decode turn (`HEAVY`, the light rule), then placed. A file that fails sets its folder
+/// aside and fails its user, the next folder after. One whose item left the list meanwhile (SK1.6) is checked no further, and placed
+/// and set aside nowhere.
 async fn check_one<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, places: &Places, gate: &G)
 where
     G: Fn(PathBuf, ReleaseTrack) -> Fut,
@@ -2414,7 +2442,7 @@ where
         let dir = folder.join(crate::slskd::FOLDER).join(checked);
         let files = files_under(&dir);
         if files.is_empty() {
-            return with_item(id, |i| (i.state, i.checked, i.due, i.why) = (State::Approved, None, 0, Some("Its checked files were gone: fetched again".into())));
+            return with_item(id, |i| (i.state, i.checked, i.due, i.why) = (State::Approved, None, 0, Some(FILES_GONE.into())));
         }
         return place_from(id, &it, &dir, &files, places).await;
     }
@@ -2423,6 +2451,15 @@ where
     };
     let Some(batch) = it.batch.clone() else { return };
     let dir = folder.join(crate::slskd::FOLDER).join(&batch);
+    // Its files gone while it was held at its check (X4, TN.9: its folder emptied while the server was down): fetched again from the
+    // same folder under its tick, its transfers let go, no user failed. One just downloaded with none there is slskd's folder set
+    // wrong (`check_while`).
+    if it.why.is_some() && !f.files.is_empty() && files_under(&dir).is_empty() {
+        tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "its checked files were gone: fetched again");
+        let_go(slskd, folder, id, &f.user, &batch).await;
+        with_item(id, |i| (i.state, i.batch, i.percent, i.due, i.why) = (State::Approved, None, 0.0, 0, Some(FILES_GONE.into())));
+        return wake_starts();
+    }
     let release: Vec<ReleaseTrack> =
         judged_by(&it, &f).iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect();
     let still = || kept(|k| k.items.iter().any(|i| i.id == id && i.batch.as_deref() == Some(batch.as_str())));
@@ -7573,6 +7610,426 @@ mod tests {
         assert_eq!((on_disk(&d)["ss-p"].state, on_disk(&d)["ss-p"].misses), (State::Found, 0));
         assert_eq!(fake.searches_asked(), [("Glass Harbour Neap Season".to_string(), T0 + 60)]);
         assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+        own_done(&d);
+    }
+
+    // ---- TN, Soulseek's part two (TN.9, TN.10, TN.16): a restart mid-pause, two accounts' items waiting on one source, and the
+    // queues as they were kept. slskd has no pause of its own in 0.17 (round 1.3's lane): where TN held slskd by its 429, slskd is
+    // away (503) for that while instead (`FakeSlskd::away_until`), nothing of it kept across a restart (SK2.6)
+
+    /// TN.9's world for one start, slskd at `url`, the server's holds kept in its user data (OQ-T3). Before the stop, at t0: slskd
+    /// away until t0+300 (503 to all it is asked; no hold of its own, so none kept), and AcoustID's code 14 to ss-6's first file at its
+    /// check (Retry-After 600): ss-6 held at its check to t0+600, b6's files in slskd's folder; ss-w waiting, its round's wait over at
+    /// t0+100. The server stops at t0+60 (b6's folder emptied meanwhile where `emptied`) and starts at t0+120, AcoustID's turn made anew
+    /// taking up its hold.
+    async fn restart_mid_pause(name: &str, url: &str, emptied: bool) {
+        use crate::app::turn::{ACOUSTID, class, held_choice};
+        let (_pinned, clock) = Clock::at_t0();
+        let ud = Arc::new(crate::userdata::UserData::open(None).unwrap());
+        let kept_until = |source: &str| ud.import_choice(&held_choice(source)).unwrap().and_then(|v| v.parse::<i64>().ok());
+        let items = vec![
+            Item { percent: 100.0, ..ticked(tn_item("ss-6", 9406, "Two Rooms", State::Checking), &["peer-a"], Some("b6")) },
+            Item { misses: 1, due: T0 + 100, why: Some("No folder holds every track of its release".into()), ..tn_item("ss-w", 9408, "Spring Tide", State::Waiting) },
+        ];
+        let d = own_list(name, items);
+        let slskd_dir = d.join("slskd");
+        let tone = bulk::tone(&d);
+        landed(&slskd_dir, "b6", "Two Rooms", &tone);
+        let b6 = slskd_dir.join(crate::slskd::FOLDER).join("b6");
+        let fake = Arc::new(FakeSlskd {
+            away_until: T0 + 300,
+            found: HashMap::from([("Glass Harbour Spring Tide", answers_of("peer-b", "Spring Tide"))]),
+            folder: slskd_dir.clone(),
+            file: tone.clone(),
+            ..Default::default()
+        });
+        let heard = Arc::new(FakeAcoustid { limits: Mutex::new(VecDeque::from([true])), said: Some(600), ..Default::default() });
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+        // The turns as a start makes them: AcoustID's keeping its hold in the user data, as `turn::keep_all` keeps the server's own;
+        // slskd has none (round 1.3's lane).
+        let turns = || {
+            let acoustid = Arc::new(Turn::new(ACOUSTID));
+            acoustid.keep(ud.clone());
+            (acoustid, bulk::slskd_at(url, &fake))
+        };
+
+        // Before the stop, at t0.
+        let (acoustid, slskd) = turns();
+        let given = slskd.search("Glass Harbour").await.unwrap_err();
+        assert!(matches!(class(&given), Failure::Away(_)), "the given: slskd away, its 503: {given:#}");
+        fetch_from("ss-6", &slskd, &slskd_dir, gate_through(acoustid.clone(), heard.clone())).await;
+        let before = on_disk(&d);
+        let acoustid_pause = Paused { source: "acoustid", until: T0 + 600 }.to_string();
+        let ss6 = &before["ss-6"];
+        assert_eq!((ss6.state, ss6.batch.as_deref(), ss6.due, ss6.why.as_deref()), (State::Checking, Some("b6"), T0 + 600, Some(acoustid_pause.as_str())), "held at its check");
+        assert_eq!([kept_until("slskd"), kept_until("acoustid")], [None, Some(T0 + 600)], "AcoustID's hold kept as it is set; none of slskd's (SK2.6)");
+
+        // The stop at t0+60: nothing of the server kept but its stores. The start at t0+120.
+        clock.to(60).await;
+        drop((acoustid, slskd));
+        OWN.with(|o| o.borrow_mut().as_mut().expect("a test's own list").1 = None);
+        if emptied {
+            for f in files_under(&b6) {
+                std::fs::remove_file(f).unwrap();
+            }
+        }
+        clock.to(120).await;
+        restarted();
+        sweep_at_start().await;
+        let (acoustid, slskd) = turns();
+        let gate = gate_through(acoustid.clone(), heard.clone());
+        assert_eq!(on_disk(&d), before, "the list read back as it was written: ss-6 still at its check, nothing failed");
+        assert_eq!(files_under(&b6).len(), if emptied { 0 } else { 3 }, "b6 and its files where they were: the start took nothing");
+        assert_eq!(acoustid.paused_until(), Some(T0 + 600), "AcoustID's hold taken up, never lengthened");
+        assert_eq!([kept_until("slskd"), kept_until("acoustid")], [None, Some(T0 + 600)]);
+
+        // t0+120: ss-w's wait over, it meets slskd away and holds a round, no miss. ss-6 waits its time.
+        assert_eq!((next_search().as_deref(), next_fetch()), (Some("ss-w"), None));
+        search_in("ss-w", &cat, never_read, ready(&slskd)).await;
+        let w = &on_disk(&d)["ss-w"];
+        assert_eq!((w.state, w.misses, w.due), (State::Waiting, 1, T0 + 120 + ROUND_AT_LEAST), "held a round for slskd away");
+        assert!(w.why.as_deref().is_some_and(|w| w.starts_with("slskd would not search: 503")), "{:?}", w.why);
+        for at in [200, 299] {
+            clock.to(at).await;
+            assert_eq!((next_search(), next_fetch()), (None, None), "nothing taken up at t0+{at}");
+        }
+        assert_eq!(fake.asked.lock().unwrap().len(), 2, "slskd asked nothing before t0+300 but the given and ss-w's search");
+
+        // ss-6 still waits for AcoustID.
+        clock.to(599).await;
+        assert_eq!(next_fetch(), None, "ss-6 not before AcoustID's deadline");
+        assert_eq!(heard.asked.lock().unwrap().iter().map(|(at, _)| *at).collect::<Vec<_>>(), [T0], "AcoustID asked nothing since its code 14");
+
+        // t0+600: ss-6 gated on its files; where they went while the server was down, fetched again from the same folder first.
+        clock.to(600).await;
+        assert_eq!(next_fetch().as_deref(), Some("ss-6"));
+        fetch_from("ss-6", &slskd, &slskd_dir, &gate).await;
+        if emptied {
+            let gone = &on_disk(&d)["ss-6"];
+            assert_eq!((gone.state, gone.batch.as_deref(), gone.chosen, gone.due, gone.why.as_deref()), (State::Approved, None, Some(0), 0, Some(FILES_GONE)), "its checked files were gone: fetched again under its tick");
+            assert_eq!(next_fetch().as_deref(), Some("ss-6"));
+            fetch_from("ss-6", &slskd, &slskd_dir, &gate).await;
+            let asked = fake.asked.lock().unwrap().clone();
+            let batches: Vec<(String, i64)> = asked.iter().filter(|(m, p, ..)| m == "POST" && p.ends_with("/batches")).map(|(_, _, at, b)| (b["username"].as_str().unwrap_or_default().to_string(), *at)).collect();
+            assert_eq!(batches, [("peer-a".to_string(), T0 + 600)], "the same folder, once");
+        }
+        let last = on_disk(&d);
+        let ss6 = &last["ss-6"];
+        assert_eq!((ss6.state, &ss6.failed, &ss6.set_aside), (State::Placed, &before["ss-6"].failed, &before["ss-6"].set_aside), "gated and placed, no user failed");
+        assert_eq!(heard.asked.lock().unwrap().iter().map(|(at, _)| *at).collect::<Vec<_>>(), [T0, T0 + 600, T0 + 600, T0 + 600]);
+        let asked = fake.asked.lock().unwrap().clone();
+        assert_eq!(asked.iter().filter(|(_, _, at, _)| *at < T0 + 300).count(), 2, "while away, slskd asked the given and ss-w's search alone: {asked:?}");
+
+        // ss-w's round over, slskd back: searched.
+        clock.to(120 + ROUND_AT_LEAST).await;
+        assert_eq!(next_search().as_deref(), Some("ss-w"));
+        search_in("ss-w", &cat, never_read, ready(&slskd)).await;
+        assert_eq!(on_disk(&d)["ss-w"].state, State::Found);
+        assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+        assert!(heard.violations.lock().unwrap().is_empty(), "{:?}", heard.violations.lock().unwrap());
+        own_done(&d);
+    }
+
+    /// TN.9 (OQ-T3), Soulseek's start: AcoustID held until t0+600, kept in the server's user data; slskd away until t0+300 (no hold of
+    /// its own in 0.17, so none kept, SK2.6); ss-6 held at its check to t0+600 with b6's files in slskd's folder. The server stops at
+    /// t0+60 and starts at t0+120: AcoustID's hold is taken up as its turn is made again, so nothing is asked of it before t0+600; ss-w,
+    /// due meanwhile, meets slskd away and holds a round, no miss; ss-6 is still at its check, b6 and its files kept, nothing failed,
+    /// and the start's sweep does not take b6; at t0+600 ss-6 is gated and placed. The variant, b6's folder emptied while the server
+    /// was down: at t0+600 ss-6 finds its files gone ("Its checked files were gone", X4) and is fetched again from the same folder, no
+    /// user failed. Never a question asked early, a held item failed by the restart, or a kept deadline lengthened.
+    #[tokio::test(start_paused = true)]
+    async fn a_restart_mid_pause_asks_nothing_early() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        restart_mid_pause("restart-kept", "http://192.168.1.20:5056", false).await;
+        restart_mid_pause("restart-emptied", "http://192.168.1.20:5057", true).await;
+    }
+
+    /// `user`'s request of `record` (its album `album`, by Glass Harbour), approved at `at`, kept in `ud`: its id.
+    fn asked_by(ud: &crate::userdata::UserData, user: &str, record: i64, album: &str, at: i64) -> i64 {
+        let r = crate::userdata::Request {
+            id: 0,
+            user: user.into(),
+            album_key: format!("k-{record}"),
+            artist_key: "glass harbour".into(),
+            release_group: None,
+            album: album.into(),
+            artist: "Glass Harbour".into(),
+            year: None,
+            cover: None,
+            at,
+            status: super::super::requests::APPROVED.into(),
+            reason: None,
+            decided_by: Some("root".into()),
+            decided_at: Some(at),
+            fetched: None,
+            record: Some(record),
+        };
+        ud.add_request(&r).unwrap()
+    }
+
+    /// Glass Harbour's `album` on the list as `id`, at `state`, its list read: of `record`, for `request`.
+    fn asked_item(id: &str, record: i64, request: i64, album: &str, state: State) -> Item {
+        let mut i = tn_item(id, record, album, state);
+        i.record.request = request;
+        i
+    }
+
+    /// Soulseek's round reading the approved requests as `read_requests` does, Lidarr not connected: each one's record as the
+    /// catalogue holds it (Music folder 0, Incoming 1), the list taken by them, and the fetches of the items it took off stopped
+    /// through `slskd` and its folder (`take_in`).
+    async fn requests_read(ud: &crate::userdata::UserData, cat: &crate::catalogue::Catalogue, slskd: &Slskd, slskd_dir: &Path) {
+        use crate::settings::LibraryKind;
+        let (approved, of) = requests_taken(ud, cat, &[(0, LibraryKind::Main), (1, LibraryKind::Incoming)]).unwrap();
+        let firsts = firsts_of(&approved, &of, false);
+        take_in(&approved, &of, &firsts, async { Ok::<_, anyhow::Error>((slskd.clone(), slskd_dir.to_path_buf())) }).await;
+    }
+
+    /// TN.10: ann's approved request of "Tide Tables" (record 11) and bob's of "Neap Season" (record 12), each a Soulseek item waiting;
+    /// bob's second request, of record 11 too (one item a record, X2); slskd away until t0+120 (503 to all it is asked: no pause of its
+    /// own in 0.17). The rounds read the requests and the searcher takes its work: each item meets slskd away and holds a round with
+    /// its misses; after it, one search at a time, the longest waiting first. The variant, ann cancelling at t0+60: record 11's item
+    /// passes to bob's request with its `due` (a round on) and its misses (X2), record 12's untouched. Never ann's cancel failing nor
+    /// bob's item searched early, two items of record 11, or the wait kept against a request (the requests as their accounts left
+    /// them).
+    #[tokio::test(start_paused = true)]
+    async fn two_accounts_items_wait_on_one_pause() {
+        use super::super::requests::{APPROVED, CANCELLED};
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        for (cancels, url) in [(false, "http://192.168.1.20:5058"), (true, "http://192.168.1.20:5059")] {
+            let (_pinned, clock) = Clock::at_t0();
+            let cat = Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+            // Not had: no tracks (a test catalogue's track with no file reads as present).
+            let (tide, neap) = (cat.record_for_tests("Tide Tables", 0), cat.record_for_tests("Neap Season", 0));
+            let ud = crate::userdata::UserData::open(None).unwrap();
+            let ann = asked_by(&ud, "ann", tide, "Tide Tables", T0 - 900);
+            let bob = asked_by(&ud, "bob", neap, "Neap Season", T0 - 600);
+            let bob_too = asked_by(&ud, "bob", tide, "Tide Tables", T0 - 300);
+            let items = vec![
+                Item { misses: 1, ..asked_item("ss-11", tide, ann, "Tide Tables", State::Waiting) },
+                Item { misses: 2, ..asked_item("ss-12", neap, bob, "Neap Season", State::Waiting) },
+            ];
+            let d = own_list(&format!("two-accounts-{cancels}"), items);
+            let slskd_dir = d.join("slskd");
+            let fake = Arc::new(FakeSlskd {
+                away_until: T0 + 120,
+                found: HashMap::from([("Glass Harbour Tide Tables", answers_of("peer-a", "Tide Tables")), ("Glass Harbour Neap Season", answers_of("peer-b", "Neap Season"))]),
+                folder: slskd_dir.clone(),
+                ..Default::default()
+            });
+            let slskd = bulk::slskd_at(url, &fake);
+            let given = slskd.search("Glass Harbour").await.unwrap_err();
+            assert!(matches!(crate::app::turn::class(&given), Failure::Away(_)), "the given: slskd away, its 503: {given:#}");
+
+            // t0: the round reads the three requests (one item a record: none for bob's second), and the searcher meets slskd away.
+            requests_read(&ud, &cat, &slskd, &slskd_dir).await;
+            for id in ["ss-11", "ss-12"] {
+                assert_eq!(next_search().as_deref(), Some(id), "by due, then id");
+                search_in(id, &cat, never_read, ready(&slskd)).await;
+            }
+            assert_eq!(next_search(), None);
+            let held = on_disk(&d);
+            assert_eq!(held.len(), 2, "one item a record");
+            for (id, record, request, misses) in [("ss-11", tide, ann, 1), ("ss-12", neap, bob, 2)] {
+                let i = &held[id];
+                assert_eq!((i.record.record, i.record.request, i.state, i.misses, i.due), (record, request, State::Waiting, misses, T0 + ROUND_AT_LEAST), "{id}");
+                assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd would not search: 503")), "{id}: {:?}", i.why);
+            }
+
+            // The variant: ann cancels at t0+60, and the next round reads it.
+            if cancels {
+                clock.to(60).await;
+                assert!(ud.set_request_status(ann, APPROVED, CANCELLED, None, Some("ann")).unwrap(), "ann's cancel goes through");
+                requests_read(&ud, &cat, &slskd, &slskd_dir).await;
+                let passed = on_disk(&d);
+                assert_eq!(passed.len(), 2, "one item a record still");
+                let to_bob = Item { record: Record { request: bob_too, ..held["ss-11"].record.clone() }, ..held["ss-11"].clone() };
+                assert_eq!(passed["ss-11"], to_bob, "record 11's item passed to bob's request, its due and its misses with it (X2)");
+                assert_eq!(passed["ss-12"], held["ss-12"], "record 12's untouched");
+                assert_eq!(next_search(), None, "nothing searched early");
+            }
+            clock.to(ROUND_AT_LEAST - 1).await;
+            assert_eq!(next_search(), None, "nothing before their round is over");
+            assert_eq!(fake.asked.lock().unwrap().len(), 3, "slskd asked once for each item while away, and the given");
+
+            // A round on, slskd back: one search at a time, the longest waiting first.
+            clock.to(ROUND_AT_LEAST).await;
+            for id in ["ss-11", "ss-12"] {
+                assert_eq!(next_search().as_deref(), Some(id));
+                search_in(id, &cat, never_read, ready(&slskd)).await;
+            }
+            let words = |w: &str, at: i64| (w.to_string(), at);
+            assert_eq!(
+                fake.searches_asked(),
+                [
+                    words("Glass Harbour", T0),
+                    words("Glass Harbour Tide Tables", T0),
+                    words("Glass Harbour Neap Season", T0),
+                    words("Glass Harbour Tide Tables", T0 + ROUND_AT_LEAST),
+                    words("Glass Harbour Neap Season", T0 + ROUND_AT_LEAST)
+                ]
+            );
+            let asked = fake.asked.lock().unwrap().clone();
+            let posted: Vec<usize> = asked.iter().enumerate().filter(|(_, (m, p, ..))| m == "POST" && p.ends_with("/searches")).map(|(n, _)| n).collect();
+            let forgot = asked.iter().position(|(m, p, ..)| m == "DELETE" && p.contains("/searches/")).expect("record 11's search forgotten");
+            assert!(posted[3] < forgot && forgot < posted[4], "record 11's search over before record 12's begins: {asked:?}");
+            let last = on_disk(&d);
+            let owner = if cancels { bob_too } else { ann };
+            assert_eq!((last["ss-11"].state, last["ss-11"].record.request, last["ss-12"].state), (State::Found, owner, State::Found));
+            // The wait on the items alone: each request as its account left it.
+            let status = |id: i64| ud.request(id).unwrap().map(|r| (r.status, r.reason, r.fetched));
+            assert_eq!(status(ann), Some(((if cancels { CANCELLED } else { APPROVED }).to_string(), None, None)), "ann's");
+            for id in [bob, bob_too] {
+                assert_eq!(status(id), Some((APPROVED.to_string(), None, None)), "bob's");
+            }
+            assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+            own_done(&d);
+        }
+    }
+
+    /// Soulseek's list as production's held it at 0.17's previews (13 items: 7 found, 3 waiting, 3 stuck; 88 tracks; each tied to a
+    /// request), built here, none of production's data: the found with their folders, waiting for a tick; the waiting not found yet,
+    /// with their misses and their time; the stuck saying why.
+    fn production_store(now: i64) -> Vec<Item> {
+        let listed = |n: u32| -> Vec<Track> {
+            (1..=n).map(|p| Track { disc: 1, position: p, title: format!("Part {p}"), length_ms: Some(180_000 + i64::from(p) * 7_000), recording: Some(format!("rec-{p}")) }).collect()
+        };
+        let folder = |user: &str, album: &str, tracks: &[Track]| {
+            let dir = format!("Music\\Glass Harbour\\{album}");
+            let file = |t: &Track| Offered {
+                filename: format!("{dir}\\{:02} {}.flac", t.position, t.title),
+                size: 30_000_000,
+                extension: Some("flac".into()),
+                bit_rate: None,
+                bit_depth: Some(16),
+                sample_rate: Some(44_100),
+                length: t.length_ms.map(|ms| ms / 1000),
+                is_locked: false,
+            };
+            let files = tracks.iter().map(file).collect();
+            Folder { user: user.into(), dir: dir.clone(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1_000_000, extra: 0, files, unchecked: None }
+        };
+        (0..13_i64)
+            .map(|n| {
+                let album = format!("Record {}", n + 1);
+                let i = tn_item(&format!("ss-{}", n + 1), 9401 + n, &album, State::Found);
+                match n {
+                    0..=6 => {
+                        let tracks = listed(10);
+                        Item { folders: vec![folder("peer-a", &album, &tracks), folder("peer-b", &album, &tracks)], tracks, ..i }
+                    }
+                    7..=9 => {
+                        let misses = n as u32 - 5;
+                        Item { state: State::Waiting, tracks: listed(6), misses, due: now + wait_after(misses), why: Some("No folder holds every track of its release".into()), ..i }
+                    }
+                    _ => Item { state: State::Stuck, tracks: Vec::new(), due: now + wait_after(3), why: Some("No list to judge by".into()), ..i },
+                }
+            })
+            .collect()
+    }
+
+    /// TN.16, Soulseek's half: FX01's 0.16 `soulseek.json` (5 items: waiting with misses 2 and its time, placed, fetching with its
+    /// batch, found, stuck) and a 0.17-shaped store as production's (13 items) read after the turns as they did: each item's state,
+    /// misses, due, failed, folders, batch, set_aside and why as they were. A round with every source answering leaves them be (the
+    /// found waiting for a tick, the waiting for their time, 0.16's stuck one due to have its list read again as trunk's A1.4 has it,
+    /// the 0.17 store's stuck stuck), but for 0.16's fetching item, followed again as today;
+    /// 0.16's file is kept aside once as `soulseek.json.016`. The store written again holds every field it had, as it had it, and
+    /// none for a pause (the deadline is `due`, `paused_until` a view). Never an item searched, failed or dropped by the change, nor
+    /// a file refused.
+    #[tokio::test]
+    async fn the_queues_read_back_unchanged_after_the_turns() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        // Before the 0.16 waiting item's time: a round as one could find it.
+        let at = 1_794_000_000;
+        let _pinned = crate::app::turn::Pinned(at);
+        crate::app::moment::PINNED.store(at, std::sync::atomic::Ordering::Relaxed);
+        const FIELDS: [&str; 25] = [
+            "id", "record", "state", "tracks", "untimed", "folders", "chosen", "failed", "misses", "due", "why", "batch", "percent", "placed", "set_aside", "checked",
+            "local_failures", "placing", "placed_at", "place_failures", "ended_at", "forgotten", "auto", "found_at", "notes",
+        ];
+        let keys = |v: &serde_json::Value| v.as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<String>>();
+        let stored = |d: &Path| serde_json::from_slice::<serde_json::Value>(&std::fs::read(d.join("soulseek.json")).unwrap()).unwrap();
+
+        // FX01's 0.16 file, as 0.16 left it, read whole.
+        let raw = include_str!("../../../../tests/fixtures/0.16/soulseek.json");
+        let d = own_list("tn16-016", Vec::new());
+        std::fs::write(d.join("soulseek.json"), raw).unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let had = fixture["items"].as_array().unwrap();
+        let read = kept(|k| k.items.clone());
+        assert_eq!(read.len(), had.len(), "a 0.16 file read whole");
+        assert!(!kept(|k| k.frozen) && queues_set_aside(&d).is_empty(), "not refused");
+        assert_eq!(std::fs::read_to_string(d.join("soulseek.json.016")).unwrap(), raw, "kept aside, as today");
+        for (i, f) in read.iter().zip(had) {
+            let was = (
+                f["id"].as_str().unwrap(),
+                serde_json::from_value::<State>(f["state"].clone()).unwrap(),
+                f["misses"].as_u64().unwrap() as u32,
+                f["due"].as_i64().unwrap(),
+                serde_json::from_value::<Vec<String>>(f["failed"].clone()).unwrap(),
+                serde_json::from_value::<Vec<Folder>>(f["folders"].clone()).unwrap(),
+                f["batch"].as_str(),
+                serde_json::from_value::<Vec<SetAside>>(f["set_aside"].clone()).unwrap(),
+                f["why"].as_str(),
+            );
+            assert_eq!((i.id.as_str(), i.state, i.misses, i.due, i.failed.clone(), i.folders.clone(), i.batch.as_deref(), i.set_aside.clone(), i.why.as_deref()), was);
+        }
+
+        // One round, every source answering: nothing searched (the waiting one's time to come, the found waiting for a tick) but the
+        // stuck one, whose time came (A1.4: its list read again); the fetching one followed again, as today, on to its check and its
+        // placing.
+        let slskd_dir = d.join("slskd");
+        let b3 = "00000000-0000-4000-8000-00000000b003";
+        let b3_dir = slskd_dir.join(crate::slskd::FOLDER).join(b3);
+        std::fs::create_dir_all(&b3_dir).unwrap();
+        for name in ["01 - Paper.mp3", "02 - Kites.mp3"] {
+            std::fs::write(b3_dir.join(name), b"mp3").unwrap();
+        }
+        let fake = Arc::new(FakeSlskd { folder: slskd_dir.clone(), ..Default::default() });
+        let slskd = bulk::slskd_at("http://192.168.1.20:5061", &fake);
+        assert_eq!(next_search().as_deref(), Some("ss-5"), "nothing searched but the stuck one, due (A1.4)");
+        assert_eq!(next_fetch().as_deref(), Some("ss-3"), "the fetching one followed again");
+        fetch_from("ss-3", &slskd, &slskd_dir, |_, _| std::future::ready(Ok(0.97))).await;
+        assert_eq!((next_search().as_deref(), next_fetch()), (Some("ss-5"), None));
+        let asked = fake.asked.lock().unwrap().clone();
+        assert!(asked.iter().any(|(m, p, ..)| m == "GET" && p.ends_with(&format!("/batches/{b3}"))), "{asked:?}");
+        assert!(asked.iter().all(|(m, ..)| m != "POST"), "nothing searched nor fetched anew: {asked:?}");
+        assert!(fake.violations.lock().unwrap().is_empty(), "{:?}", fake.violations.lock().unwrap());
+        let back = on_disk(&d);
+        for i in &read {
+            if i.id == "ss-3" {
+                let followed = &back["ss-3"];
+                assert_eq!((followed.state, &followed.failed, &followed.set_aside), (State::Placed, &i.failed, &i.set_aside), "followed to its end, no user failed");
+            } else {
+                assert_eq!(&back[&i.id], i, "{} as it was", i.id);
+            }
+        }
+        // Written again: every field it had (ss-3's batch gone with its placing), none for the pause.
+        let written = stored(&d);
+        assert_eq!(written["next"], fixture["next"]);
+        for (w, f) in written["items"].as_array().unwrap().iter().zip(had) {
+            let mut was = keys(f);
+            if f["id"] == "ss-3" {
+                was.remove("batch");
+            }
+            assert!(was.is_subset(&keys(w)), "{}: every field it had: {:?}", f["id"], was.difference(&keys(w)).collect::<Vec<_>>());
+            let other: Vec<String> = keys(w).into_iter().filter(|k| !FIELDS.contains(&k.as_str())).collect();
+            assert!(other.is_empty(), "{}: no field for the pause: {other:?}", f["id"]);
+        }
+        // Kept aside once: a start that reads 0.17's own copies nothing over it.
+        load(&d.join("soulseek.json"));
+        assert_eq!(std::fs::read_to_string(d.join("soulseek.json.016")).unwrap(), raw, "once");
+        own_done(&d);
+
+        // A 0.17-shaped store as production's: read back as written, a round takes nothing of it, and it is written again as it was.
+        let store = production_store(at);
+        let count = |s: State| store.iter().filter(|i| i.state == s).count();
+        assert_eq!((count(State::Found), count(State::Waiting), count(State::Stuck), store.iter().map(|i| i.tracks.len()).sum::<usize>()), (7, 3, 3, 88));
+        let d = own_list("tn16-017", store.clone());
+        let before = stored(&d);
+        assert_eq!(kept(|k| k.items.clone()), store, "read back as written");
+        assert_eq!((next_search(), next_fetch()), (None, None), "the found wait for a tick, the waiting for their time, the stuck stay");
+        assert_eq!(stored(&d), before, "every field as it had it, none for a pause");
+        assert!(!d.join("soulseek.json.016").exists() && queues_set_aside(&d).is_empty(), "0.17's own: nothing kept aside, nothing refused");
         own_done(&d);
     }
 }
