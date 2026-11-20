@@ -12,6 +12,9 @@ const { cratarrBusy, waitingFor } = await import('../../src/lib/waiting.svelte.t
 
 watch.afterMs = 30;
 watch.probeMs = 30;
+// RC01: a health check that does not answer in time proves nothing alone; nothing heard for `silentMs` is out of reach.
+watch.silentMs = 150;
+watch.mostMs = 5_000;
 
 /** A network where `health` says how /api/health fares and every other request answers after `slowMs`, or never (null). */
 function network(health: 'silent' | 'ok', slowMs: number | null) {
@@ -33,7 +36,10 @@ test('on a silent network a read fails as out of reach, the page away, and never
   await assert.rejects(getHomeNew(), (e: Error) => e.message === UNREACHED, 'out of reach, not an answer of nothing');
   assert.equal(reach.away, true, 'the page goes on as away');
   assert.ok(Date.now() - started < 2_000, 'in moments, not for good');
-  assert.deepEqual(asked, ['/api/home/new', '/api/health']);
+  // Its health asked again until nothing was heard for its while (RC01), then let go.
+  assert.ok(Date.now() - started >= watch.silentMs, 'not at the first health check that did not answer in time');
+  assert.equal(asked[0], '/api/home/new');
+  assert.ok(asked.length >= 3 && asked.slice(1).every((u) => u === '/api/health'), asked.join(', '));
 });
 
 test('a busy Cratarr that answers its health is waited for, however long its answer takes', async () => {

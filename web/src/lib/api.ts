@@ -8,7 +8,7 @@ import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
-import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
+import { asksSignIn, notReached, reached, refused, refusedFor, sayHeld, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick, devicePlaylistRows, devicePlaylists } from './deviceAnswers.svelte';
 import { cratarrBusy } from './waiting.svelte';
 import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
@@ -147,63 +147,94 @@ function request<T>(path: string, init?: RequestInit): Promise<T> {
   return track(fetchJson<T>(path, init));
 }
 
-/** A request in the background (polling, checks while typing): no progress bar. */
+/** A request in the background (polling, checks while typing): no progress bar, and a hard limit (`watch.mostMs`). */
 function quietly<T>(path: string, init?: RequestInit): Promise<T> {
-  // Not while a refusal holds them back (lib/reach): each would be one more knock on a ban.
-  if (refusedFor() > 0) return Promise.reject(new ApiError(UNREACHED));
-  return fetchJson<T>(path, init);
+  // Not while a refusal holds them back (lib/reach): each would be one more knock on a ban. Why, said in the console once a hold
+  // (RC01: the desktop shell's log keeps it).
+  if (refusedFor() > 0) {
+    sayHeld();
+    return Promise.reject(new ApiError(UNREACHED));
+  }
+  return fetchJson<T>(path, init, true);
 }
 
 /** A request that has waited `afterMs` for its answer's start asks whether Cratarr answers at all (its health, within `probeMs`):
  *  a network that drops what is sent never fails a request, it only never answers (0.16.0 on the tablet, 2026-11-08: the app
- *  opened with Cratarr out of reach and Home loaded for good; in the app no service worker gives up for it). No answer: Cratarr
- *  is out of reach, the request is let go and the page goes on as away. An answer: Cratarr is there and busy, and it waits on,
- *  asking again each `afterMs`. */
-export const watch = { afterMs: 5_000, probeMs: 4_000 };
-let probing: Promise<boolean> | null = null;
+ *  opened with Cratarr out of reach and Home loaded for good; in the app no service worker gives up for it). An answer: Cratarr
+ *  is there and busy, and it waits on, asking again each `afterMs`. A refused connection, a network error or the proxy's bare
+ *  status: Cratarr is out of reach, the request is let go and the page goes on as away.
+ *  RC01 (production, 2026-11-18: Fetch said it could not reach Cratarr while it answered in 1.5 to 5.6 s; 0.16.2's desktop app
+ *  after a sleep: "unreachable" for hours, a request on a connection dead since the sleep waiting for ever while the health
+ *  check answered on a new one):
+ *  - a health check with no answer within `probeMs` proves nothing, as a busy Cratarr's can take that long too: it is asked
+ *    again, and only a request that heard nothing for `silentMs` is let go as out of reach (the silent network's wait, bounded);
+ *  - a background request (`quietly`: polls, checks) has a hard limit, `mostMs`, even while Cratarr answers: let go then as
+ *    busy, not away (`TooLong`), so no poll that waits for it waits for ever. */
+export const watch = { afterMs: 5_000, probeMs: 4_000, silentMs: 15_000, mostMs: 60_000 };
+/** How a look for Cratarr fared: it answered; it is not there; or no answer within `probeMs`, which says nothing either way. */
+type Look = 'there' | 'away' | 'slow';
+let probing: Promise<Look> | null = null;
 /** Whether Cratarr answers now: one health check at a time, however many requests wait. */
-function answers(): Promise<boolean> {
+function answers(): Promise<Look> {
   probing ??= fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(watch.probeMs) })
     .then(
-      (r) => !notReached(r.status),
-      () => false,
+      (r): Look => (notReached(r.status) ? 'away' : 'there'),
+      (e): Look => ((e as { name?: string } | null)?.name === 'TimeoutError' ? 'slow' : 'away'),
     )
     .finally(() => (probing = null));
   return probing;
 }
-/** `fetch`, let go where Cratarr turns out not to answer while it waits (`watch`). */
-function watched(path: string, init?: RequestInit): Promise<Response> {
+/** A background request let go at its hard limit with Cratarr there: busy, not away (RC01). */
+export class TooLong extends Error {}
+/** What such a request fails with: no words of its own (its caller says what failed), and never "out of reach". */
+export const TOO_LONG = 'Cratarr took too long to answer';
+/** It failed only because Cratarr, there and busy, took longer than a background request waits (RC01). */
+export const tookTooLong = (e: unknown) => e instanceof ApiError && e.message === TOO_LONG;
+/** `fetch`, let go where Cratarr turns out not to answer while it waits (`watch`); a background one at its hard limit too. */
+function watched(path: string, init?: RequestInit, background = false): Promise<Response> {
   const gone = new AbortController();
   const signal = init?.signal ? AbortSignal.any([init.signal, gone.signal]) : gone.signal;
   return new Promise<Response>((resolve, reject) => {
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let most: ReturnType<typeof setTimeout> | undefined;
     /** Counted among those waiting on a busy Cratarr (lib/waiting), from its first look that found it there till it ends. */
     let busy = false;
+    /** When Cratarr was last heard from: the request's start, then each look it answered. */
+    let heard = Date.now();
     const settle = () => {
       done = true;
       clearTimeout(timer);
+      clearTimeout(most);
       if (busy) cratarrBusy.asks--;
       busy = false;
     };
+    const letGo = (why: Error) => {
+      if (done) return;
+      settle();
+      gone.abort();
+      reject(why);
+    };
     const look = () => {
       timer = setTimeout(() => {
-        void answers().then((there) => {
+        void answers().then((was) => {
           if (done) return;
-          if (there) {
+          if (was === 'there') {
+            heard = Date.now();
             if (!busy) cratarrBusy.asks++;
             busy = true;
             return look();
           }
-          settle();
-          gone.abort();
-          reject(new TypeError('Cratarr does not answer'));
+          if (was === 'away' || Date.now() - heard >= watch.silentMs) return letGo(new TypeError('Cratarr does not answer'));
+          look();
         });
       }, watch.afterMs);
     };
     look();
+    if (background) most = setTimeout(() => letGo(busy ? new TooLong(path) : new TypeError('Cratarr does not answer')), watch.mostMs);
     fetch(path, { ...init, signal }).then(
       (r) => {
+        if (done) return;
         settle();
         resolve(r);
       },
@@ -216,7 +247,7 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
   });
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(path: string, init?: RequestInit, background = false): Promise<T> {
   if (loopHeld(path, init)) throw new ApiError('Asked too often', true);
   // A sign-out owed (lib/account): nothing is asked under a session that is over, what one taps either.
   if (signOutOwed()) {
@@ -225,8 +256,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   let res: Response;
   try {
-    res = await watched(path, init);
-  } catch {
+    res = await watched(path, init, background);
+  } catch (e) {
+    // Let go at its hard limit with Cratarr there: busy, not away (RC01); its caller says what failed.
+    if (e instanceof TooLong) throw new ApiError(TOO_LONG, true);
     unreached();
     throw new ApiError(UNREACHED);
   }

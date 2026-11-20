@@ -97,7 +97,8 @@
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
-  import { getStatus, type Status } from './lib/api';
+  import { getStatus, tookTooLong, type Status } from './lib/api';
+  import { pollEvery } from './lib/pollEvery';
   import { prefs } from './lib/prefs.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { loadMe, me } from './lib/me.svelte';
@@ -838,28 +839,23 @@
   let status = $state<Status | null>(null);
   let statusFailed = $state(false);
   let toldProblem: string | null = null;
+  // Every 30 s on a timer, never a chain that awaits its answer (RC01, lib/pollEvery): one request that never ends can't stop it.
   $effect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        status = await getStatus();
-        if (!known.list.length) remember(status.sources);
-        statusFailed = false;
-        // A server problem is said once, in a toast, when it first shows (the sidebar keeps showing it).
-        const problem = status.problems[0] ?? null;
-        if (problem && problem !== toldProblem) toast.show({ text: problem, tone: 'error' });
-        toldProblem = problem;
-      } catch {
-        statusFailed = true;
+    return pollEvery(30_000, getStatus, (r) => {
+      // Let go at its hard limit while Cratarr answered its health (lib/api's `watch`): busy, not away, so the line stays as it was.
+      if (!r.ok) {
+        if (!tookTooLong(r.error)) statusFailed = true;
+        return;
       }
-      if (!stopped) timer = setTimeout(poll, 30_000);
-    }
-    poll();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
+      const now = r.value;
+      status = now;
+      if (!known.list.length) remember(now.sources);
+      statusFailed = false;
+      // A server problem is said once, in a toast, when it first shows (the sidebar keeps showing it).
+      const problem = now.problems[0] ?? null;
+      if (problem && problem !== toldProblem) toast.show({ text: problem, tone: 'error' });
+      toldProblem = problem;
+    });
   });
 
   const connection = $derived(
