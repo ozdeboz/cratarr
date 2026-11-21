@@ -47,7 +47,7 @@ fn on_change(name: &str, table: &str, columns: &[&str], body: &str) -> String {
 }
 
 /// The tables a record view reads, and of each the columns it reads (LV1).
-const RECORD: [&str; 12] = ["title", "artist", "year", "kind", "released", "genres", "cover", "counting", "counted_by_hand", "checked_by_hand", "merged_into", "retired_at"];
+const RECORD: [&str; 13] = ["title", "artist", "year", "kind", "released", "genres", "cover", "counting", "counting_ref", "counted_by_hand", "checked_by_hand", "merged_into", "retired_at"];
 const TRACK: [&str; 4] = ["record", "disc", "number", "retired_at"];
 const FILE: [&str; 9] = ["folder", "rel", "track", "format", "bitrate", "duration_ms", "gone_at", "trashed", "size"];
 const REFERENCE: [&str; 4] = ["subject", "value", "how", "confirmed"];
@@ -81,10 +81,10 @@ fn triggers() -> String {
         on_change("references_update", "\"references\"", &REFERENCE, &format!("{} {}", of_subject("OLD"), of_subject("NEW"))),
     ];
     for (table, columns) in [
-        ("reference_tracks", &["source", "tracks"][..]),
+        ("reference_tracks", &["source", "kind", "value", "tracks"][..]),
         ("record_artists", &["artist", "position", "how"][..]),
         ("record_labels", &["label", "catno", "how"][..]),
-        ("facts", &["fact", "source", "value"][..]),
+        ("facts", &["fact", "source", "ref", "value"][..]),
     ] {
         out.push(trigger(&format!("{table}_insert"), "INSERT", table, &record("NEW", "record")));
         out.push(trigger(&format!("{table}_delete"), "DELETE", table, &record("OLD", "record")));
@@ -197,7 +197,7 @@ mod tests {
                     ))
                 }),
             ),
-            ("MusicBrainz's year read again", Box::new(|c: &Catalogue| c.said(night_ferry, "year", "musicbrainz", "2015", 9).unwrap())),
+            ("MusicBrainz's year read again", Box::new(|c: &Catalogue| c.said(night_ferry, "year", "musicbrainz", "release:R1", Some("2015"), 9).unwrap())),
             ("a source's list read", Box::new(|c: &Catalogue| c.set_reference_tracks(night_ferry, "discogs", &list).unwrap())),
             ("the list that counts set by hand", Box::new(|c: &Catalogue| assert!(c.set_counting(night_ferry, Some("discogs"), true).unwrap()))),
             (
@@ -221,7 +221,7 @@ mod tests {
         assert!(owed_now(&cat).is_empty(), "nothing changed, nothing owed");
         // Many writes before a move: one row a record.
         for year in 2000..2010 {
-            cat.said(night_ferry, "year", "discogs", &year.to_string(), year).unwrap();
+            cat.said(night_ferry, "year", "discogs", "", Some(&year.to_string()), year).unwrap();
         }
         assert_eq!(owed_now(&cat), [(night_ferry, Now::Changed)]);
         // The fold merging the other into it: the other merged (where it went), it changed (the tracks it took).
@@ -253,7 +253,7 @@ mod tests {
         let owed = cat.owed_records(10).unwrap();
         assert_eq!(owed.iter().map(|o| o.record).collect::<Vec<_>>(), [night_ferry], "owed still, for the start to move");
         // Read for a move, then written again before the move ends: it stays owed.
-        cat.said(night_ferry, "year", "musicbrainz", "2014", 1).unwrap();
+        cat.said(night_ferry, "year", "musicbrainz", "release:R1", Some("2014"), 1).unwrap();
         cat.owed_moved(&owed).unwrap();
         assert_eq!(cat.owed_records(10).unwrap().iter().map(|o| o.record).collect::<Vec<_>>(), [night_ferry], "owed anew, moved again");
         drop(cat);

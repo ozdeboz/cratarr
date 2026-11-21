@@ -96,6 +96,16 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         })
         .collect();
     let plays = copy_for(&choosing, Some(&crate::serve::copies::Viewer::default()), &on.without).map(|c| c.folder);
+    // What Replace in may put in a main library's place (RS4, RS7; the Library's rules, `copies::replace_offers` and `against`):
+    // someone's own better copy (RY01), and an arrival better than the copy that plays (RS13's `against`), by folder.
+    let mut replacing: Vec<(i64, i64)> = crate::serve::copies::replace_offers(&choosing, &on.without).into_iter().map(|(own, main)| (own.folder, main.folder)).collect();
+    for arrival in choosing.iter().filter(|c| c.kind == Kind::Incoming) {
+        if let Some((true, row)) = crate::serve::copies::against(&choosing, arrival)
+            && row.kind == Kind::Main
+        {
+            replacing.push((arrival.folder, row.folder));
+        }
+    }
     let facts = RecordFacts {
         id: row.id,
         title: row.title.clone(),
@@ -109,11 +119,15 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         hand: Vec::new(),
         copies,
         shortest,
-        picked: row.counted_by_hand,
+        only_guesses: read.copies.only_guesses,
+        picked: read.copies.picked,
+        lists: read.lists.clone(),
+        pick: read.pick.clone(),
         plays,
-        preview: read.bandcamp.clone(),
+        // The preview's album as the page's Bandcamp album view asks it: its `bc.` id (PAGE3-REPORT), never the page's address.
+        preview: read.bandcamp.as_deref().map(|page| crate::bandcamp::track_id(page, 0)),
         requests: around.requests.iter().map(|(asker, n)| (asker.clone(), n.to_string())).collect(),
-        replacing: Vec::new(),
+        replacing,
         editions: around.editions.clone(),
         libraries: around.libraries.clone(),
     };
@@ -394,8 +408,9 @@ mod tests {
     fn the_copy_reader_is_read_once_per_list() {
         const READERS: [&str; 5] = ["catalogue().copies_of(", "cat.copies_of(", ".copies_held(", ".requested_held(", ".record_read("];
         // (file, calls): what each reads.
-        let allowed: [(&str, usize, &str); 5] = [
+        let allowed: [(&str, usize, &str); 6] = [
             ("app/src/app/core/records.rs", 1, "one record: its view, or the handler deciding (`decided`)"),
+            ("incoming/src/app/albums.rs", 1, "one record's copies judged for copying (`judged_copies`: VR28, by the holding's pairs)"),
             ("playing/src/app/device_index.rs", 1, "every record of the index at once, at its build"),
             ("requests/src/app/requests.rs", 2, "every open request's record at once (`records_held`); one request's story (`held_for`)"),
             ("requests/src/app/had_vectors.rs", 1, "the vectors' records at once (a test)"),

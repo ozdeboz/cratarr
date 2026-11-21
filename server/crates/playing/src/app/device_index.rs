@@ -125,11 +125,13 @@ pub fn build(serve: &Serve, facts: &[Facts], libraries: &[index::Library], rev: 
     to.build(rev).map_err(refused)
 }
 
-/// The shortest list kept of each of these records that is partly there (HD12), by the holding (`holding()`, rules) over the copies
-/// the one reader gives (`Catalogue::copies_of`), every library counted: what the index's `whole_tracks` carries. The holding
-/// reads no fetcher and no owner here: whether a record is partly there is no account's. Blocking.
+/// The picked list's length of each of these records that is partly there (HD12, VR01's C14; the owner's
+/// OQ-VR-3 (b)): none without an administrator's pick, so the page and the device never print "7 of 10" before one. By the holding
+/// (`holding_of()`, rules) over the copies the one reader gives (`Catalogue::copies_of`), every library counted: what the index's
+/// `whole_tracks` carries. The holding reads no fetcher and no owner here: whether a record is partly there is no account's.
+/// Blocking.
 fn whole_tracks(serve: &Serve, records: &[i64]) -> Result<HashMap<i64, u32>> {
-    use cratarr_rules::holding::{Fetcher, Holding, Library, On, holding};
+    use cratarr_rules::holding::{Fetcher, Holding, Library, On, holding_of};
     let kinds = serve.library.kinds();
     let library = |folder: i64| match crate::serve::library::kind_in(&kinds, folder).0 {
         crate::settings::LibraryKind::Main => Library::Main,
@@ -139,8 +141,8 @@ fn whole_tracks(serve: &Serve, records: &[i64]) -> Result<HashMap<i64, u32>> {
     let held = serve.catalogue().copies_of(records, &library)?;
     Ok(held
         .into_iter()
-        .filter_map(|(record, c)| match holding(&c.copies, c.shortest, "", &On::all()) {
-            Holding::Partly { of, .. } => Some((record, u32::from(of))),
+        .filter_map(|(record, c)| match holding_of(&c.copies, c.kept(), "", &On::all()) {
+            Holding::Partly { of, .. } if c.picked => Some((record, u32::from(of))),
             _ => None,
         })
         .collect())
@@ -731,9 +733,10 @@ pub(super) mod tests {
         assert_eq!((device.record(record).unwrap().copies.len(), row.facts.folders.as_slice(), row.facts.lines.len()), (1, &[0][..], 0));
     }
 
-    /// HD12 (kind 6, H5): the index is built from `holding()`: Night Ferry's copy of 7 against its shortest list of 10 carries
-    /// `whole_tracks` 10, as the holding says Partly { 7, 10 }; Signal, whole, carries none. Red first: `whole_tracks` came from the
-    /// found-missing reading alone (`album_complete`), none here. Its kind as `resolve()` gives it is VR01's (DC1a).
+    /// HD12 (kind 6, H5): the index is built from `holding()`: Night Ferry's copy of 7 against its list of 10 reads Partly { 7, 10 },
+    /// and Signal, whole, carries none. Changed by design (VR01's C14; the owner's OQ-VR-3 (b); VR16 (b), VR47):
+    /// `whole_tracks` comes from a picked list alone, so Night Ferry carries none until root picks its list, then 10, and none again
+    /// after Reset. Red first: 10 unpicked (device_index.rs's `whole_tracks` read the shortest list, picked or not).
     #[test]
     fn the_index_is_built_from_holding_and_resolve() {
         let s = served("hd12", &[CopyKind::Main]);
@@ -753,8 +756,16 @@ pub(super) mod tests {
         let rows = s.index().rows();
         let row = |id: i64| rows.records.iter().find(|r| r.id == id).unwrap().clone();
         let (nf, sg) = (row(night_ferry), row(signal));
-        assert_eq!((nf.whole_tracks, nf.copies.iter().map(|c| c.tracks).collect::<Vec<_>>()), (Some(10), vec![7]), "its copy 7, whole at 10");
+        assert_eq!((nf.whole_tracks, nf.copies.iter().map(|c| c.tracks).collect::<Vec<_>>()), (None, vec![7]), "its copy 7, no count before a pick");
         assert_eq!(sg.whole_tracks, None, "whole: none to make up");
+        // Root picks MusicBrainz's list (the list 0.17 kept, keyed by none until the step keys it): the count shows, 10.
+        let kept = s.cat.lists_kept(night_ferry).unwrap();
+        s.cat.pick_list(night_ferry, Some(&kept[0].reference)).unwrap();
+        let picked = s.index().rows().records.iter().find(|r| r.id == night_ferry).unwrap().whole_tracks;
+        assert_eq!(picked, Some(10), "from the picked list");
+        s.cat.pick_list(night_ferry, None).unwrap();
+        let reset = s.index().rows().records.iter().find(|r| r.id == night_ferry).unwrap().whole_tracks;
+        assert_eq!(reset, None, "after Reset, none again");
     }
 
     /// What the library's build makes of what is no file: a year set by hand, a type, a whole release's count. Nothing is written

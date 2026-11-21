@@ -618,15 +618,17 @@ struct Song<'a> {
 pub const UNKNOWN_ARTIST: &str = "[Unknown Artist]";
 
 fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
-    let file_name = row.rel.rsplit('/').next().unwrap_or(&row.rel);
-    let stem = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s);
-    let title = row.first("title").unwrap_or(stem).to_string();
+    // OBJ5: a track's title by the one rule (its name, else its file's), as every surface names it.
+    let title = cratarr_rules::names::track_title(row.first("title"), &row.rel);
     let list = |list: &str, text: &str| {
         let from = if row.all(list).next().is_some() { list } else { text };
         rules.values(from, &row.all(from).map(str::to_string).collect::<Vec<_>>())
     };
     let artists = list("artists", "artist");
-    let artist_credit = row.first("artist").map(str::to_string).or_else(|| (!artists.is_empty()).then(|| artists.join(", ")));
+    // OBJ5, NAMES.23: the credit by the one formatter over the artists the file names (`credit_text`), never its ARTIST text raw
+    // ("Commodo / Alfa Mist" is two artists' credit, "Commodo & Alfa Mist").
+    let named: Vec<&str> = artists.iter().map(String::as_str).collect();
+    let artist_credit = Some(cratarr_rules::names::credit_text(&named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
     // The album artist as the file credits it, else the song's artist.
     let album_artist = row.first("albumartist").map(str::to_string).or_else(|| artist_credit.clone()).unwrap_or_else(|| UNKNOWN_ARTIST.into());
     let mut album_artists = list("albumartists", "albumartist");

@@ -27,6 +27,11 @@ pub struct Described {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_id: Option<String>,
+    /// Its record's type and secondary types as the Library list serves them (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     pub duration_secs: Option<f64>,
     /// Whether it can be added to a playlist: a file Cratarr can see.
     pub addable: bool,
@@ -66,7 +71,7 @@ pub fn ours(serve: &crate::serve::Serve, asked: &[(String, String)], account: Op
         Some(a) => serve.userdata.starred(a, crate::userdata::Kind::Song)?.into_iter().collect(),
         None => HashSet::new(),
     };
-    Ok(asked
+    let mut out: Vec<Option<Described>> = asked
         .iter()
         .zip(&own)
         .map(|((source, id), o)| {
@@ -84,9 +89,19 @@ pub fn ours(serve: &crate::serve::Serve, asked: &[(String, String)], account: Op
                 found: true,
                 path: Some(s.path.clone()),
                 own: Some(s.id.clone()),
+                ..Described::default()
             })
         })
-        .collect())
+        .collect();
+    // GOTO.S1, S6: each track its record's type, as the Library list serves it, one read for them all.
+    let albums: Vec<String> = out.iter().flatten().filter_map(|d| d.album_id.clone()).collect();
+    let types = serve.record_types(&albums);
+    for d in out.iter_mut().flatten() {
+        if let Some((kind, secondary)) = d.album_id.as_ref().and_then(|a| types.get(a)) {
+            (d.album_type, d.album_secondary) = (kind.clone(), secondary.clone());
+        }
+    }
+    Ok(out)
 }
 
 /// A Bandcamp preview's track from its album's page (read in turn, kept a few minutes): its album is the page's
@@ -108,6 +123,8 @@ pub async fn bandcamp(id: &str) -> Option<Described> {
         found: true,
         path: None,
         own: None,
+        // A preview's type is the record's that holds its page (GOTO.S1): none said here, its album not Cratarr's.
+        ..Described::default()
     })
 }
 

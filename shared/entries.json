@@ -5,199 +5,239 @@
       "name": "play",
       "title": "Play",
       "icon": "play",
-      "group": "play"
+      "group": "play",
+      "away": true
     },
     {
       "name": "resume",
       "title": "Resume",
       "icon": "resume",
-      "group": "play"
+      "group": "play",
+      "away": false
     },
     {
       "name": "shuffle",
       "title": "Shuffle",
       "icon": "shuffle",
-      "group": "play"
+      "group": "play",
+      "away": true
     },
     {
       "name": "play_next",
       "title": "Play next",
       "icon": "playNext",
-      "group": "play"
+      "group": "play",
+      "away": true
     },
     {
       "name": "add_to_queue",
       "title": "Add to queue",
       "icon": "listAdd",
-      "group": "play"
+      "group": "play",
+      "away": true
     },
     {
       "name": "start_radio",
       "title": "Start radio",
       "icon": "radio",
-      "group": "play"
+      "group": "play",
+      "away": false
     },
     {
       "name": "want",
       "title": "Want",
       "icon": "circlePlus",
-      "group": "want"
+      "group": "want",
+      "away": false
     },
     {
       "name": "requested",
       "title": "Requested",
       "icon": "inbox",
-      "group": "want"
+      "group": "want",
+      "away": false
     },
     {
       "name": "view",
       "title": "View {type}",
       "icon": "squareArrowOutUpRight",
-      "group": "go"
+      "group": "go",
+      "away": true
     },
     {
       "name": "go_artist",
       "title": "Go to {name}",
       "icon": "user",
-      "group": "go"
+      "group": "go",
+      "away": true
     },
     {
       "name": "go_genre",
       "title": "Go to {name}",
       "icon": "swatch",
-      "group": "go"
+      "group": "go",
+      "away": true
     },
     {
       "name": "sounds_like",
       "title": "Sounds like this",
       "icon": "music",
-      "group": "go"
+      "group": "go",
+      "away": false
     },
     {
       "name": "favourite",
       "title": "Favourite",
       "icon": "heart",
-      "group": "feel"
+      "group": "feel",
+      "away": true
     },
     {
       "name": "rating",
       "title": "Rating",
       "icon": "star",
-      "group": "feel"
+      "group": "feel",
+      "away": true
     },
     {
       "name": "add_to_playlist",
       "title": "Add to playlist",
       "icon": "playlists",
-      "group": "collect"
+      "group": "collect",
+      "away": true
     },
     {
       "name": "download",
       "title": "Download…",
       "icon": "arrowDownToLine",
-      "group": "take"
+      "group": "take",
+      "away": false
     },
     {
       "name": "sync",
       "title": "Sync to this device",
       "icon": "download",
-      "group": "take"
+      "group": "take",
+      "away": false
     },
     {
       "name": "remove_from_device",
       "title": "Remove from this device",
       "icon": "trash",
-      "group": "take"
+      "group": "take",
+      "away": true
     },
     {
       "name": "share",
       "title": "Share",
       "icon": "share",
-      "group": "take"
+      "group": "take",
+      "away": false
     },
     {
       "name": "web_search",
       "title": "Web search",
       "icon": "search",
-      "group": "know"
+      "group": "know",
+      "away": true
     },
     {
       "name": "genius_search",
       "title": "Genius search",
       "icon": "search",
-      "group": "know"
+      "group": "know",
+      "away": true
     },
     {
       "name": "edit",
       "title": "Edit",
       "icon": "pencil",
-      "group": "change"
+      "group": "change",
+      "away": false
     },
     {
       "name": "change_cover",
       "title": "Change cover",
       "icon": "image",
-      "group": "change"
+      "group": "change",
+      "away": false
     },
     {
       "name": "missing_tracks",
       "title": "Missing tracks…",
       "icon": "search",
-      "group": "change"
+      "group": "change",
+      "away": false
     },
     {
       "name": "play_from",
       "title": "Play from {library}",
       "icon": "play",
-      "group": "library"
+      "group": "library",
+      "away": false
     },
     {
       "name": "cancel_conversion",
       "title": "Cancel conversion",
       "icon": "close",
-      "group": "library"
+      "group": "library",
+      "away": false
     },
     {
       "name": "save_to",
       "title": "Save to {library}",
       "icon": "save",
-      "group": "library"
+      "group": "library",
+      "away": false
     },
     {
       "name": "move_to",
       "title": "Move to {library}",
       "icon": "intoBox",
-      "group": "library"
+      "group": "library",
+      "away": false
     },
     {
       "name": "add_to",
       "title": "Add to {library}",
       "icon": "plus",
-      "group": "library"
+      "group": "library",
+      "away": false
     },
     {
       "name": "replace_in",
       "title": "Replace in {library}",
       "icon": "swap",
-      "group": "library"
+      "group": "library",
+      "away": false
+    },
+    {
+      "name": "use_this",
+      "title": "Use this",
+      "icon": "check",
+      "group": "library",
+      "away": false
     },
     {
       "name": "delete",
       "title": "Delete {type}",
       "icon": "trash",
-      "group": "remove"
+      "group": "remove",
+      "away": false
     },
     {
       "name": "delete_from",
       "title": "Delete from {library}",
       "icon": "trash",
-      "group": "remove"
+      "group": "remove",
+      "away": false
     },
     {
       "name": "delete_arrival",
       "title": "Delete",
       "icon": "trash",
-      "group": "remove"
+      "group": "remove",
+      "away": false
     }
   ]
 }

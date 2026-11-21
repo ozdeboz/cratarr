@@ -590,6 +590,9 @@ pub const NAME_MOST: usize = 500;
 /// of it, and the label whose page it was opened from, where it was.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Opened {
+    /// A record already kept, opened by its id (`al-<n>`): its page's open (RV12), which begins its read.
+    #[serde(default)]
+    pub record: Option<String>,
     #[serde(default)]
     pub release_group: Option<String>,
     #[serde(default)]
@@ -628,6 +631,13 @@ impl Opened {
 /// label listed), is not tied to a label by asking. Never by its names alone: a row with no reference, or no title, is none; a title
 /// or an artist longer than `NAME_MOST` is refused. Blocking.
 pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
+    // A record already kept, by its id: the one it is now (a merged one's end), or none where it is gone (RV3, RV4).
+    if let Some(id) = o.record.as_deref() {
+        return Ok(match ids::record_number(id) {
+            Some(n) => cat.record(n)?.map(|r| r.id),
+            None => None,
+        });
+    }
     let refs = o.refs();
     let label = o.label.as_deref().and_then(ids::label_number);
     let mut listed = None;
@@ -1617,6 +1627,7 @@ pub mod tests {
     pub fn open_row(cat: &Catalogue, label: i64, l: &LabelListed) -> i64 {
         let r = &l.reference;
         let o = Opened {
+            record: None,
             release_group: (r.kind == "release-group").then(|| r.value.clone()),
             discogs_master: (r.source == "discogs" && r.kind == "master").then(|| r.value.parse().unwrap()),
             discogs_release: (r.source == "discogs" && r.kind == "release").then(|| r.value.parse().unwrap()),
@@ -1747,7 +1758,7 @@ pub mod tests {
         let page = settled(&cat, label, None, &[]).await;
         assert_eq!(page.not_had.len(), 1);
         let row = &page.not_had[0];
-        let o = Opened { release_group: row.release_group.clone(), discogs_master: row.discogs_master, discogs_release: row.discogs_release, title: row.title.clone(), artist: row.artist.clone(), year: row.year, label: Some(ids::label(label)) };
+        let o = Opened { record: None, release_group: row.release_group.clone(), discogs_master: row.discogs_master, discogs_release: row.discogs_release, title: row.title.clone(), artist: row.artist.clone(), year: row.year, label: Some(ids::label(label)) };
         let record = open_record(&cat, &o).unwrap().unwrap();
         let held: Vec<(String, String)> = cat.references_of(&ids::record(record)).unwrap().into_iter().map(|(r, _)| (r.kind, r.value)).collect();
         assert!(held.contains(&("release-group".into(), G.into())) && held.contains(&("release".into(), "3600070".into())), "made with them all: {held:?}");

@@ -127,7 +127,7 @@ async fn every_list_names_a_records_cover_by_the_record() {
     assert_eq!(missing, [own.clone()], "the missing list");
     let none = |_: Ref| std::future::ready(Ok::<Option<crate::app::references::Read>, anyhow::Error>(None));
     let t = crate::app::moment::now_secs();
-    let Some(crate::app::playing::RecordPage::NotHad(view)) = crate::app::playing::page_at(&cat, record, t, none).await.unwrap() else { panic!("a page") };
+    let Some(crate::app::playing::RecordPage::NotHad(view)) = crate::app::playing::open_at(&cat, record, t, none).await.unwrap() else { panic!("a page") };
     assert_eq!(view.more.cover.as_deref(), Some(own.as_str()), "the record's page");
     let found = |group: &str| FoundAlbum { release_group: group.into(), title: "Night Walks".into(), artist: "Kite Theory".into(), year: Some(2020), kind: Some("Album".into()), cover: format!("/api/covers/release-group/{group}"), have: false };
     let elsewhere = "00000000-0000-4000-8000-000000000f20";

@@ -243,6 +243,11 @@ pub struct TrackRow {
     pub artist: String,
     pub album: String,
     pub album_id: String,
+    /// Its record's type and secondary types as the Library list serves them (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track_no: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -293,11 +298,14 @@ fn track_row(r: &rusqlite::Row) -> rusqlite::Result<TrackRow> {
         bpm: r.get::<_, Option<i64>>(13)?.filter(|b| *b > 0),
         album_artist: r.get::<_, Option<String>>(14)?.filter(|a| !a.is_empty()),
         last_played: None,
+        album_type: r.get(15)?,
+        album_secondary: r.get::<_, Option<String>>(16)?.unwrap_or_default().split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect(),
     })
 }
 
 const TRACK_ROW_COLS: &str = "s.id, s.title, coalesce(s.artist, ''), s.album, s.album_id, s.track_no, s.disc_no, s.duration_ms, s.year, s.created,
-  s.suffix, s.kbps, s.order_title, s.bpm, s.album_artist";
+  s.suffix, s.kbps, s.order_title, s.bpm, s.album_artist,
+  (SELECT a.release_type FROM albums a WHERE a.id = s.album_id), (SELECT a.secondary FROM albums a WHERE a.id = s.album_id)";
 
 /// How many albums, artists, tracks and genres a search matches in all (decision 0072: a group's header counts them).
 #[derive(Debug, Default, Clone, Copy, PartialEq)]

@@ -11,7 +11,7 @@
 //!   hold something.
 //! - **Its versions** are its copies in the place's set and its editions, the one that plays marked (RS4, RS5).
 
-use cratarr_rules::holding::{CopyFacts, Holding, Library, On, holding};
+use cratarr_rules::holding::{CopyFacts, Holding, Kept, Library, On, holding_of};
 use cratarr_rules::names::credit_text;
 
 use crate::can::{Action, ArrivalFacts, Decision, Record, RecordCopy, Target, Viewer, decide};
@@ -74,10 +74,15 @@ pub struct RecordFacts {
     pub hand: Vec<String>,
     /// Every copy the store knows, present or gone.
     pub copies: Vec<CopyOf>,
-    /// The shortest list it keeps, in tracks.
+    /// The shortest list that judges it, in tracks (the pick's, where one judges).
     pub shortest: Option<u16>,
+    /// The only lists it keeps are guesses' (VR12 rule 6): not known whole.
+    pub only_guesses: bool,
     /// An administrator picked the list it counts by.
     pub picked: bool,
+    /// Every list it keeps, by reference (VR01), and the pick among them: its versions and its tracklist fact (VR38).
+    pub lists: Vec<crate::facts::List>,
+    pub pick: Option<crate::facts::Reference>,
     /// The catalogue folder of the copy that plays for this viewer in this place (`copy_for` over the place's set), if one does.
     pub plays: Option<i64>,
     /// A page that previews it (Bandcamp's).
@@ -121,6 +126,11 @@ impl RecordFacts {
         self.copies.iter().map(|c| c.facts.clone()).collect()
     }
 
+    /// What judges its copies whole (VR12 rules 1, 5, 6).
+    pub fn kept(&self) -> Kept {
+        if self.only_guesses { Kept::OnlyGuesses } else { Kept::of(self.shortest) }
+    }
+
     /// What `decide` reads of it for this viewer: its present copies, the one that plays here, its preview, its holding as the
     /// requests read it (every library, HD7), its open requests.
     pub fn record(&self, viewer: &Viewer) -> Record {
@@ -132,14 +142,14 @@ impl RecordFacts {
                 .collect(),
             plays: self.plays.and_then(|f| present.iter().position(|c| c.facts.folder == f)),
             preview: self.preview.is_some(),
-            holding: holding(&self.facts(), self.shortest, &viewer.account, &On::all()),
+            holding: holding_of(&self.facts(), self.kept(), &viewer.account, &On::all()),
             open_requests: self.requests.iter().map(|(asker, _)| asker.clone()).collect(),
         }
     }
 
     /// The holding in the place's set (HD7).
     pub fn holding(&self, seen: &Seen) -> Holding {
-        holding(&self.facts(), self.shortest, &seen.viewer.account, &library_set(seen.place, seen.off))
+        holding_of(&self.facts(), self.kept(), &seen.viewer.account, &library_set(seen.place, seen.off))
     }
 }
 
@@ -234,7 +244,9 @@ fn candidates(r: &RecordFacts, seen: &Seen) -> Vec<Candidate> {
     for (action, name) in [(Action::Favourite, "favourite"), (Action::Rating, "rating"), (Action::AddToPlaylist, "add_to_playlist")] {
         out.push(c(action, name, String::new(), Section::Go));
     }
-    for (action, name) in [(Action::Download, "download"), (Action::Sync, "sync")] {
+    // On this device (RS8): Sync and Download… where it doesn't keep the record, Remove from this device where it does; which of
+    // them shows is the device's own kept state, never a right: the server sends the three by the one right (CN1's `sync`).
+    for (action, name) in [(Action::Download, "download"), (Action::Sync, "sync"), (Action::Sync, "remove_from_device")] {
         out.push(c(action, name, String::new(), Section::Device));
     }
     for (action, name) in [(Action::Edit, "edit"), (Action::ChangeCover, "change_cover")] {
@@ -404,7 +416,7 @@ pub fn actions(r: &RecordFacts, seen: &Seen) -> Vec<ActionView> {
     for cand in candidates(r, seen) {
         let confirm = match decide(seen.viewer, &cand.action, &record) {
             Decision::Allow => None,
-            Decision::AskFirst(_) => Some(format!("{}?", titled(cand.name, &cand.fill))),
+            Decision::AskFirst(_) => Some(confirm_steps(r, &cand)),
             Decision::Deny(_) => continue,
         };
         let Some((method, href, fields)) = address(r, &cand.action) else { continue };
@@ -420,9 +432,25 @@ pub fn actions(r: &RecordFacts, seen: &Seen) -> Vec<ActionView> {
             href,
             fields: Some(fields),
             confirm,
+            away: e.away,
         });
     }
     out
+}
+
+/// The yeses an action asks first, in order (RS25): its own question; and a Delete of the main library's copy (the first main
+/// library, which takes every fallback) asks again, decision 0034's extra step ("Primary should get an extra step in the
+/// confirmation"). The page asks each in turn and sends nothing on a no; it reads no library's kind to decide them.
+fn confirm_steps(r: &RecordFacts, cand: &Candidate) -> Vec<String> {
+    let mut steps = vec![format!("{}?", titled(cand.name, &cand.fill))];
+    if let Action::Delete { copy } = cand.action {
+        let primary = r.libraries.iter().find(|l| l.library == Library::Main).map(|l| l.folder);
+        let folder = r.present().get(copy).map(|c| c.facts.folder);
+        if folder.is_some() && folder == primary {
+            steps.push(format!("{} is your main library. Delete it anyway?", r.library_name(folder.unwrap_or_default())));
+        }
+    }
+    steps
 }
 
 /// Where it goes from here (Siren's links): View (never on its own page, RS14), Go to its artists and genres, Sounds like this,
@@ -432,7 +460,7 @@ pub fn links(r: &RecordFacts, seen: &Seen) -> Vec<Link> {
     let id = record_id(r.id);
     let link = |name: &str, fill: &str, href: String| {
         let e = entry(name);
-        Link { name: name.to_string(), title: titled(name, fill), icon: e.icon.to_string(), group: e.group, section: Section::Go, href }
+        Link { name: name.to_string(), title: titled(name, fill), icon: e.icon.to_string(), group: e.group, section: Section::Go, href, away: e.away }
     };
     let mut out = Vec::new();
     if seen.place.when().view {
@@ -476,6 +504,7 @@ pub fn versions(r: &RecordFacts, seen: &Seen) -> Vec<Version> {
                 tracks: None,
                 plays,
                 action: (!plays).then(|| "play_from".to_string()),
+                sources: Vec::new(),
             }
         })
         .collect();
@@ -488,7 +517,26 @@ pub fn versions(r: &RecordFacts, seen: &Seen) -> Vec<Version> {
         tracks: Some(e.tracks),
         plays: false,
         action: Some("view".to_string()),
+        sources: Vec::new(),
     }));
+    // A record not had: its services' lists are its versions, none chosen (VR4, FA5; OQ-VR-2 (a): each line opens its version in
+    // place); a guess's list none (VR8). A record had: its copies and editions alone, the lists in References (OQ-DC1-4 (a), VR34).
+    if r.present().is_empty() {
+        let t = crate::facts::tracklist(None, &r.lists, r.pick.as_ref());
+        let pick = |v: &crate::facts::ListVersion| r.pick.as_ref().is_some_and(|p| v.holds(p));
+        out.extend(t.versions.iter().map(|v| Version {
+            kind: VersionKind::Tracklist,
+            id: v.refs.iter().map(|x| format!("{}:{}:{}", x.source, x.kind, x.value)).collect::<Vec<_>>().join(" "),
+            record: id.clone(),
+            library: None,
+            quality: None,
+            tracks: Some(u16::try_from(v.tracks.len()).unwrap_or(u16::MAX)),
+            plays: pick(v),
+            // Use this is an administrator's (VR5); a line opens its version's tracks in place for everyone.
+            action: (seen.viewer.role == crate::can::Role::Administrator && !pick(v)).then(|| "use_this".to_string()),
+            sources: v.by.iter().map(|s| crate::facts::source_word(s).to_string()).collect(),
+        }));
+    }
     if out.len() < 2 {
         out.clear();
     }
@@ -510,7 +558,7 @@ fn properties(r: &RecordFacts) -> RecordProperties {
         credit: credit_text(&names, None),
         year: FactView { value: r.year, by: fact("year") },
         labels: FactView::of(r.labels.clone()),
-        cover: FactView { value: r.cover.clone(), by: fact("cover") },
+        cover: FactView { value: Some(cratarr_rules::ids::record_picture(&record_id(r.id), r.cover.as_deref())), by: fact("cover") },
     }
 }
 
@@ -562,7 +610,7 @@ pub fn row(r: &RecordFacts, seen: &Seen) -> Row {
         credit: credit_text(&names, None),
         kind: r.kind.clone(),
         year: r.year,
-        cover: r.cover.clone(),
+        cover: Some(cratarr_rules::ids::record_picture(&record_id(r.id), r.cover.as_deref())),
         state: state(r, seen),
     }
 }
@@ -666,13 +714,150 @@ mod tests {
             assert!(!library.iter().any(|t| t.contains(never)), "root: {never} in {library:?}");
         }
         let delete = roots.iter().find(|a| a.title == "Delete from MUSIC").unwrap();
-        assert_eq!(delete.confirm.as_deref(), Some("Delete from MUSIC?"), "a yes first");
+        assert_eq!(delete.confirm.as_ref().map(|c| c[0].as_str()), Some("Delete from MUSIC?"), "a yes first");
         assert_eq!(delete.fields.as_ref().and_then(|f| f.from.as_deref()), Some("/music/MUSIC"), "its copy named by its library's id");
         let moved = roots.iter().find(|a| a.title == "Move to MORE from MUSIC").unwrap();
         assert_eq!((moved.href.as_str(), moved.fields.as_ref().unwrap().to.as_deref()), ("/api/albums/cratarr/al-42/move", Some("/music/MORE")));
         let alices = actions(&night_ferry("alice"), &seen(&alice));
         assert_eq!(titles(&alices, Section::Library), ["Play from Your music", "Delete from Your music"], "hers: Play from and her own Delete");
         assert!(alices.iter().all(|a| !a.title.starts_with("Move") && !a.title.starts_with("Save")));
+    }
+
+    /// RS25 (decision 0034, 2026-11-21): Delete from the main library asks twice, in the server's words: "Delete from
+    /// MUSIC?" and "MUSIC is your main library. Delete it anyway?"; another library's Delete (IN's arrival, OWN-A's) asks once, and
+    /// an action that asks nothing carries no step. Red first: `confirm` one string, the second step dropped (PAGE3-REPORT).
+    #[test]
+    fn deleting_from_the_main_library_asks_twice() {
+        let (root, alice) = (root(), alice());
+        let place = Place::Library;
+        let roots = actions(&night_ferry("root"), &Seen { viewer: &root, place: &place, off: &[], rev: 1 });
+        let music = roots.iter().find(|a| a.title == "Delete from MUSIC").unwrap();
+        assert_eq!(music.confirm.clone().unwrap(), ["Delete from MUSIC?", "MUSIC is your main library. Delete it anyway?"], "two steps, in order");
+        let hers = actions(&night_ferry("alice"), &Seen { viewer: &alice, place: &place, off: &[], rev: 1 });
+        let own = hers.iter().find(|a| a.title == "Delete from Your music").unwrap();
+        assert_eq!(own.confirm.as_ref().map(Vec::len), Some(1), "not the main library: one step");
+        let mut more = night_ferry("root");
+        more.copies[1] = copy(MORE, Library::Main, "FLAC", 200);
+        more.replacing.clear();
+        let mores = actions(&more, &Seen { viewer: &root, place: &place, off: &[], rev: 1 });
+        let other_main = mores.iter().find(|a| a.title == "Delete from MORE").unwrap();
+        assert_eq!(other_main.confirm.as_ref().map(Vec::len), Some(1), "MORE is a main library, not the main one: one step");
+        assert!(roots.iter().filter(|a| a.name == "play").all(|a| a.confirm.is_none()), "nothing asked: no step");
+    }
+
+    /// RS8 and RS17 (the server's half): every action and link the record sends says whether it works with Cratarr away, by the
+    /// entries' table (the page's `WORKS_AWAY` for a record): the large actions that play what the device holds, View and Go to,
+    /// Favourite, Rating, Add to playlist, Remove from this device and the web searches do; Start radio, Sync, Download…, Want, the
+    /// Library section's and the Remove group's need Cratarr. Red first: no `away` mark (the page's own set, menuTable.ts).
+    #[test]
+    fn every_record_action_says_whether_it_works_away() {
+        let root = root();
+        let place = Place::Library;
+        let seen = Seen { viewer: &root, place: &place, off: &[], rev: 1 };
+        let mut r = night_ferry("root");
+        r.genres = vec!["Ambient".into()];
+        let e = entity(&r, &seen);
+        let away: Vec<(&str, bool)> = e.actions.iter().map(|a| (a.name.as_str(), a.away)).chain(e.links.iter().map(|l| (l.name.as_str(), l.away))).collect();
+        for works in ["play", "shuffle", "play_next", "add_to_queue", "go_artist", "go_genre", "favourite", "rating", "add_to_playlist", "remove_from_device", "web_search", "genius_search"] {
+            assert!(away.contains(&(works, true)), "{works} works away: {away:?}");
+        }
+        for needs in ["start_radio", "sync", "download", "move_to", "save_to", "replace_in", "delete_from", "play_from", "edit", "change_cover", "sounds_like", "share"] {
+            assert!(away.iter().all(|(n, a)| *n != needs || !*a), "{needs} needs Cratarr: {away:?}");
+        }
+        for needs in ["start_radio", "sync", "download", "move_to", "delete_from", "share"] {
+            assert!(away.iter().any(|(n, _)| *n == needs), "{needs} sent, marked: {away:?}");
+        }
+        // View, from a place that offers it; and the table says it for every entry, the page reading no set of its own.
+        let search = Place::Search;
+        let from_search = entity(&r, &Seen { viewer: &root, place: &search, off: &[], rev: 1 });
+        assert!(from_search.links.iter().any(|l| l.name == "view" && l.away), "View works away");
+        assert!(crate::words::ENTRIES.iter().all(|x| x.away == crate::words::WORKS_AWAY.contains(&x.name)));
+        assert!(!entry("start_radio").away && !entry("want").away, "never Start radio; Want needs Cratarr");
+    }
+
+    fn listed(source: &str, kind: &str, value: &str, n: u32) -> crate::facts::List {
+        let tracks = (1..=n).map(|i| crate::facts::RefTrack { disc: 1, position: i, title: format!("A{i}"), length_ms: Some(200_000 + i64::from(i) * 7_000), recording: None }).collect();
+        crate::facts::List { reference: crate::facts::Reference::new(source, kind, value), tracks, at: 1, guessed: false }
+    }
+
+    /// Answered `al-7`, not had: MusicBrainz's 9 and Bandcamp's 9 agreeing, Discogs' 11 (VR4).
+    fn answered() -> RecordFacts {
+        RecordFacts {
+            id: 7,
+            title: "Answered".into(),
+            artists: vec![Named { id: "ar-9".into(), name: "Kite Theory".into(), catno: None }],
+            lists: vec![listed("musicbrainz", "release", "R7", 9), listed("bandcamp", "album", "P7", 9), listed("discogs", "release", "D7", 11)],
+            shortest: Some(9),
+            libraries: libraries("alice"),
+            ..RecordFacts::default()
+        }
+    }
+
+    /// VR4 and FA5 (the entity's half): a record not had's versions are its lists, none chosen: two Tracklist lines, "9 tracks ·
+    /// MusicBrainz, Bandcamp" and "11 tracks · Discogs", neither marked; root's lines carry Use this, alice's none; the card says 2
+    /// versions; a guess's list is no line (VR8). Red first: a record not had had no versions (part 1: copies and editions alone).
+    #[test]
+    fn a_record_not_hads_versions_are_its_lists() {
+        let (root, alice) = (root(), alice());
+        let place = Place::Search;
+        let mut r = answered();
+        r.lists.push(crate::facts::List { guessed: true, ..listed("bandcamp", "album", "P7s", 7) });
+        let roots = versions(&r, &Seen { viewer: &root, place: &place, off: &[], rev: 1 });
+        let lines: Vec<(VersionKind, Option<u16>, Vec<&str>, bool, Option<&str>)> =
+            roots.iter().map(|v| (v.kind, v.tracks, v.sources.iter().map(String::as_str).collect(), v.plays, v.action.as_deref())).collect();
+        assert_eq!(
+            lines,
+            [
+                (VersionKind::Tracklist, Some(9), vec!["MusicBrainz", "Bandcamp"], false, Some("use_this")),
+                (VersionKind::Tracklist, Some(11), vec!["Discogs"], false, Some("use_this")),
+            ]
+        );
+        let hers = versions(&r, &Seen { viewer: &alice, place: &place, off: &[], rev: 1 });
+        assert!(hers.iter().all(|v| v.action.is_none()), "a user picks nothing");
+        assert_eq!(card(&r, &Seen { viewer: &alice, place: &place, off: &[], rev: 1 }).versions, 2, "the card says 2 versions");
+        // Picked (VR5, FA6): the pick's line marked, first; no Use this on it.
+        r.pick = Some(crate::facts::Reference::new("discogs", "release", "D7"));
+        let picked = versions(&r, &Seen { viewer: &root, place: &place, off: &[], rev: 1 });
+        assert_eq!((picked[0].tracks, picked[0].plays, picked[0].action.as_deref()), (Some(11), true, None));
+    }
+
+    /// VR34, VR35 (one record; OQ-DC1-4 (a)): a had record's Versions are its copies and editions alone: a service's differing
+    /// list is no line (References shows it); a record not had that gets its first copy loses its Tracklist lines. Red first: none
+    /// (no Tracklist lines at all before VR01).
+    #[test]
+    fn a_had_records_versions_are_its_copies_and_editions() {
+        let root = root();
+        let place = Place::Library;
+        let seen = Seen { viewer: &root, place: &place, off: &[], rev: 1 };
+        let mut had = night_ferry("root");
+        had.lists = vec![listed("musicbrainz", "release", "R42", 10), listed("discogs", "release", "D42", 12)];
+        assert!(versions(&had, &seen).iter().all(|v| v.kind == VersionKind::Copy), "copies alone: {:?}", versions(&had, &seen));
+        let mut now_had = answered();
+        now_had.copies = vec![copy(IN2, Library::Incoming { fetcher: Fetcher::Soulseek, uploader: None }, "FLAC", 100)];
+        assert!(versions(&now_had, &seen).iter().all(|v| v.kind != VersionKind::Tracklist), "VR35: its lists are no lines once it is had");
+    }
+
+    /// VR16 (b) and VR47 (the record's view): a had record's own page shows no count until an administrator picks a list, then
+    /// the count; VR12 rule 6: only guesses kept, not known whole, no count. Red first: part 1's entity counted by `shortest`
+    /// whatever judged it (no pick read; no rule 6).
+    #[test]
+    fn a_had_records_own_page_counts_as_the_owner_picks() {
+        let root = root();
+        let place = Place::Library;
+        let seen = Seen { viewer: &root, place: &place, off: &[], rev: 1 };
+        let mut seven = night_ferry("root");
+        seven.copies.truncate(1);
+        seven.copies[0].facts.present = 7;
+        seven.copies[0].facts.paired = 7;
+        let e = entity(&seven, &seen);
+        assert_eq!((e.state.is, e.state.words.as_str()), (crate::view::Is::Partly, "In your library"), "no count before a pick");
+        seven.picked = true;
+        assert_eq!(entity(&seven, &seen).state.words, "Partly there · 7 of 10", "VR47: the pick shows the count");
+        seven.picked = false;
+        seven.only_guesses = true;
+        seven.shortest = None;
+        let unknown = entity(&seven, &seen);
+        assert_eq!((unknown.state.is, unknown.state.words.as_str()), (crate::view::Is::Unknown, "Not known whole"), "rule 6: no count");
     }
 
     /// RV2's shape: a record not had has the same entity, its state saying what it is; the preview's Play row and Want, nothing that

@@ -1791,6 +1791,8 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         .map(|t| {
             let id = crate::bandcamp::track_id(&a.url, t.n);
             crate::app::PlaylistRow {
+                picture: None,
+                artists: Vec::new(),
                 entry: id.clone(),
                 file: t.title.clone(),
                 id: t.plays().then_some(id),
@@ -5287,12 +5289,31 @@ async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery
 /// as merged now, else one made now with it. Never by its names alone: a row with no reference is refused.
 async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Result<Json<serde_json::Value>, ApiError> {
     let cat = ctx.app.library.catalogue();
-    let record = crate::run::spawn_blocking(move || crate::app::labels::open_record(&cat, &b))
+    let by_id = b.record.is_some();
+    let c = cat.clone();
+    let record = crate::run::spawn_blocking(move || crate::app::labels::open_record(&c, &b))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
-        .ok_or_else(|| ToggleError::Refused("An album is opened by what MusicBrainz or Discogs knows it by, and its title.".into()))?;
-    Ok(Json(json!({ "record": crate::serve::ids::record(record) })))
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let record = match record {
+        Some(r) => r,
+        None if by_id => return Err(ToggleError::NotFound(cratarr_domain::words::GONE.into()).into()),
+        None => return Err(ToggleError::Refused("An album is opened by what MusicBrainz or Discogs knows it by, and its title.".into()).into()),
+    };
+    // RV12: the record's read begins at its open, as a job (never on its GET): a record not had's sources read, what they say learnt;
+    // a had record's references read for its References (the owner: every lookup a job begun by an open or a schedule).
+    let had = cat.record(record).ok().flatten().is_some_and(|r| r.had);
+    if !had {
+        let _ = crate::app::references::read_at_open(&cat, record, crate::app::moment::now_secs(), crate::app::references::read_reference).await;
+    } else if let (Some(served), Ok(handle)) =
+        (ctx.serve().ok(), crate::runner::runner().begin_keyed(crate::app::references::READ_KIND, &crate::serve::ids::record(record), None))
+    {
+        let album = crate::serve::ids::record(record);
+        let _ = crate::runner::jobs::run(std::sync::Arc::new(handle), move |_| crate::app::references::read_references(served, album, record));
+    }
+    // Answered at once from what is kept (SCENARIOS-LOOKUPS, 2026-11-21): the record, and the read's task to follow by its key (a
+    // Cratarr job, no account's: one read of a record whoever opens it); what it learns reaches the page by `changed`.
+    Ok(Json(json!({ "record": crate::serve::ids::record(record), "task": crate::app::references::read_task(record) })))
 }
 
 /// A label About shows, opened (F9): `{ source: "discogs" | "musicbrainz", id, name }` answers `{ id: "la-<n>" }`, the label that

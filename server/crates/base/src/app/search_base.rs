@@ -35,6 +35,11 @@ pub struct Item {
     pub album: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album_id: Option<String>,
+    /// Its record's type and secondary types as the Library list serves them (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_secs: Option<u64>,
     /// A missing album's page on Bandcamp where an open of it found one lately (0.9.5).

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use cratarr_rules::assign::{Fit, Side, assign, fit};
 use cratarr_rules::crates::{self, Alike, Avoid, Condition, Facts, Favourites, LikeMode, Target, Trait, Use, Value, View, World, credited_names};
 use cratarr_rules::excluded_artists;
-use cratarr_rules::holding::{CopyFacts, Holding, On, holding};
+use cratarr_rules::holding::{CopyFacts, Holding, Kept as Lists, On, holding, holding_of};
 use cratarr_rules::ids::song;
 use cratarr_rules::index::own::{Kept, List, Own};
 use cratarr_rules::index::{self, Artist, Library, Rows};
@@ -1212,6 +1212,9 @@ struct HoldingCase {
     about: String,
     copies: Vec<CopyFacts>,
     shortest: Option<u16>,
+    /// VR12 rule 6: the only lists kept are guesses' (none judges).
+    #[serde(default)]
+    guessed: bool,
     viewer: String,
     without: Vec<i64>,
     holding: Holding,
@@ -1224,6 +1227,11 @@ fn the_device_and_the_server_say_one_holding() {
     let cases: Vec<HoldingCase> = serde_json::from_str(HOLDING).unwrap();
     assert!(cases.len() >= 10, "HD1's ten rows at least");
     for c in &cases {
-        assert_eq!(holding(&c.copies, c.shortest, &c.viewer, &On::without(&c.without)), c.holding, "{}", c.about);
+        let kept = if c.guessed { Lists::OnlyGuesses } else { Lists::of(c.shortest) };
+        assert_eq!(holding_of(&c.copies, kept, &c.viewer, &On::without(&c.without)), c.holding, "{}", c.about);
+        if !c.guessed {
+            assert_eq!(holding(&c.copies, c.shortest, &c.viewer, &On::without(&c.without)), c.holding, "{}", c.about);
+        }
     }
+    assert!(cases.iter().any(|c| c.guessed && c.holding == Holding::Unknown), "rule 6's rows (M5)");
 }

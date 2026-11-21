@@ -1272,6 +1272,8 @@ impl PlaylistService {
                 .zip(at)
                 .zip(facts)
                 .map(|((entry, at), f)| PlaylistRow {
+                    picture: None,
+                    artists: Vec::new(),
                     album_type: None,
                     album_secondary: Vec::new(),
                     entry_id: None,

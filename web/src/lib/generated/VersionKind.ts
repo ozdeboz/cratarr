@@ -3,4 +3,4 @@
 /**
  * What a version line is.
  */
-export type VersionKind = "copy" | "edition";
+export type VersionKind = "copy" | "edition" | "tracklist";

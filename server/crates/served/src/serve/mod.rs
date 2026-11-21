@@ -382,9 +382,25 @@ impl Serve {
         ids.sort();
         ids.dedup();
         let types = self.record_types(&ids);
+        // NAMES.23: each track's artists by their id, as the served library credits them.
+        let songs: Vec<String> = rows.iter().filter_map(|r| r.id.clone()).collect();
+        let credited: std::collections::HashMap<String, Vec<playlists_row::TrackArtist>> = self
+            .library
+            .songs_by_id(&songs)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| (s.id.clone(), s.artists.iter().map(|a| playlists_row::TrackArtist { id: a.id.clone(), name: a.name.clone() }).collect()))
+            .collect();
         for r in rows {
             if let Some((kind, secondary)) = r.album_id.as_ref().and_then(|a| types.get(a)) {
                 (r.album_type, r.album_secondary) = (kind.clone(), secondary.clone());
+            }
+            // OBJ5: one picture field, the record's by the one resolver.
+            if let Some(album) = r.album_id.as_deref().filter(|a| a.starts_with(cratarr_rules::ids::ALBUM)) {
+                r.picture = Some(cratarr_rules::ids::record_picture(album, None));
+            }
+            if let Some(artists) = r.id.as_ref().and_then(|id| credited.get(id)).filter(|a| !a.is_empty()) {
+                r.artists = artists.clone();
             }
         }
     }
@@ -1351,6 +1367,89 @@ mod tests {
         assert_eq!(holders(), (Some(owned), None), "set to Single: the single had, the album set apart");
         let wanted = crate::catalogue::records::Wanted { group: Some("00000000-0000-4000-8000-000000006102".into()), artist: "Artist".into(), title: "Album".into(), ..Default::default() };
         assert_eq!(cat.record_for_request(&wanted).unwrap(), album, "a Want of its group asks for it");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// GOTO.S7 (a): no track answer is missed. Every `Serialize` struct of the server's crates with a track's shape (an `album_id`
+    /// beside a `name` or a `title`) carries `album_type` and `album_secondary`, so a track's Go to names its record's type
+    /// (GOTO.S1); the shapes that are no track are listed here, each with why. Red first: the answers GOTO's round 2 left (search,
+    /// Home, works, the player, Play On's queues) carry none.
+    #[test]
+    fn no_track_answer_is_missed() {
+        // Shapes with an album id and a name that are no track, by name, and why.
+        const NO_TRACK: [(&str, &str); 6] = [
+            ("AlbumRef", "an album's cover"),
+            ("Album", "an album, its own type its `type`"),
+            ("AlbumView", "an album's view, its own type its `type`"),
+            ("JobView", "a conversion at work on a copy, no track"),
+            ("Track", "Spotify's own track (requests/spotify): its album Spotify's, no record of Cratarr's"),
+            ("Song", "OpenSubsonic's song, its standard's shape (its album's own `/getAlbum` says the type)"),
+        ];
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut missed: Vec<String> = Vec::new();
+        let mut stack = vec![crates];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n != "target") {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap().replace('\r', "");
+                let code = text.split("#[cfg(test)]").next().unwrap_or("");
+                for part in code.split("#[derive(").skip(1) {
+                    let derive = part.split(')').next().unwrap_or("");
+                    if !derive.contains("Serialize") {
+                        continue;
+                    }
+                    let Some(body) = part.split_once("pub struct ").map(|(_, b)| b) else { continue };
+                    let name = body.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("");
+                    let Some(fields) = body.split_once('{').map(|(_, f)| f.split("\n}").next().unwrap_or("")) else { continue };
+                    let has = |f: &str| fields.contains(&format!("pub {f}:"));
+                    if has("album_id") && (has("name") || has("title")) && !(has("album_type") && has("album_secondary")) && !NO_TRACK.iter().any(|(n, _)| *n == name) {
+                        missed.push(format!("{} {name}", path.display()));
+                    }
+                }
+            }
+        }
+        missed.sort();
+        assert!(missed.is_empty(), "track answers without their record's type: {missed:#?}");
+    }
+
+    /// OBJ5 (DC1b's OB3, moved) and NAMES.23 (its track-row half, the owner's move to DC1a.2): every track row the server sends
+    /// carries one picture field, its record's by the one resolver (`ids::record_picture`), and its artists each by their id with
+    /// one name, so each is its own link in the one track row; its `artist` string is the credit by the one formatter, never the
+    /// file's ARTIST text raw ("Commodo / Alfa Mist" is "Commodo & Alfa Mist"). Red first: no picture on a row (the page's five
+    /// resolvers), no artists, the raw ARTIST sent (library.rs's `artist_credit`).
+    #[test]
+    fn every_track_answer_carries_its_picture() {
+        use crate::serve::playlists_row::PlaylistRow;
+        let (roots, cat, serve) = on_two_folders("obj5-picture");
+        add(&cat, &roots[0], 0, &[("Deep Harbour/01 Hydra.flac", "Hydra"), ("Deep Harbour/02 Echo.flac", "Echo")]);
+        for rel in ["Deep Harbour/01 Hydra.flac", "Deep Harbour/02 Echo.flac"] {
+            cat.tag_for_tests(0, rel, &[("artist", "Commodo / Alfa Mist")]);
+        }
+        cat.identify().unwrap();
+        serve.refresh().unwrap();
+        let album = ids::record(record_in(&serve, 0, "Deep Harbour"));
+        let song_ids: Vec<String> = serve.library.songs_of_albums(std::slice::from_ref(&album)).unwrap().into_iter().map(|s| s.id).collect();
+        assert_eq!(song_ids.len(), 2);
+        let mut rows: Vec<PlaylistRow> = song_ids.iter().map(|id| PlaylistRow { id: Some(id.clone()), album_id: Some(album.clone()), ..Default::default() }).collect();
+        serve.with_types(&mut rows);
+        for r in &rows {
+            assert_eq!(r.picture.as_deref(), Some(format!("/api/cover/cratarr/{album}").as_str()), "the record's picture, by the one resolver");
+            let names: Vec<&str> = r.artists.iter().map(|a| a.name.as_str()).collect();
+            assert_eq!(names, ["Commodo", "Alfa Mist"], "each artist its own link");
+            assert!(r.artists.iter().all(|a| a.id.starts_with("ar-")), "by id: {:?}", r.artists);
+        }
+        let served = serve.library.songs_by_id(&song_ids).unwrap();
+        assert!(served.iter().all(|s| s.artist == "Commodo & Alfa Mist"), "the credit by credit_text: {:?}", served.iter().map(|s| &s.artist).collect::<Vec<_>>());
+        assert!(served.iter().all(|s| !s.artist.contains(" / ")), "never the raw slash text");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

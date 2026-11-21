@@ -50,11 +50,11 @@ async fn two_releases_of_one_master_become_one_record_once_the_master_is_known()
     };
     let t = crate::app::moment::now_secs();
     let first = open_row(&cat, label, &rows[0]);
-    crate::app::playing::page_at(&cat, first, t, read).await.unwrap();
+    crate::app::playing::open_at(&cat, first, t, read).await.unwrap();
     crate::app::references::page_read_settled(&cat, first).await;
     let second = open_row(&cat, label, &rows[1]);
     assert_ne!(second, first, "unknown at the open: a record of its own");
-    crate::app::playing::page_at(&cat, second, t, read).await.unwrap();
+    crate::app::playing::open_at(&cat, second, t, read).await.unwrap();
     crate::app::references::page_read_settled(&cat, second).await;
     assert_eq!(cat.record(second).unwrap().unwrap().id, first, "the second answers as the first");
     let held: Vec<(String, String, String)> = cat.references_of(&ids::record(first)).unwrap().into_iter().filter(|(r, _)| r.source == "discogs").map(|(r, row)| (r.kind, r.value, row.how)).collect();
@@ -63,7 +63,8 @@ async fn two_releases_of_one_master_become_one_record_once_the_master_is_known()
     }
     assert!(held.iter().any(|(k, v, how)| k == "master" && v == "5000001" && how == "link"), "the master by `link`");
     let lists = cat.reference_tracks(first).unwrap();
-    assert_eq!(lists.iter().filter(|(s, _)| s == "discogs").count(), 1, "one Discogs list kept");
+    // VR7 (b), VR41 (OQ-VR-5 (b), changed by design): one list per release, the two releases' both kept on the merged record.
+    assert_eq!(lists.iter().filter(|(s, _)| s == "discogs").count(), 2, "one Discogs list a release");
     assert!(lists.iter().any(|(s, l)| s == "discogs" && l.first().is_some_and(|t| t.title == "Lamplight 3600001")), "the first's");
     let remembered: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM discogs_masters WHERE master = 5000001 AND release IN (3600001, 3600002)", [], |r| r.get(0)).unwrap();
     assert_eq!(remembered, 2, "the memory holds both releases' master");

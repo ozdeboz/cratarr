@@ -24,6 +24,10 @@
     {
       "is": "retired",
       "words": "Was in {library} until"
+    },
+    {
+      "is": "unknown",
+      "words": "Not known whole"
     }
   ]
 }

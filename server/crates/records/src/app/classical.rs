@@ -211,6 +211,11 @@ pub struct Version {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_id: Option<String>,
+    /// Its record's type and secondary types as the Library list serves them (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     pub year: Option<u32>,
     /// Its record's performers, where MusicBrainz names them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -450,11 +455,22 @@ impl Index {
                     artist: Some(l.artist.clone()).filter(|a| !a.is_empty()),
                     album: Some(l.album.clone()),
                     album_id: Some(l.album_id.clone()),
+                    album_type: None,
+                    album_secondary: Vec::new(),
                     year: l.year,
                     performers: self.performers.get(&l.album_id).cloned().unwrap_or_default(),
                 })
             })
-            .collect();
+            .collect::<Vec<Version>>();
+        // GOTO.S1, S6: each its record's type, as the Library list serves it, one read for them all.
+        let mut versions = versions;
+        let albums: Vec<String> = versions.iter().filter_map(|v| v.album_id.clone()).collect();
+        let types = crate::serve::instance().map(|s| s.record_types(&albums)).unwrap_or_default();
+        for v in &mut versions {
+            if let Some((kind, secondary)) = v.album_id.as_ref().and_then(|a| types.get(a)) {
+                (v.album_type, v.album_secondary) = (kind.clone(), secondary.clone());
+            }
+        }
         Some(Versions { work: WorkRef { mbid: w.clone(), title: title.clone() }, composers: composers.clone(), versions })
     }
 

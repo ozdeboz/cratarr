@@ -21,4 +21,8 @@ quality?: string,
 /**
  * Its tracks, where its count is not the record's.
  */
-tracks?: number, plays: boolean, action?: string, };
+tracks?: number, plays: boolean, action?: string, 
+/**
+ * A tracklist's sources, in the order asked (VR3, VR4: "9 tracks · MusicBrainz, Bandcamp"), each named.
+ */
+sources: Array<string>, };

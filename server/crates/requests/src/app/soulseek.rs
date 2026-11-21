@@ -5295,8 +5295,11 @@ pub mod tests {
     #[tokio::test]
     async fn bandcamps_bot_check_is_tried_again_later() {
         let (cat, items, d) = fx01("bot-check");
+        // Changed by design (VR8): request 11's only page is a guess's, never read, so no check is met through it; R23's day is
+        // pinned where a check is met (`not_listed`), until DC2's KM13 takes the wait away.
         let checked = |_| std::future::ready(Err(anyhow::Error::from(crate::bandcamp::NotRead)));
-        assert_eq!(listing(of_request(&items, 11), &cat, checked).await, Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS));
+        assert_eq!(listing(of_request(&items, 11), &cat, checked).await, Listing::None("No list to judge by".into()), "nothing asked");
+        assert_eq!(not_listed(&anyhow::Error::from(crate::bandcamp::NotRead), now()), Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS));
         assert!(CHECKED_AGAIN_SECS >= 86_400);
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
@@ -5654,13 +5657,17 @@ pub mod tests {
         let (cat, items, d) = fx01("bandcamp-list");
         let it = of_request(&items, 11);
         assert_eq!((it.record.artist.as_str(), it.record.album.as_str(), it.state), ("Tape Club", "After Hours", State::Waiting), "taken, though it has no release group");
-        let Listing::Ready(lists) = listing(it, &cat, bandcamp_list).await else { panic!("no list") };
-        let (source, tracks) = lists.timed.expect("Bandcamp's list has lengths");
-        assert_eq!((source.as_str(), tracks.len()), ("bandcamp", 2));
-        assert!(tracks.iter().all(|t| t.recording.is_none()), "no recording: AcoustID's check skipped at the gate");
+        // Changed by design (SCENARIOS-VR01 VR8; THE Bandcamp rule, AMENDMENTS 2026-11-21 02:03): the label's page, found by its
+        // names, is a guess, whose list is never read for the record, and no Soulseek job reads a Bandcamp page: no list to judge
+        // by, Bandcamp asked nothing. (DC2's KM13 makes it wait, not Stuck, for a list a person's open keeps.)
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let reader = |r| {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            bandcamp_list(r)
+        };
+        assert_eq!(listing(it, &cat, reader).await, Listing::None("No list to judge by".into()));
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0, "Bandcamp asked nothing");
         assert_eq!(ladder(&it.record)[0], "Tape Club After Hours 2020");
-        let answers = [answer("bc", true, vec![file(r"Tape Club\After Hours\01 Night Ferry.flac", 241), file(r"Tape Club\After Hours\02 Last Lights.flac", 198)])];
-        assert_eq!(folders_of(&answers, &tracks, &[]).len(), 1, "judged by Bandcamp's list");
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
     }
