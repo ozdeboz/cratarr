@@ -475,11 +475,8 @@ fn a_records_order_is_its_deciding_copys() {
     assert_eq!(f.record_of(MUSIC, &rels[0]), Some(r), "one record, two copies");
     assert_eq!(f.cat.track_of(MUSIC, &rels[9]), f.cat.track_of(IN, &in_rels[9]), "on the same tracks");
     assert_eq!(place_of(&f, IN, &in_rels[9]), (Some(1), Some(10)), "MUSIC's order, the copy that decides, whichever plays");
-    for rel in &rels {
-        std::fs::remove_file(f.roots[0].join(rel)).unwrap();
-    }
-    f.cat.walk_all();
-    f.cat.identify().unwrap();
+    // MUSIC's copy deleted (Delete moves its folder to the trash: its rows marked trashed, no copy there any more).
+    f.cat.mark_trashed(MUSIC, NIGHT_FERRY, "100").unwrap();
     ranked(&f);
     assert_eq!(place_of(&f, IN, &in_rels[9]), (Some(1), Some(11)), "MUSIC's gone: IN's numbers, read at that scan");
 }

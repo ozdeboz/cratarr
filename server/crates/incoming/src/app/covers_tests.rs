@@ -206,6 +206,16 @@ fn a_merge_keeps_the_later_pick_and_retention_forgets_it() {
     assert_eq!(cat.kept_cover(a).unwrap().map(|c| c.bytes), Some(png(2)), "the later pick stays, whichever way the merge runs");
     assert_eq!(cat.cover_candidates(a).unwrap(), [("upload".to_string(), 100)], "the other kept as a candidate");
     assert_eq!(cat.kept_cover(b).unwrap().map(|c| c.at), Some(200), "the merged id answers as the one it went into");
+    // RT01: a record forgotten takes its pick and candidates with it.
+    let quiet = cat.record_for_tests("Far Shore", 0);
+    cat.keep_cover(quiet, &cover(png(3), 300)).unwrap();
+    let now = crate::app::moment::now_secs();
+    cat.forget_quiet(1, &Default::default()).unwrap();
+    let gone = cat.forget_quiet(now + 400 * 86_400, &Default::default()).unwrap();
+    assert!(gone.contains(&quiet), "forgotten: {gone:?}");
+    let kept: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM record_covers WHERE record = ?1", [quiet], |r| r.get(0)).unwrap();
+    assert_eq!(kept, 0, "its pick forgotten with it");
+    assert!(cat.kept_cover(a).unwrap().is_some(), "a record in use keeps its own");
 }
 
 /// COU.12 (b) (T-COU-8, T-COU-15): Replace's cover question. (b1) no hand pick: "keep the old one" makes the old copy's picture the

@@ -1070,7 +1070,20 @@ pub(super) fn record_places(tx: &Connection, albums: &[super::AlbumCopy], record
     use cratarr_domain::facts::{Present, RefTrack, pairs_with};
     let mut moved = 0;
     let mut set = tx.prepare_cached("UPDATE tracks SET disc = ?2, number = ?3 WHERE id = ?1 AND retired_at IS NULL AND (disc IS NOT ?2 OR number IS NOT ?3)")?;
-    for (record, a) in first_ranked(albums, records) {
+    // An album the pass gave no record (its tracks held by files gone a while elsewhere: another copy that went) is still its tracks'
+    // record's copy: the one that decides once the other is gone (COU.19).
+    let mut of_track = tx.prepare_cached("SELECT record FROM tracks WHERE id = ?1 AND retired_at IS NULL")?;
+    let mut held: Vec<Option<i64>> = Vec::with_capacity(albums.len());
+    for (a, record) in albums.iter().zip(records) {
+        held.push(match record {
+            Some(r) => Some(*r),
+            None => match a.tracks.first() {
+                Some((track, ..)) => of_track.query_row([track], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten(),
+                None => None,
+            },
+        });
+    }
+    for (record, a) in first_ranked(albums, &held) {
         let files: Vec<Present> = a.files.iter().map(|(folder, rel)| super::provenance::present_in(tx, *folder, rel)).collect::<Result<_>>()?;
         let picked: Option<Vec<RefTrack>> = match super::lists::pick_in(tx, record)? {
             Some(p) => super::lists::lists_in(tx, record)?.into_iter().find(|l| l.reference == p).map(|l| l.tracks).filter(|t| !t.is_empty()),
