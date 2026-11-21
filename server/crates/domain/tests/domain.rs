@@ -284,7 +284,7 @@ fn the_words_tables_are_written_and_current() {
         entries: Vec<Entry>,
     }
     written(
-        "states.json",
+        "record-states.json",
         &States {
             about: "What each state of a record says (SCENARIOS-DC1 RS2), written by cratarr-domain's tests: its words with their blanks; a time beside them is the page's to say.",
             states: STATES.to_vec(),

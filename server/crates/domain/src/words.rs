@@ -1,5 +1,5 @@
 //! The record's words, in one place (DOMAIN-CORE §4.5; SCENARIOS-DC1 RS2, RS23; decision 0104 point 2): what each state says
-//! ([`shown`], [`STATES`], shared/states.json) and each entry's title, icon and group ([`entry`], [`ENTRIES`],
+//! ([`shown`], [`STATES`], shared/record-states.json; shared/states.json is the jobs' words, C.8) and each entry's title, icon and group ([`entry`], [`ENTRIES`],
 //! shared/entries.json). An exhaustive `match` on the state, so a state without its words does not compile. The page draws what
 //! is sent; it writes no state's words of its own (RS2's Never).
 //!
