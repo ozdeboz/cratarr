@@ -79,6 +79,9 @@ struct Job {
     /// not counted where those switched on are (the owner, 2026-11-02).
     #[serde(default)]
     library: Option<String>,
+    /// Waiting for its library's layout to be learnt (PL1): passed over until it is known (`wake_queue`), its words in `why`.
+    #[serde(default)]
+    learning: bool,
 }
 
 /// A job as the page sees it.
@@ -299,9 +302,9 @@ impl Queue {
     }
 
     /// The next job to work on: one cut short first, else the oldest waiting.
-    fn next(&self) -> Option<u64> {
+    pub(super) fn next(&self) -> Option<u64> {
         let jobs = self.lock();
-        let open = |s: State| jobs.list.iter().filter(move |j| j.state == s).map(|j| j.id).min();
+        let open = |s: State| jobs.list.iter().filter(move |j| j.state == s && !j.learning).map(|j| j.id).min();
         open(State::Converting).or_else(|| open(State::Waiting))
     }
 
@@ -380,10 +383,36 @@ impl IncomingService {
                 finished: None,
                 by: crate::serve::who::current().map(|w| w.user),
                 library,
+                learning: false,
             });
         });
         self.queue.wake.notify_one();
         KeepResult { undo: None, title, folder: to, queued: true }
+    }
+
+    /// Queue Keep or Replace into `target` while that library's layout is still being learnt (PL1): it waits there, saying so
+    /// (`waits`), and is placed by the layout once it is known. Returns at once.
+    pub(super) fn enqueue_waiting(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, target: i64, waits: String) -> KeepResult {
+        let queued = self.enqueue(source_id, at, action, year, Vec::new(), crate::convert::CD, String::new(), target);
+        self.queue.change(|jobs| {
+            if let Some(j) = jobs.list.iter_mut().max_by_key(|j| j.id) {
+                (j.learning, j.why) = (true, Some(waits));
+            }
+        });
+        queued
+    }
+
+    /// The queue looks again (a layout became known: PL1's placings that waited for it go on, each by its library's layout).
+    pub(crate) fn wake_queue(&self) {
+        let lib = self.lib.clone();
+        self.queue.change(|jobs| {
+            for j in jobs.list.iter_mut().filter(|j| j.learning) {
+                if lib.layout(j.target) != crate::app::library::Layout::Pending {
+                    (j.learning, j.why) = (false, None);
+                }
+            }
+        });
+        self.queue.wake.notify_one();
     }
 
     /// The conversion queue as the page sees it.
@@ -683,6 +712,7 @@ mod tests {
             finished: None,
             by: None,
             library: None,
+            learning: false,
         };
         let queue = Queue::open(None);
         queue.change(|jobs| jobs.list.push(job));
@@ -913,6 +943,7 @@ mod tests {
             finished,
             by: None,
             library: None,
+            learning: false,
         };
         {
             let q = Queue::open(Some(file.clone()));

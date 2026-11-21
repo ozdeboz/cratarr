@@ -56,6 +56,9 @@ mod home_assistant;
 #[cfg(test)]
 mod one_path;
 
+#[cfg(test)]
+mod lookups_dc2;
+
 
 /// What the arguments ask (W4): with none, the server; a known flag, its own work; anything else, nothing at all. So a flag
 /// mistyped, or one this version lacks (`--version` before 0.17), never starts a second server on a live data folder.

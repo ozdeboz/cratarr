@@ -799,7 +799,29 @@ pub struct View {
 
 pub fn view<H: RequestsHost>(app: &Arc<H>) -> View {
     start(app);
+    kept_view()
+}
+
+/// RED STUB: [`view`], with no host.
+pub fn kept_view() -> View {
     View { items: kept(|k| k.items.clone()), library: library().ok().map(|p| p.display().to_string()) }
+}
+
+/// RED STUB: the round's kind.
+pub const ROUND: &str = "soulseek:round";
+const ROUND_EVERY: Duration = Duration::from_secs(5);
+
+/// RED STUB: the base's approval, a wake alone.
+pub fn approve_items(picked: &[Pick]) -> Result<View> {
+    kept(|k| approve_in(&mut k.items, picked))?;
+    wake();
+    Ok(kept_view())
+}
+
+/// RED STUB: the base's bare loop; no schedule.
+pub fn schedule_round() -> std::result::Result<(), String> {
+    let _ = ROUND_EVERY;
+    Err("not on the runner".into())
 }
 
 /// A tick (RQ01.8 (b)): an item and its folder chosen by its place (none: the best), and, from a request's story, the source it names
@@ -5315,6 +5337,100 @@ pub mod tests {
         assert_eq!(kept_now.tracks, list);
         assert!(door.asked().is_empty(), "nothing asked of Bandcamp: {:?}", door.asked());
         assert!(door.violations().is_empty(), "{:?}", door.violations());
+    }
+
+    /// LK.B4 (row 33): the Soulseek page starts nothing; the round is the server's. (a) The list read twice begins nothing: no round,
+    /// no schedule. (b) An approval begins the round as a job on the runner (Activity sees it), not a bare spawn. (c) The round's
+    /// schedule is on the runner, once: a second is refused. Never the view beginning the round. Red first: the view called `start`,
+    /// the approval only woke a bare loop.
+    #[tokio::test]
+    async fn the_soulseek_page_starts_nothing() {
+        let _state = crate::app::references::TestState::set().await;
+        let runner = crate::runner::runner();
+        let mut activity = runner.subscribe_activity();
+        let rounds = |rx: &mut tokio::sync::broadcast::Receiver<crate::runner::jobs::Row>| {
+            let mut n = 0;
+            while let Ok(row) = rx.try_recv() {
+                n += usize::from(row.kind == ROUND);
+            }
+            n
+        };
+        let id = "ss-lkb4";
+        kept(|q| q.items.push(Item { state: State::Found, ..found_twice(id) }));
+        for _ in 0..2 {
+            assert!(kept_view().items.iter().any(|i| i.id == id), "the list as kept");
+        }
+        assert_eq!(rounds(&mut activity), 0, "(a) the GET begins no round");
+        assert!(runner.schedules().iter().all(|s| s.kind != ROUND), "(a) nor the server's schedule");
+        approve_items(&[Pick { id: id.into(), ..Pick::default() }]).unwrap();
+        tokio::task::yield_now().await;
+        assert!(rounds(&mut activity) >= 1, "(b) the approval begins the round as a job");
+        assert_eq!(schedule_round(), Ok(()), "(c) the round's schedule, on the runner");
+        assert!(schedule_round().is_err(), "(c) once");
+        assert!(runner.schedules().iter().any(|s| s.kind == ROUND && s.period_secs == ROUND_EVERY.as_secs()), "{:?}", runner.schedules());
+        kept(|q| q.items.retain(|i| i.id != id));
+    }
+
+    /// KM13's busy-source half (OQ-VR-10 (b), X21, decision 0105 rule 1; VR27): a busy source never stops another. Record 11:
+    /// MusicBrainz paused for a minute, Bandcamp's list kept (an open read it), Discogs giving no list now: judged by the list kept
+    /// and searched now, MusicBrainz asked again later. A second record, MusicBrainz paused and no list kept: Waiting until the pause
+    /// ends, never Stuck. A third whose only reference is a Bandcamp page with no list kept: Waiting a round, nothing asked of
+    /// Bandcamp. Never a Bandcamp page read by the job; never Stuck for a pause or a list not yet kept. Red first: `judge` stops a
+    /// Soulseek reading at the first source not read (R23).
+    #[tokio::test]
+    async fn a_busy_source_never_stops_another_for_soulseek() {
+        use crate::catalogue::records::Ref;
+        let _state = crate::app::references::TestState::set().await;
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
+        let refer = |title: &str, refs: &[(&str, &str, &str)]| {
+            let record = cat.record_for_tests(title, 0);
+            for (source, kind, value) in refs {
+                assert!(cat.set_reference(&crate::serve::ids::record(record), &Ref::new(source, kind, value), "link").unwrap());
+            }
+            record
+        };
+        let page = |name: &str| format!("https://glassharbour.bandcamp.com/album/{name}");
+        let eleven = refer("Record 11", &[("musicbrainz", "release", "00000000-0000-4000-8000-000000000011"), ("discogs", "release", "2000011"), ("bandcamp", "album", &page("record-11"))]);
+        let second = refer("Record 12", &[("musicbrainz", "release", "00000000-0000-4000-8000-000000000012")]);
+        let third = refer("Record 13", &[("bandcamp", "album", &page("record-13"))]);
+        let list: Vec<Track> = [("Slack Water", 200_000), ("Neap", 180_000), ("Spring Tide", 240_000)].into_iter().zip(1..).map(|((title, ms), n)| Track { disc: 1, position: n, title: title.into(), length_ms: Some(ms), recording: None }).collect();
+        cat.set_reference_tracks(eleven, "bandcamp", &list).unwrap();
+        let t = now();
+        let asked: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let read = {
+            let asked = asked.clone();
+            move |r: Ref| -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<super::super::references::Read>>> + Send>> {
+                asked.lock().unwrap().push(r.source.clone());
+                Box::pin(std::future::ready(match r.source.as_str() {
+                    "musicbrainz" => Err(super::super::turn::Paused { source: "MusicBrainz", until: t + 60 }.into()),
+                    // The job reads no Bandcamp page (0109): as `list_reader` answers it.
+                    "bandcamp" => Err(NotKept.into()),
+                    _ => Ok(None),
+                }))
+            }
+        };
+        let mut seen = Vec::new();
+        for (id, record) in [("ss-km13-11", eleven), ("ss-km13-12", second), ("ss-km13-13", third)] {
+            let it = Item { record: Record { record, ..found_twice(id).record }, state: State::Waiting, due: 0, folders: Vec::new(), tracks: Vec::new(), untimed: Vec::new(), ..found_twice(id) };
+            kept(|q| q.items.push(it.clone()));
+            let goes = read_its_list(id, &it, &cat, read.clone()).await;
+            seen.push((goes, item(id).unwrap()));
+            kept(|q| q.items.retain(|i| i.id != id));
+        }
+        let (goes, now11) = &seen[0];
+        assert!(goes, "record 11 judged by the list kept, searched now: {:?}", now11.why);
+        assert_eq!(now11.tracks, list, "Bandcamp's kept list judges it");
+        assert_eq!(now11.state, State::Searching);
+        let (goes, now12) = &seen[1];
+        assert!(!goes);
+        assert_eq!(now12.state, State::Waiting, "a pause and no list kept: Waiting, never Stuck: {:?}", now12.why);
+        assert!((t + 59..=t + 61).contains(&now12.due), "until the pause ends: {}", now12.due - t);
+        let (goes, now13) = &seen[2];
+        assert!(!goes);
+        assert_eq!(now13.state, State::Waiting, "a Bandcamp list not kept: Waiting, never Stuck: {:?}", now13.why);
+        assert!(now13.due <= t + ROUND_AT_LEAST + 5, "a round on, never a day: {}", now13.due - t);
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked.iter().filter(|s| *s == "musicbrainz").count(), 2, "MusicBrainz asked for 11 and 12, again later: {asked:?}");
     }
 
     /// A1.4.2: 0.16.3's queue with items Stuck on "503 Service Temporarily Unavailable" and on "No list to judge by", due long since:

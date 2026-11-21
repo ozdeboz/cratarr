@@ -80,6 +80,11 @@ impl Whole {
         Self { dir, served, app, router }
     }
 
+    /// Its Music folder (the catalogue's first).
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// A sign-in of `user`, as the cookie a browser sends.
     pub(crate) fn session(&self, user: &str) -> String {
         let (token, _) = self.served.sessions.create(user, "the sweep", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).unwrap();

@@ -20,4 +20,8 @@ impl SettingsIncoming for IncomingService {
     fn forget_lists(&self) -> Later<'_, ()> {
         Box::pin(IncomingService::forget_lists(self))
     }
+
+    fn layouts_known(&self) {
+        IncomingService::wake_queue(self)
+    }
 }

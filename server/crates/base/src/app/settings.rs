@@ -157,11 +157,18 @@ impl SettingsService {
             let _ = at;
             return Ok(albums.clone());
         }
+        let albums = Arc::new(self.names_in(0).await?);
+        *kept = Some((epoch_now(), albums.clone()));
+        Ok(albums)
+    }
+
+    /// The albums of the library at catalogue folder `folder`, with the tags naming reads, from the catalogue.
+    async fn names_in(&self, folder: i64) -> Result<Vec<crate::naming::Album>> {
         let c = self.lib.catalogue();
-        let albums = crate::run::spawn_blocking(move || -> Result<Vec<crate::naming::Album>> {
+        crate::run::spawn_blocking(move || -> Result<Vec<crate::naming::Album>> {
             use crate::naming::{Album, Tags, Track};
             let mut albums: Vec<Album> = Vec::new();
-            for (rel, tags) in c.folder_tags(0, &crate::naming::TAGS)? {
+            for (rel, tags) in c.folder_tags(folder, &crate::naming::TAGS)? {
                 let (folder, file) = rel.rsplit_once('/').unwrap_or(("", &rel));
                 if albums.last().is_none_or(|a| a.folder != folder) {
                     albums.push(Album { folder: folder.to_string(), tracks: Vec::new() });
@@ -174,33 +181,34 @@ impl SettingsService {
             Ok(albums)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))??;
-        let albums = Arc::new(albums);
-        *kept = Some((epoch_now(), albums.clone()));
-        Ok(albums)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
     }
 
-    /// Work out the template Music already follows, once, when none is saved: what Keep and Replace use until one is.
-    /// Waits until the catalogue has read most of the library's tags.
+    /// Work out how each main library names its albums (PL1), once a start, while Settings saves no template: what Keep and
+    /// Replace place by (`Library::layout`). A library still being read stays pending; once the catalogue's pass is done, an empty
+    /// library, one mostly untitled, or one whose folders no candidate fits by half has none to infer. A layout replaces the one
+    /// kept from an earlier start, and the placings waiting for it are woken. About once a minute (the app's sync).
     pub async fn infer_naming(&self) {
-        if self.lib.templates() != (None, None) {
+        if self.lib.templates().0.is_some() {
             return;
         }
-        let Ok(albums) = self.music_names().await else { return };
-        let files: usize = albums.iter().map(|a| a.tracks.len()).sum();
-        let titled = albums.iter().flat_map(|a| &a.tracks).filter(|t| t.tags.first("title").is_some()).count();
-        if files == 0 || titled * 10 < files * 9 {
-            return;
+        let read_done = self.lib.catalogue().passed();
+        let mut decided = false;
+        for folder in self.lib.main_folders() {
+            if self.lib.layout_decided(folder) {
+                continue;
+            }
+            let Ok(albums) = self.names_in(folder).await else { continue };
+            let Ok(Some(found)) = crate::run::spawn_blocking(move || crate::naming::layout_of(&albums, read_done)).await else { continue };
+            match &found {
+                Some(t) => tracing::info!("naming: library {folder} follows {t}"),
+                None => tracing::info!("naming: library {folder} has no layout to infer"),
+            }
+            self.lib.set_layout(folder, found, epoch_now());
+            decided = true;
         }
-        let a = albums.clone();
-        if let Ok(found) = crate::run::spawn_blocking(move || crate::naming::infer(&a)).await {
-            tracing::info!(
-                "naming: Music follows {} ({} of {} folders)",
-                found.template,
-                found.folders.matched,
-                found.folders.total
-            );
-            self.lib.set_inferred_template(found.template);
+        if decided {
+            self.incoming.layouts_known();
         }
     }
 

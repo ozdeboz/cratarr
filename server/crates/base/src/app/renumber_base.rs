@@ -97,6 +97,11 @@ pub use cratarr_domain::identity::same_title;
 /// A record's tracks to read: one file a track, the one that plays. What writes goes by `files_in`.
 pub fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    tracks_of_in(&served, album)
+}
+
+/// `tracks_of` in the server `served` (an open's handler passes its own).
+pub fn tracks_of_in(served: &crate::serve::Serve, album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
     let tracks = row_tracks(&served.library, album)?;
     Ok((tracks, mbid.filter(|m| crate::userdata::is_mbid(m)), artist, name))

@@ -732,6 +732,21 @@ fn measure(template: Template, albums: &[Album], facts: &[AlbumFacts]) -> Infere
     Inference { template, folders: folder_share, files: file_share, causes, samples }
 }
 
+/// What a library's albums say of its layout (PL1, SCENARIOS-DC2 §11): `None` while it cannot be known yet (its files mostly
+/// untitled, or none, before the catalogue's read of it is done: `read_done`); `Some(None)` when there is none to infer (an empty
+/// library, one read whole with under 90% of its files titled, or no candidate that half or more of its album folders follow);
+/// `Some(Some(t))` the template it follows. Never a candidate under half: `infer` always answers, its best even at a score of 0.
+pub fn layout_of(albums: &[Album], read_done: bool) -> Option<Option<Template>> {
+    let files: usize = albums.iter().map(|a| a.tracks.len()).sum();
+    let titled = albums.iter().flat_map(|a| &a.tracks).filter(|t| t.tags.first("title").is_some()).count();
+    if files == 0 || titled * 10 < files * 9 {
+        let _ = read_done;
+        return None;
+    }
+    // RED STUB: the base's behaviour, `infer`'s answer whatever its score.
+    Some(Some(infer(albums).template))
+}
+
 /// The first candidate whose score is within the margin of the highest.
 fn best<T>(candidates: &[T], total: usize, score: impl Fn(&T) -> usize) -> usize {
     let margin = (total as f64 * MARGIN) as usize;
@@ -1047,5 +1062,31 @@ mod tests {
                 assert_eq!(s.parse::<Template>().unwrap().to_string(), s);
             }
         }
+    }
+
+    /// PL1: a layout is inferred only where half or more of the library's album folders follow the best candidate (`infer` itself
+    /// always answers, its best even at a score of 0); a library mostly untitled, or empty, is pending until its read is done, then
+    /// has none to infer. Never an inferred template from a candidate under half.
+    #[test]
+    fn a_layout_needs_half_its_folders_and_most_titles() {
+        let album = |folder: String, n: usize, titled: bool| {
+            let (artist, title) = (format!("Artist {n}"), format!("Album {n}"));
+            let mut tags = vec![("albumartist", artist.as_str()), ("album", title.as_str()), ("tracknumber", "1")];
+            if titled {
+                tags.push(("title", "Song"));
+            }
+            Album { folder, tracks: vec![track("01 Song.flac", &tags)] }
+        };
+        let follows: Vec<Album> = (0..10).map(|n| album(format!("Artist {n}/Album {n}"), n, true)).collect();
+        assert!(matches!(layout_of(&follows, false), Some(Some(t)) if t.to_string().starts_with("{albumartist}/{album}/")), "Artist/Album");
+        let scattered: Vec<Album> = (0..10).map(|n| album(format!("box {n}/disc {n}"), n, true)).collect();
+        assert_eq!(layout_of(&scattered, true), Some(None), "no candidate half its folders follow: none to infer");
+        let mostly: Vec<Album> = (0..10).map(|n| album(if n < 4 { format!("Artist {n}/Album {n}") } else { format!("box {n}/disc {n}") }, n, true)).collect();
+        assert_eq!(layout_of(&mostly, true), Some(None), "4 of 10: under half");
+        assert_eq!(layout_of(&[], false), None, "empty before its read is done: pending");
+        assert_eq!(layout_of(&[], true), Some(None), "read whole and empty: none to infer");
+        let untitled: Vec<Album> = (0..10).map(|n| album(format!("Artist {n}/Album {n}"), n, n < 3)).collect();
+        assert_eq!(layout_of(&untitled, false), None, "30% titled while it is read: pending");
+        assert_eq!(layout_of(&untitled, true), Some(None), "30% titled once read: none to infer");
     }
 }

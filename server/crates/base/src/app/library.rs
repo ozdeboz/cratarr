@@ -289,6 +289,39 @@ pub struct FreshIds {
     pub references: Vec<(String, u64)>,
 }
 
+/// How a main library names its album folders (PL1, SCENARIOS-DC2 §11): saved, inferred, still being learnt, or none to infer.
+/// Keep and Replace never guess it: a placing waits while it is pending, and with none to infer its plan names the default and
+/// the administrator's yes saves it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Layout {
+    /// Settings' template, or the library's own, saved by an administrator's yes to a plan naming it.
+    Saved(Template),
+    /// The one the library follows: half or more of its album folders by the best candidate, as last worked out.
+    Inferred(Template),
+    /// Not known yet: the catalogue's read of the library is still under way, and nothing was kept from before.
+    Pending,
+    /// Nothing to infer from: an empty library, no candidate half its folders follow, or most of its files untitled.
+    NoneToInfer,
+}
+
+/// The layouts as this start knows them: Settings' template, and each main library's as its inference decided.
+#[derive(Debug, Default)]
+struct Naming {
+    saved: Option<Template>,
+    inferred: std::collections::HashMap<i64, Template>,
+    none: std::collections::HashSet<i64>,
+}
+
+/// The catalogue's note of a library's layout (`saved`, `inferred`), by its catalogue folder.
+fn layout_key(what: &str, folder: i64) -> String {
+    format!("naming:{what}:{folder}")
+}
+
+/// What a placing waits for while its library's layout is pending (PL1).
+pub fn learning_words(library: &str) -> String {
+    format!("Learning how {library} names its folders")
+}
+
 pub struct Library {
     live: std::sync::RwLock<Arc<Vec<Arc<Active>>>>,
     data_dir: Option<String>,
@@ -305,8 +338,9 @@ pub struct Library {
     pub(super) changing: Mutex<()>,
     /// How tag values are split when read (decision 0008); saved with the sources.
     tag_rules: std::sync::RwLock<crate::catalogue::Rules>,
-    /// The naming template of Music (decision 0013): (saved, the one the library follows once worked out).
-    naming: std::sync::RwLock<(Option<Template>, Option<Template>)>,
+    /// How the main libraries name their albums (decision 0013, PL1): Settings' template, and each library's as this start worked
+    /// it out.
+    naming: std::sync::RwLock<Naming>,
     /// Servers that stopped processing changes, and their library scans as last seen (see `watch_servers`).
     watch: std::sync::Mutex<Watch>,
 }
@@ -471,7 +505,7 @@ impl Library {
             catalogue,
             changing: Mutex::new(()),
             tag_rules: std::sync::RwLock::new(tag_rules),
-            naming: std::sync::RwLock::new((naming, None)),
+            naming: std::sync::RwLock::new(Naming { saved: naming, ..Naming::default() }),
             watch: std::sync::Mutex::new(Watch::default()),
         }))
     }
@@ -522,24 +556,87 @@ impl Library {
         }
     }
 
-    /// How Keep and Replace name an album in Music (decision 0013): the saved template, else the one the library
-    /// already follows (worked out in the background, see `SettingsService::infer_naming`), else the default.
+    /// The template the Settings page measures and shows: the saved one, else the one Music follows (its first main library's
+    /// layout), else the default.
     pub fn template(&self) -> Template {
-        let (saved, inferred) = &*self.naming.read().unwrap_or_else(|p| p.into_inner());
-        saved.clone().or_else(|| inferred.clone()).unwrap_or_default()
+        match self.main_folders().first().map(|f| self.layout(*f)) {
+            Some(Layout::Saved(t) | Layout::Inferred(t)) => t,
+            _ => self.templates().0.unwrap_or_default(),
+        }
     }
 
-    /// (saved, inferred).
+    /// (saved, the one Music follows once worked out).
     pub(super) fn templates(&self) -> (Option<Template>, Option<Template>) {
-        self.naming.read().unwrap_or_else(|p| p.into_inner()).clone()
+        let saved = self.naming.read().unwrap_or_else(|p| p.into_inner()).saved.clone();
+        let inferred = self.main_folders().first().and_then(|f| match self.layout(*f) {
+            Layout::Inferred(t) => Some(t),
+            _ => None,
+        });
+        (saved, inferred)
     }
 
-    pub(super) fn set_saved_template(&self, t: Option<Template>) {
-        self.naming.write().unwrap_or_else(|p| p.into_inner()).0 = t;
+    pub fn set_saved_template(&self, t: Option<Template>) {
+        self.naming.write().unwrap_or_else(|p| p.into_inner()).saved = t;
     }
 
-    pub(super) fn set_inferred_template(&self, t: Template) {
-        self.naming.write().unwrap_or_else(|p| p.into_inner()).1 = Some(t);
+    /// How Keep and Replace name an album in the main library at catalogue folder `folder` (PL1): Settings' template, else the
+    /// library's own saved by an administrator's yes, else the one it follows (worked out this start, else the last one kept,
+    /// until this start's inference decides), else none to infer, else still being learnt. Never a guess: a placing waits while
+    /// it is pending, and with none to infer its plan names the default and asks.
+    pub fn layout(&self, folder: i64) -> Layout {
+        // RED STUB: the base's behaviour, the saved template else the one Music follows else the default.
+        let n = self.naming.read().unwrap_or_else(|p| p.into_inner());
+        if true {
+            return Layout::Inferred(n.saved.clone().or_else(|| n.inferred.get(&folder).cloned()).unwrap_or_default());
+        }
+        if let Some(t) = &n.saved {
+            return Layout::Saved(t.clone());
+        }
+        if let Some(t) = self.catalogue.meta(&layout_key("saved", folder)).and_then(|t| t.parse().ok()) {
+            return Layout::Saved(t);
+        }
+        if let Some(t) = n.inferred.get(&folder) {
+            return Layout::Inferred(t.clone());
+        }
+        if n.none.contains(&folder) {
+            return Layout::NoneToInfer;
+        }
+        // The last one inferred, kept with its time (`<epoch s> <template>`): a restart places by it at once.
+        let kept = self.catalogue.meta(&layout_key("inferred", folder));
+        match kept.as_deref().and_then(|k| k.split_once(' ')).and_then(|(_, t)| t.parse().ok()) {
+            Some(t) => Layout::Inferred(t),
+            None => Layout::Pending,
+        }
+    }
+
+    /// What this start's inference decided for the library at `folder` (`SettingsService::infer_naming`): the template it follows,
+    /// kept with its time so the next start places by it at once; or none to infer. Whether it was decided before.
+    pub fn set_layout(&self, folder: i64, found: Option<Template>, now: i64) -> bool {
+        let mut n = self.naming.write().unwrap_or_else(|p| p.into_inner());
+        let before = n.inferred.contains_key(&folder) || n.none.contains(&folder);
+        match found {
+            Some(t) => {
+                self.catalogue.set_meta(&layout_key("inferred", folder), &format!("{now} {t}"));
+                n.none.remove(&folder);
+                n.inferred.insert(folder, t);
+            }
+            None => {
+                n.inferred.remove(&folder);
+                n.none.insert(folder);
+            }
+        }
+        before
+    }
+
+    /// Whether this start's inference decided the library at `folder` already.
+    pub fn layout_decided(&self, folder: i64) -> bool {
+        let n = self.naming.read().unwrap_or_else(|p| p.into_inner());
+        n.inferred.contains_key(&folder) || n.none.contains(&folder)
+    }
+
+    /// The administrator's yes to a plan naming `t` for a library with none to infer (PL1): saved as the library's own.
+    pub fn save_layout(&self, folder: i64, t: &Template) {
+        self.catalogue.set_meta(&layout_key("saved", folder), &t.to_string());
     }
 
     /// The install's tag rules: the default encoding (new libraries, own music) and the aliases.

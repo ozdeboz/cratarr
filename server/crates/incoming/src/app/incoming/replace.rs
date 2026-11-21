@@ -337,6 +337,8 @@ fn keep_cover(old: &std::path::Path, new: &std::path::Path) {
 pub enum ReplaceRefused {
     /// The page asks for the year and tries again.
     NeedsYear,
+    /// The main library's layout is still being learnt (PL1): a Replace waits for it in the queue, its words said.
+    Learning(String),
     /// Old tracks without a match, by title.
     Unmatched(Vec<String>),
     /// Another reason, said as is.
@@ -414,7 +416,7 @@ fn refused(r: ReplaceRefused) -> ToggleError {
     ToggleError::Refused(match r {
         ReplaceRefused::NeedsYear => "the album's year is not known".into(),
         ReplaceRefused::Unmatched(titles) => format!("no match for {}", titles.join(", ")),
-        ReplaceRefused::Other(why) => why,
+        ReplaceRefused::Other(why) | ReplaceRefused::Learning(why) => why,
     })
 }
 
@@ -474,8 +476,11 @@ impl IncomingService {
     /// Work out Replace of the copy at (`main`, `old_dir`), a main library's, by the copy at `at`. Changes nothing.
     async fn plan_replace_of(&self, at: &Located, (main, old_dir): (i64, String), year: Option<&str>) -> Result<Result<Planned, ReplaceRefused>, ToggleError> {
         let (music, name) = (self.root_of(main)?, self.library_name(&at.source, main));
-        let (c, folder, dir, root, year, template) =
-            (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string), self.lib.template());
+        let template = match self.placing_layout(&at.source, main) {
+            Ok((t, _)) => t,
+            Err(waits) => return Ok(Err(ReplaceRefused::Learning(waits))),
+        };
+        let (c, folder, dir, root, year) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string));
         // The served library the guard below reads (RF11): the running server's, or a unit test's (`incoming::served`).
         let served = super::served();
         crate::run::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
@@ -1026,7 +1031,18 @@ impl IncomingService {
         let at = self.locate(source_id, album_id, from).await?;
         self.refuse_if_queued(album_id, at.dir.folder)?;
         let into = self.replaced_in(source_id, to)?;
-        let planned = self.plan_replace(&at, into, year).await?.map_err(refused)?;
+        let replaced = self.replaced_copy(&at, into).await?;
+        let main = replaced.0;
+        let asked = self.asked_layout(source_id, main);
+        // The main library's layout still being learnt (PL1): the Replace waits in the queue until it is known.
+        let planned = match self.plan_replace_of(&at, replaced, year).await? {
+            Err(ReplaceRefused::Learning(waits)) => return Ok(self.enqueue_waiting(source_id, at, queue::Action::Replace, year, main, waits)),
+            planned => planned.map_err(refused)?,
+        };
+        // None to infer: this Replace is the administrator's yes to the default its plan named, saved as the library's own.
+        if let Some(t) = asked.as_deref().and_then(|t| t.parse::<crate::naming::Template>().ok()) {
+            self.lib.save_layout(main, &t);
+        }
         let music = planned.root.clone();
         if !self.can_write(&at.root).await || !self.can_write(&music).await {
             return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));

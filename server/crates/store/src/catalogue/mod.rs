@@ -1077,6 +1077,8 @@ pub struct Catalogue {
     /// The folders in use, by their ids for life.
     folders: RwLock<InUse>,
     progress: Mutex<Progress>,
+    /// A whole pass has ended since the start: the libraries' files are read (PL1: a library's layout is no longer pending).
+    passed: std::sync::atomic::AtomicBool,
     /// Asks the background loop for a pass now (settings changed, a playlist was edited…).
     poke: tokio::sync::Notify,
     /// Told when files were read again outside a pass (`reread`): the library is built from them at once.
@@ -1189,6 +1191,7 @@ impl Catalogue {
             db: Mutex::new(conn),
             folders: RwLock::new(InUse::default()),
             progress: Mutex::default(),
+            passed: Default::default(),
             poke: Default::default(),
             reread: Default::default(),
             told: Default::default(),
@@ -1493,6 +1496,17 @@ impl Catalogue {
     #[cfg(any(test, feature = "test-support"))]
     pub fn last_pass(&self) -> Option<i64> {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass
+    }
+
+    /// Whether a whole background pass has ended since the start: every library's files read once (PL1).
+    pub fn passed(&self) -> bool {
+        self.passed.load(Ordering::SeqCst)
+    }
+
+    /// Tests: a whole pass taken as ended (or not).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_passed_for_tests(&self, passed: bool) {
+        self.passed.store(passed, Ordering::SeqCst);
     }
 
     /// How many times the rows were told changed (a pass ended, or `changed_outside_pass`): a look that read a lower count has not
@@ -4435,6 +4449,7 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
             p.last_pass = Some(now());
             p.problems = problems;
         }
+        cat.passed.store(true, Ordering::SeqCst);
         cat.told.fetch_add(1, Ordering::SeqCst);
         tokio::select! {
             _ = tokio::time::sleep(PASS_EVERY) => {}

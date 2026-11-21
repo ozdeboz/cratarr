@@ -136,23 +136,114 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
         .map(|m| m.release))
 }
 
-/// The album's release, each track with the file that holds it.
+/// The album's release, each track with the file that holds it: the one kept by its open's job where there is one (LK.B2), else read
+/// now (the bulk queue's add, which an open's job does not yet precede).
 pub async fn release(album: &str) -> Result<ReleaseView> {
     let s = served()?;
+    if let Some(view) = kept_release(&s, album).await? {
+        return Ok(view);
+    }
     let a = album.to_string();
     let (id, files) = crate::run::spawn_blocking(move || -> Result<_> { Ok((release_id_of(&s, &a)?, super::renumber_base::tracks_of(&a)?.0)) }).await??;
     let id = id.context("This album has no MusicBrainz release yet")?;
-    let http = super::discover::http()?;
-    let v: Value = http
-        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits&fmt=json"))
-        .asked()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    let mut view = release_of(&v);
+    let mut view = release_of(&read_release(id).await?);
     place(&mut view, &files);
     Ok(view)
+}
+
+/// A release read for a Replace, Cratarr's own job on the runner (SCENARIOS-LOOKUPS LK.B2): begun by an administrator's open,
+/// keyed by the album (another album's read is another key, never refused), followed by its openers (N8).
+pub const RELEASE_KIND: &str = "release";
+/// How long a release read stays kept (LK.B2, the builder's): an hour, longer than a Replace's searches, fetches and adds take,
+/// and as long as the runner keeps its job's end for the pages that follow it.
+pub const RELEASE_KEPT_SECS: i64 = 3600;
+
+/// The releases read by their jobs, by album: when, and the release as MusicBrainz gave it (its tracks placed at each read).
+fn kept_releases() -> std::sync::MutexGuard<'static, HashMap<String, (i64, ReleaseView)>> {
+    static KEPT: std::sync::LazyLock<Mutex<HashMap<String, (i64, ReleaseView)>>> = std::sync::LazyLock::new(Mutex::default);
+    KEPT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The release kept for `album` within its time, each track with the file that holds it now (LK.B2: a GET reads only what is
+/// kept, and asks nothing). None: not read yet, or read too long ago.
+pub async fn kept_release(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Option<ReleaseView>> {
+    let now = crate::app::moment::now_secs();
+    let kept = kept_releases().get(album).filter(|(at, _)| now - at < RELEASE_KEPT_SECS).map(|(_, v)| v.clone());
+    let Some(mut view) = kept else { return Ok(None) };
+    let (s, a) = (served.clone(), album.to_string());
+    let files = crate::run::spawn_blocking(move || super::renumber_base::tracks_of_in(&s, &a)).await??.0;
+    place(&mut view, &files);
+    Ok(Some(view))
+}
+
+/// What an open of a release answers (LK.B2, R-M2): the release kept, at once; or the task of its job, begun or joined.
+pub enum ReleaseOpened {
+    Kept(ReleaseView),
+    Reading(crate::runner::jobs::Task),
+}
+
+/// An administrator's open of the album's release (LK.B2): the kept release answers at once; else its job, Cratarr's own and
+/// keyed by the album, is begun (or one running joined) and followed by `account`, reading MusicBrainz on its turn. MusicBrainz
+/// switched off refuses it in F1's words, asking nothing. The handler never waits on MusicBrainz.
+pub async fn open_release(served: &Arc<crate::serve::Serve>, album: &str, account: &str) -> Result<ReleaseOpened> {
+    if let Some(view) = kept_release(served, album).await? {
+        return Ok(ReleaseOpened::Kept(view));
+    }
+    let runner = crate::runner::runner();
+    if !super::switches::is_on(super::switches::MUSICBRAINZ) {
+        return Err(super::references::SwitchedOff("MusicBrainz").into());
+    }
+    let (s, a) = (served.clone(), album.to_string());
+    let id = crate::run::spawn_blocking(move || release_id_of(&s, &a)).await??.context("This album has no MusicBrainz release yet")?;
+    match runner.begin_keyed(RELEASE_KIND, album, None) {
+        Ok(handle) => {
+            let key = album.to_string();
+            crate::runner::jobs::run(Arc::new(handle), move |_| async move {
+                let view = release_of(&read_release(id).await?);
+                let tracks = view.tracks.len();
+                kept_releases().insert(key, (crate::app::moment::now_secs(), view));
+                Ok(serde_json::json!({ "tracks": tracks }))
+            })
+            .map_err(anyhow::Error::msg)?;
+        }
+        // One read of this album runs already (another administrator's open): followed, not doubled.
+        Err(Ok(_)) => {}
+        Err(Err(words)) => bail!(words),
+    }
+    runner.follow(RELEASE_KIND, album, account).map(ReleaseOpened::Reading).context("The task went missing.")
+}
+
+/// A release as MusicBrainz gives it, with its recordings and their credits: on MusicBrainz's turn, at its web service (a test's
+/// stand-in where one is set).
+async fn read_release(id: String) -> Result<Value> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(read) = release_stand_in() {
+        return read(id).await;
+    }
+    let http = super::discover::http()?;
+    Ok(http.get(format!("{}/release/{id}?inc=recordings+artist-credits&fmt=json", super::discover::mb_ws())).asked().await?.error_for_status()?.json().await?)
+}
+
+/// Tests: what a release's read asks instead of MusicBrainz (LK.B2's counting stand-in), for the whole process until taken away.
+#[cfg(any(test, feature = "test-support"))]
+pub type ReleaseStandIn = Arc<dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send>> + Send + Sync>;
+
+#[cfg(any(test, feature = "test-support"))]
+fn release_stand_ins() -> std::sync::MutexGuard<'static, Option<ReleaseStandIn>> {
+    static STAND_IN: Mutex<Option<ReleaseStandIn>> = Mutex::new(None);
+    STAND_IN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn release_stand_in() -> Option<ReleaseStandIn> {
+    release_stand_ins().clone()
+}
+
+/// Tests: a release's read asks `read` instead of MusicBrainz (none: as it would); the releases kept so far forgotten.
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_release_stand_in(read: Option<ReleaseStandIn>) {
+    *release_stand_ins() = read;
+    kept_releases().clear();
 }
 
 // ---- 2. Searching
