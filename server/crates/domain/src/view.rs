@@ -168,12 +168,23 @@ pub struct Link {
 pub struct FactView<T> {
     pub value: T,
     pub by: Vec<String>,
+    /// Where its sources differ and none is chosen (FA13, VR39): each value they give and the sources that give it; `value` none.
+    pub versions: Vec<FactVersion<T>>,
 }
 
 impl<T> FactView<T> {
     pub fn of(value: T) -> Self {
-        Self { value, by: Vec::new() }
+        Self { value, by: Vec::new(), versions: Vec::new() }
     }
+}
+
+/// One version of a fact its sources differ on (FA13, VR39): a value and the sources that give it, none chosen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct FactVersion<T> {
+    pub value: T,
+    pub by: Vec<String>,
 }
 
 /// An artist or a label as a record names it: by its id for life and its name.
@@ -197,6 +208,9 @@ pub struct Named {
 pub struct RecordProperties {
     #[serde(rename = "type")]
     pub kind: FactView<Option<String>>,
+    /// What its type is by, in the server's words (VR39): "by the release type rule", "by the picked list", "by its sources",
+    /// "set by you"; none where it has none.
+    pub type_why: String,
     pub title: FactView<String>,
     pub artists: FactView<Vec<Named>>,
     pub credit: String,

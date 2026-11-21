@@ -41,6 +41,10 @@ pub struct References {
     /// none fits and none was chosen.
     pub counting: Option<String>,
     pub by_hand: bool,
+    /// The record's read a choice began (LOOKUPS Found 10, RI.10, LK.A1: a link pasted, a Confirm), to follow by its key; what
+    /// it learns reaches the page by `changed`. None on a GET.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -194,7 +198,8 @@ pub fn timed(list: &[RefTrack]) -> bool {
 ///   nothing is read. One whose files are short of the list they name (W4: "partly there") is judged by that list, counted by
 ///   nothing.
 ///
-/// `Ok(Err(why))`: no list to judge by, and why in few words. `Err`: a source could not be reached; asked again later.
+/// `Ok(Err(why))`: no list to judge by, and why in few words. `Err`: a source could not be reached, or every reference the record
+/// holds is a guess (`Unconfirmed`); asked again later.
 pub async fn tracklist<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<std::result::Result<Judging, String>>
 where
     R: Fn(Ref) -> F,
@@ -204,12 +209,29 @@ where
     if let Some(e) = j.stop {
         return Err(e);
     }
+    // No list, and every reference it holds a guess (VR8): it waits a round for one to be confirmed, never Stuck.
+    if j.answer.is_err() && j.unconfirmed {
+        return Err(Unconfirmed.into());
+    }
     match (j.answer, j.off) {
         // Switched off (R23, N16) where no other gave a list: out of reach until it is on again.
         (Err(_), Some(off)) => Err(off),
         (answer, _) => Ok(answer),
     }
 }
+
+/// A record with no list to judge by whose every reference is a guess (VR8): no list is read through one, so it waits a round for a
+/// reference to be confirmed (by a hand, a link, an id or today's pairing), never Stuck.
+#[derive(Debug)]
+pub struct Unconfirmed;
+
+impl std::fmt::Display for Unconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Waits for a reference to be confirmed")
+    }
+}
+
+impl std::error::Error for Unconfirmed {}
 
 /// What a source said of a record's list where it gave none (F1): switched off, held back after Bandcamp's bot check, not
 /// answering (out of reach, or a page's read cut at `PAGE_READ_AT_MOST`), or no list of it (no such release, none with tracks).
@@ -254,6 +276,8 @@ struct Judged {
     stop: Option<anyhow::Error>,
     /// A source switched off, passed over.
     off: Option<anyhow::Error>,
+    /// Every reference a list could be read through is a guess, at least one held (VR8).
+    unconfirmed: bool,
 }
 
 /// `tracklist`'s reading and keeping, each source's outcome kept (`Judged`): `tracklist` words it for Soulseek, a page's read
@@ -263,7 +287,7 @@ where
     R: Fn(Ref) -> F,
     F: std::future::Future<Output = Result<Option<Read>>>,
 {
-    let answered = |answer: std::result::Result<Judging, String>| Judged { answer, said: Vec::new(), stop: None, off: None };
+    let answered = |answer: std::result::Result<Judging, String>| Judged { answer, said: Vec::new(), stop: None, off: None, unconfirmed: false };
     let c = cat.clone();
     let Some((row, refs, kept, short)) = crate::run::spawn_blocking(move || -> Result<_> {
         let Some(row) = c.record(record)? else { return Ok(None) };
@@ -404,7 +428,9 @@ where
         let none: Vec<String> = said.iter().filter(|(_, o)| *o == Outcome::None).map(|(s, _)| format!("{} has no list of it", source_name(s))).collect();
         Err(if none.is_empty() { "No list to judge by".to_string() } else { none.join("; ") })
     };
-    Ok(Judged { answer, said, stop, off })
+    let listed: Vec<&Ref> = refs.iter().map(|(r, _)| r).filter(|r| matches!(r.kind.as_str(), "release" | "release-group" | "master" | "album")).collect();
+    let unconfirmed = !listed.is_empty() && listed.iter().all(|r| guessed(r));
+    Ok(Judged { answer, said, stop, off, unconfirmed })
 }
 
 /// What a source's answer says besides its list (F14.5, F15, F18.2): other references of the album it names (`also`: a Discogs
@@ -1227,7 +1253,7 @@ async fn of_served(served: &Option<Arc<crate::serve::Serve>>, album: &str) -> Re
     let (s, a) = (served.clone(), album.to_string());
     let k = crate::run::spawn_blocking(move || kept(&s, &a, record)).await??;
     let year = bandcamp_year(&served, record);
-    Ok(References { album: album.to_string(), title: k.title.clone(), artist: k.artist.clone(), sources: sources(&k, year), counting: k.row.counting.clone(), by_hand: k.row.checked_by_hand })
+    Ok(References { album: album.to_string(), title: k.title.clone(), artist: k.artist.clone(), sources: sources(&k, year), counting: k.row.counting.clone(), by_hand: k.row.checked_by_hand, task: None })
 }
 
 /// Bandcamp's year of a record as its page said it when last read (a fact kept on its page, FA15).
@@ -1356,13 +1382,53 @@ fn chose(cat: &Catalogue, record: i64, album: &str, c: &Choose, files: &[Listed]
 }
 
 pub async fn choose<H: RecordsHost + ?Sized>(app: &Arc<H>, album: &str, c: Choose) -> Result<References> {
+    choose_reading(app, album, c, read_reference).await
+}
+
+/// `choose`, a record not had's sources read through `read` (the tests' stand-in): the choice kept, then the record's read begun
+/// as its open begins it (`begin_read_with`: LOOKUPS Found 10, RI.10, LK.A1), and the answer given at once from what is kept,
+/// with the read's task.
+pub async fn choose_reading<H, R, F>(app: &Arc<H>, album: &str, c: Choose, read: R) -> Result<References>
+where
+    H: RecordsHost + ?Sized,
+    R: Fn(Ref) -> F + Send + Sync + 'static,
+    F: std::future::Future<Output = Result<Option<Read>>> + Send + 'static,
+{
     let served = app.served().clone().context("Cratarr's own library is not open")?;
     let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
     let (s, a) = (served.clone(), album.to_string());
     crate::run::spawn_blocking(move || choose_in(&s, &a, record, &c)).await??;
     app.collection().refresh().await;
     app.collection().tell_changed();
-    of(app, album).await
+    let task = begin_read_with(served, record, read).await;
+    let mut answer = of(app, album).await?;
+    answer.task = Some(task);
+    Ok(answer)
+}
+
+/// The record's read begun as its open begins it (RV12; LOOKUPS Found 10: an open, a link pasted, a Confirm): a record not had's
+/// sources read on their turn (`read_at_open`), a had record's references (`read_references`), each a Cratarr job of `READ_KIND`
+/// (no account's) keyed by the record, one running already followed, not doubled. Its task, to follow by its key.
+pub async fn begin_read(served: Arc<crate::serve::Serve>, record: i64) -> serde_json::Value {
+    begin_read_with(served, record, read_reference).await
+}
+
+/// `begin_read`, a record not had's sources read through `read`.
+pub async fn begin_read_with<R, F>(served: Arc<crate::serve::Serve>, record: i64, read: R) -> serde_json::Value
+where
+    R: Fn(Ref) -> F + Send + Sync + 'static,
+    F: std::future::Future<Output = Result<Option<Read>>> + Send + 'static,
+{
+    let cat = served.catalogue().clone();
+    let c = cat.clone();
+    let had = crate::run::spawn_blocking(move || c.record(record)).await.ok().and_then(Result::ok).flatten().is_some_and(|r| r.had);
+    if !had {
+        let _ = read_at_open(&cat, record, now_secs(), read).await;
+    } else if let Ok(handle) = crate::runner::runner().begin_keyed(READ_KIND, &ids::record(record), None) {
+        let album = ids::record(record);
+        let _ = crate::runner::jobs::run(Arc::new(handle), move |_| read_references(served, album, record));
+    }
+    read_task(record)
 }
 
 /// `choose` in the catalogue and the user data. A record not had (D18, C54) is no album of the library: its choice is the

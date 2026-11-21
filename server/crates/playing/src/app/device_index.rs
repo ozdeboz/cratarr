@@ -758,6 +758,12 @@ pub(super) mod tests {
         let (nf, sg) = (row(night_ferry), row(signal));
         assert_eq!((nf.whole_tracks, nf.copies.iter().map(|c| c.tracks).collect::<Vec<_>>()), (None, vec![7]), "its copy 7, no count before a pick");
         assert_eq!(sg.whole_tracks, None, "whole: none to make up");
+        // VR39 (HD12's kind half): the index's kind is `resolve()`'s type, the one the record's Head shows: a had record's by the
+        // release type rule over its copy, as built (`Serve::record_types`, what the record's view reads).
+        let album = ids::record(night_ferry);
+        let built = s.serve.record_types(std::slice::from_ref(&album)).remove(&album).and_then(|(kind, _)| kind);
+        assert!(built.is_some(), "typed by the rule at its build");
+        assert_eq!(nf.kind, crate::catalogue::facts::resolve_type(None, built.as_deref(), None, &[]).value, "one rule for the index and the Head");
         // Root picks MusicBrainz's list (the list 0.17 kept, keyed by none until the step keys it): the count shows, 10.
         let kept = s.cat.lists_kept(night_ferry).unwrap();
         s.cat.pick_list(night_ferry, Some(&kept[0].reference)).unwrap();

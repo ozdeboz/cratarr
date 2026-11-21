@@ -5302,18 +5302,16 @@ async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Res
     };
     // RV12: the record's read begins at its open, as a job (never on its GET): a record not had's sources read, what they say learnt;
     // a had record's references read for its References (the owner: every lookup a job begun by an open or a schedule).
-    let had = cat.record(record).ok().flatten().is_some_and(|r| r.had);
-    if !had {
-        let _ = crate::app::references::read_at_open(&cat, record, crate::app::moment::now_secs(), crate::app::references::read_reference).await;
-    } else if let (Some(served), Ok(handle)) =
-        (ctx.serve().ok(), crate::runner::runner().begin_keyed(crate::app::references::READ_KIND, &crate::serve::ids::record(record), None))
-    {
-        let album = crate::serve::ids::record(record);
-        let _ = crate::runner::jobs::run(std::sync::Arc::new(handle), move |_| crate::app::references::read_references(served, album, record));
-    }
+    let task = match ctx.serve() {
+        Ok(served) => crate::app::references::begin_read(served, record).await,
+        Err(_) => {
+            let _ = crate::app::references::read_at_open(&cat, record, crate::app::moment::now_secs(), crate::app::references::read_reference).await;
+            crate::app::references::read_task(record)
+        }
+    };
     // Answered at once from what is kept (SCENARIOS-LOOKUPS, 2026-11-21): the record, and the read's task to follow by its key (a
     // Cratarr job, no account's: one read of a record whoever opens it); what it learns reaches the page by `changed`.
-    Ok(Json(json!({ "record": crate::serve::ids::record(record), "task": crate::app::references::read_task(record) })))
+    Ok(Json(json!({ "record": crate::serve::ids::record(record), "task": task })))
 }
 
 /// A label About shows, opened (F9): `{ source: "discogs" | "musicbrainz", id, name }` answers `{ id: "la-<n>" }`, the label that

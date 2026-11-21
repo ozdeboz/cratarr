@@ -83,6 +83,11 @@ pub struct RecordFacts {
     /// Every list it keeps, by reference (VR01), and the pick among them: its versions and its tracklist fact (VR38).
     pub lists: Vec<crate::facts::List>,
     pub pick: Option<crate::facts::Reference>,
+    /// Each source's year and type of it, per reference, each a guess's or not (FA15, VR40): what `resolve()` reads (VR39).
+    pub years: Vec<crate::facts::Said<i32>>,
+    pub types: Vec<crate::facts::Said<String>>,
+    /// The release type rule's type over its picked list's titles and lengths (VR39, M10), where one is picked.
+    pub picked_kind: Option<String>,
     /// The catalogue folder of the copy that plays for this viewer in this place (`copy_for` over the place's set), if one does.
     pub plays: Option<i64>,
     /// A page that previews it (Bandcamp's).
@@ -114,7 +119,38 @@ impl RecordFacts {
     }
 
     fn word(&self) -> &'static str {
-        record_word(self.kind.as_deref(), &self.secondary)
+        record_word(self.kind_now().value.as_deref(), &self.secondary)
+    }
+
+    /// Whether a copy of it is present anywhere.
+    fn had(&self) -> bool {
+        self.copies.iter().any(|c| c.facts.present > 0)
+    }
+
+    /// Its year (FA1, FA13, VR39): the hand's; a had record's by its files; else its sources' as equals, each read per reference, a
+    /// guess's never: the pick's where a list is picked, the one they agree on, none while they differ (their versions, none
+    /// chosen; the Head shows no year until a hand picks, OQ-VR-9 (c)). A record no source has said a year of keeps the one it
+    /// was made with.
+    pub fn year_now(&self) -> crate::facts::Resolved<i32> {
+        let hand = if self.hand.iter().any(|h| h == "year") { self.year } else { None };
+        let files = if self.had() { self.year.map(|y| (y, "files".to_string())) } else { None };
+        if hand.is_none() && files.is_none() && !self.years.iter().any(|s| !s.guessed && s.value.is_some()) {
+            return crate::facts::Resolved { value: self.year, by: Vec::new(), versions: Vec::new() };
+        }
+        crate::facts::resolve_year(hand, files, &self.years, self.pick.as_ref())
+    }
+
+    /// Its release type (FA13, VR39): the hand's; a had record's by the release type rule over its copy (as built); a record not
+    /// had's by the rule over its picked list, else its sources' type facts where they all agree, else none until a hand picks, as
+    /// the year (never a source by its name or the order asked). A record no source has said a type of keeps the one it was made with. One rule for the Head, its
+    /// rows and the device's index.
+    pub fn kind_now(&self) -> crate::facts::Resolved<String> {
+        let hand = if self.hand.iter().any(|h| h == "type") { self.kind.clone() } else { None };
+        let rule = if self.had() { self.kind.clone() } else { None };
+        if hand.is_none() && rule.is_none() && self.picked_kind.is_none() && !self.types.iter().any(|s| !s.guessed && s.value.is_some()) {
+            return crate::facts::Resolved { value: self.kind.clone(), by: Vec::new(), versions: Vec::new() };
+        }
+        crate::facts::resolve_type(hand.as_deref(), rule.as_deref(), self.picked_kind.as_deref(), &self.types)
     }
 
     /// Its present copies: what its actions name by their place in this list.
@@ -551,14 +587,20 @@ fn hidden(c: &CopyOf, v: &Viewer) -> bool {
 fn properties(r: &RecordFacts) -> RecordProperties {
     let fact = |name: &str| if r.hand.iter().any(|h| h == name) { vec!["hand".to_string()] } else { Vec::new() };
     let names: Vec<&str> = r.artists.iter().map(|a| a.name.as_str()).collect();
+    let (year, kind) = (r.year_now(), r.kind_now());
     RecordProperties {
-        kind: FactView { value: r.kind.clone(), by: fact("type") },
-        title: FactView { value: r.title.clone(), by: fact("title") },
-        artists: FactView { value: r.artists.clone(), by: fact("artist") },
+        type_why: crate::facts::type_why(&kind.by).to_string(),
+        kind: FactView { value: kind.value, by: kind.by, versions: Vec::new() },
+        title: FactView { value: r.title.clone(), by: fact("title"), versions: Vec::new() },
+        artists: FactView { value: r.artists.clone(), by: fact("artist"), versions: Vec::new() },
         credit: credit_text(&names, None),
-        year: FactView { value: r.year, by: fact("year") },
+        year: FactView {
+            value: year.value,
+            by: year.by,
+            versions: year.versions.into_iter().map(|v| crate::view::FactVersion { value: Some(v.value), by: v.by }).collect(),
+        },
         labels: FactView::of(r.labels.clone()),
-        cover: FactView { value: Some(cratarr_rules::ids::record_picture(&record_id(r.id), r.cover.as_deref())), by: fact("cover") },
+        cover: FactView { value: Some(cratarr_rules::ids::record_picture(&record_id(r.id), r.cover.as_deref())), by: fact("cover"), versions: Vec::new() },
     }
 }
 
@@ -608,8 +650,8 @@ pub fn row(r: &RecordFacts, seen: &Seen) -> Row {
         epoch: epoch(seen.viewer, seen.place, seen.off),
         title: r.title.clone(),
         credit: credit_text(&names, None),
-        kind: r.kind.clone(),
-        year: r.year,
+        kind: r.kind_now().value,
+        year: r.year_now().value,
         cover: Some(cratarr_rules::ids::record_picture(&record_id(r.id), r.cover.as_deref())),
         state: state(r, seen),
     }

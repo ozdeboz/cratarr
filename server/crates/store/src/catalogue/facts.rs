@@ -8,6 +8,9 @@ use rusqlite::{Connection, params};
 
 use super::Catalogue;
 
+/// The rules a record's facts resolve by (VR39): one for the record's view, its rows and the device's index.
+pub use cratarr_domain::facts::{resolve_type, resolve_year};
+
 pub(super) const SCHEMA: &str = "
 -- FA15: a record's facts with their sources, one row per source and reference (`fact`: `year` first; `source`: musicbrainz,
 -- discogs, bandcamp, …; `ref`: the reference it was read for, `<kind>:<value>`, a release's year living on its release (H4), ''

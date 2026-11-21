@@ -368,14 +368,15 @@ pub fn type_why(by: &[String]) -> &'static str {
         Some(BY_HAND) => "set by you",
         Some(BY_RULE) => "by the release type rule",
         Some(BY_PICK) => "by the picked list",
-        Some(_) => "by most of its sources",
+        Some(_) => "by its sources",
         None => "",
     }
 }
 
 /// The type (FA13; VR39, M10, RV-12; the rule itself is VERSIONS'): the hand's; a had record's by the release type rule over its
 /// deciding copy (`had_rule`), never its files' type tag; a record not had's by the rule over its picked list (`picked_rule`), else
-/// its sources' type facts by majority, a tie none until a hand picks. A guess's type never counts (M4).
+/// its sources' type facts where they all agree, else none until a hand picks, as the year (the owner, 2026-11-21 13:59: no
+/// majority). A guess's type never counts (M4).
 pub fn resolve_type(hand: Option<&str>, had_rule: Option<&str>, picked_rule: Option<&str>, said: &[Said<String>]) -> Resolved<String> {
     let one = |value: &str, by: &str| Resolved { value: Some(value.to_string()), by: vec![by.to_string()], versions: Vec::new() };
     if let Some(t) = hand {
@@ -387,10 +388,7 @@ pub fn resolve_type(hand: Option<&str>, had_rule: Option<&str>, picked_rule: Opt
     if let Some(t) = picked_rule {
         return one(t, BY_PICK);
     }
-    let values = values_of(said);
-    let most = values.iter().map(|v| v.by.len()).max().unwrap_or(0);
-    let top: Vec<&Valued<String>> = values.iter().filter(|v| v.by.len() == most).collect();
-    match top.as_slice() {
+    match values_of(said).as_slice() {
         [v] => Resolved { value: Some(v.value.clone()), by: v.by.clone(), versions: Vec::new() },
         _ => Resolved { value: None, by: Vec::new(), versions: Vec::new() },
     }
@@ -709,9 +707,12 @@ mod tests {
     #[test]
     fn a_not_had_records_type_is_its_pick_else_its_sources_most() {
         let said = |source: &str, ty: &str, guessed: bool| Said { reference: None, source: source.to_string(), value: Some(ty.to_string()), guessed };
+        // Revised (the owner, 2026-11-21 13:59, "None until picked"): no majority; the sources' type where they all agree.
         let salt_lines = [said("musicbrainz", "Album", false), said("discogs", "Album", false), said("bandcamp", "EP", false)];
-        let r = resolve_type(None, None, None, &salt_lines);
-        assert_eq!((r.value.as_deref(), type_why(&r.by)), (Some("Album"), "by most of its sources"));
+        assert_eq!(resolve_type(None, None, None, &salt_lines).value, None, "Album, Album, EP: no type until a hand picks");
+        let agreeing = [said("musicbrainz", "Album", false), said("discogs", "Album", false), said("bandcamp", "Album", false)];
+        let r = resolve_type(None, None, None, &agreeing);
+        assert_eq!((r.value.as_deref(), type_why(&r.by)), (Some("Album"), "by its sources"));
         let low_ceiling = [said("musicbrainz", "EP", false), said("discogs", "Album", false)];
         assert_eq!(resolve_type(None, None, None, &low_ceiling).value, None, "one each: no type until a hand picks");
         let mut turned = low_ceiling.clone();

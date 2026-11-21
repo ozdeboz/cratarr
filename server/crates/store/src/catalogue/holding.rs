@@ -254,6 +254,10 @@ pub struct RecordRead {
     /// Every list it keeps, by reference, each a guess's or not (VR01), and the administrator's pick among them (VR5).
     pub lists: Vec<cratarr_domain::facts::List>,
     pub pick: Option<cratarr_domain::facts::Reference>,
+    /// Every source's value of its facts, by fact, source and reference (FA15, VR40), and the references it holds that are guesses
+    /// (VR8: a search by name alone, unconfirmed, and today's pairing confirming none), for `resolve()` (VR39).
+    pub said: Vec<super::facts::Said>,
+    pub guesses: Vec<cratarr_domain::facts::Reference>,
 }
 
 /// `Catalogue::record_read` in the caller's transaction.
@@ -284,7 +288,18 @@ pub fn record_read_in(tx: &Connection, id: i64, library: &dyn Fn(i64) -> Library
         .query_row([crate::serve::ids::record(end)], |r| r.get(0))
         .optional()?;
     let (lists, pick) = (super::lists::lists_in(tx, end)?, super::lists::pick_in(tx, end)?);
-    Ok(Some(RecordRead { row, artists, labels, copies, quality, bandcamp, lists, pick }))
+    let said = tx
+        .prepare_cached("SELECT fact, source, ref, value, at FROM facts WHERE record = ?1 ORDER BY fact, source, ref")?
+        .query_map([end], |r| Ok(super::facts::Said { fact: r.get(0)?, source: r.get(1)?, of: r.get(2)?, value: r.get(3)?, at: r.get(4)? }))?
+        .collect::<rusqlite::Result<_>>()?;
+    let guesses = tx
+        .prepare_cached("SELECT source, kind, value FROM \"references\" WHERE subject = ?1 AND how = 'search' AND confirmed = 0")?
+        .query_map([crate::serve::ids::record(end)], |r| Ok(cratarr_domain::facts::Reference::new(&r.get::<_, String>(0)?, &r.get::<_, String>(1)?, &r.get::<_, String>(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|r| !copies.confirmed.contains(r))
+        .collect();
+    Ok(Some(RecordRead { row, artists, labels, copies, quality, bandcamp, lists, pick, said, guesses }))
 }
 
 #[cfg(test)]
