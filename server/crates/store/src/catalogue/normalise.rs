@@ -35,6 +35,13 @@ pub struct Encoding {
 
 /// Why "&" is no genre separator (OQ-GEN-21), as the editors and a refused save say it.
 pub const AMPERSAND: &str = "\"&\" sits inside genres, as in Drum & Bass and R&B, so it can't separate them";
+/// Why only "/" and ";" separate artists (the credit model, 2026-11-21 14:24, GEN.63): "&", "and", "x", "with", "vs." and ","
+/// are printed phrases of a credit, kept as written.
+pub const ARTIST_PHRASE: &str = "Only \"/\" and \";\" separate artists: \"&\", \"x\" and the like are kept as the credit prints them";
+/// Why "feat." separates no artists (the credit model): it names a featured artist (the Featuring role, F54).
+pub const FEATURING: &str = "\"feat.\" names a featured artist, so it can't separate artists";
+/// The artist separators a library may hold: list separators only (GEN.63).
+pub const LIST_SEPARATORS: [&str; 2] = ["/", ";"];
 
 impl Default for Encoding {
     fn default() -> Self {
