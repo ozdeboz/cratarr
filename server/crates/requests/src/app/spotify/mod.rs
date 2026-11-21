@@ -22,7 +22,7 @@ use store::{IMPORT, LIVE, Store};
 /// The live lists are read again after this long.
 const AGAIN: Duration = Duration::from_secs(6 * 3600);
 /// How often the background looks for lists to read and questions for MusicBrainz.
-const LOOK: Duration = Duration::from_secs(10 * 60);
+pub const LOOK: Duration = Duration::from_secs(10 * 60);
 /// Between two questions to MusicBrainz: the turn keeps its one a second (`musicbrainz::Asked`), and the lists' questions in
 /// the background leave turns between for the pages.
 const MB_PACE: Duration = Duration::from_millis(1500);

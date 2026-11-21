@@ -1254,7 +1254,7 @@ pub fn start<H: RequestsHost>(app: &Arc<H>) {
 /// showing it; an approval's or a Search now's round begun at once as one (one at a time, whoever asked).
 pub const ROUND: &str = "soulseek:round";
 /// The round's tick: a search at most this often (the old loop's pace between two).
-const ROUND_EVERY: Duration = Duration::from_secs(5);
+pub const ROUND_EVERY: Duration = Duration::from_secs(5);
 /// The approved Requests read by the round at most this often, and at once when woken (the old loop's idle minute).
 const REQUESTS_EVERY: i64 = 60;
 /// When the round last read the approved Requests (epoch s); 0: at its next tick.

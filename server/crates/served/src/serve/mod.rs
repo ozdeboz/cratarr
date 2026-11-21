@@ -55,11 +55,20 @@ const FIRST_AFTER: Duration = Duration::from_secs(90);
 
 /// The server, once `main` has opened it: what the built-in Cratarr source reads (plugins are made from their settings
 /// alone, decision 0005).
+#[cfg(not(any(test, feature = "test-support")))]
 static INSTANCE: std::sync::OnceLock<Arc<Serve>> = std::sync::OnceLock::new();
+/// Tests: the server a test's boot set, the last one (LOOKUPS LK.0's harness 3 and 8: each route's server on its own data folder).
+#[cfg(any(test, feature = "test-support"))]
+static INSTANCE: std::sync::RwLock<Option<Arc<Serve>>> = std::sync::RwLock::new(None);
 
 pub fn set_instance(serve: Arc<Serve>) {
     view::set(serve.clone());
+    #[cfg(not(any(test, feature = "test-support")))]
     let _ = INSTANCE.set(serve);
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        *INSTANCE.write().unwrap_or_else(|p| p.into_inner()) = Some(serve);
+    }
     // A playlist made, renamed, deleted or brought back: logged (decision 0087; its writes are logged as they are
     // written); one shared that goes (deleted, renamed away), told to the others as gone.
     crate::playlists::on_named(Box::new(|id, there, shared| {
@@ -79,8 +88,15 @@ pub fn set_instance(serve: Arc<Serve>) {
 /// artist store's), the playlist write hook above, and free functions reached from many places, where a parameter
 /// would run through dozens of signatures (the album edits run as tasks, Radio, the feature switches, signed links,
 /// the cover cache).
+#[cfg(not(any(test, feature = "test-support")))]
 pub fn instance() -> Option<Arc<Serve>> {
     INSTANCE.get().cloned()
+}
+
+/// Tests: the server the last boot set.
+#[cfg(any(test, feature = "test-support"))]
+pub fn instance() -> Option<Arc<Serve>> {
+    INSTANCE.read().unwrap_or_else(|p| p.into_inner()).clone()
 }
 
 pub struct Serve {

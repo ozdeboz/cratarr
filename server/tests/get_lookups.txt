@@ -1,0 +1,274 @@
+# Every GET route for SCENARIOS-LOOKUPS LK.0: ROUTE | PATH | ROOT'S ANSWER | STATE | NOTE
+GET /api/about | /api/about | 200 | - | reads only what is kept
+GET /api/activity | /api/activity | 200 | - | reads only what is kept
+GET /api/admin/migration | /api/admin/migration | 200 | - | reads only what is kept
+GET /api/admin/migration/moved | /api/admin/migration/moved | 200 | - | reads only what is kept
+GET /api/album-uses/{source} | /api/album-uses/cratarr | 200 | - | reads only what is kept
+GET /api/albums | /api/albums | 200 | - | reads only what is kept
+GET /api/albums/duplicates | /api/albums/duplicates | 200 | - | reads only what is kept
+GET /api/albums/{source}/{album} | /api/albums/cratarr/{not_had} | 200 | - | row 1: the record not had, as kept (DC1a.2, RV12)
+GET /api/albums/{source}/{album} | /api/albums/bandcamp/{bc_album} | 409 | waiting DC3 | row 2: a Bandcamp album panel (LK.D1)
+GET /api/albums/{source}/{album}/card | /api/albums/cratarr/{arrival}/card | 200 | - | row 26: the arrival's card as kept (DC2 run 7, LK.B1)
+GET /api/albums/{source}/{album}/cover | /api/albums/cratarr/{had}/cover | 200 | - | a had record's cover, its files'
+GET /api/albums/{source}/{album}/cover | /api/albums/cratarr/{not_had}/cover | 404 | waiting DC3 | row 10 (LK.D2)
+GET /api/albums/{source}/{album}/covers | /api/albums/cratarr/{had}/covers | 200 | waiting DC3 | row 27 (LK.D2)
+GET /api/albums/{source}/{album}/discogs | /api/albums/cratarr/{had}/discogs | 200 | waiting DC3 | row 23 (LK.D7)
+GET /api/albums/{source}/{album}/health | /api/albums/cratarr/{had}/health | 200 | - | reads only what is kept
+GET /api/albums/{source}/{album}/move | /api/albums/cratarr/{had}/move | 400 | - | reads only what is kept
+GET /api/albums/{source}/{album}/rating | /api/albums/cratarr/{had}/rating | 200 | - | reads only what is kept
+GET /api/albums/{source}/{album}/references | /api/albums/cratarr/{had}/references | 200 | - | row 25: as kept (DC1a.2, LK.A1)
+GET /api/albums/{source}/{album}/release | /api/albums/cratarr/{had}/release | 404 | - | row 28: none kept, 404 (DC2 run 6, LK.B2)
+GET /api/albums/{source}/{album}/similar | /api/albums/cratarr/{had}/similar | 200 | - | reads only what is kept
+GET /api/artists/about | /api/artists/about?id={artist} | 200 | waiting DC3 | row 11 (LK.D3)
+GET /api/artists/discogs | /api/artists/discogs?name=Glass%20Harbour&mbid={artist_mbid} | 200 | waiting DC3 | row 24 (LK.D7)
+GET /api/artists/missing | /api/artists/missing?id={artist} | 200 | waiting DC3 | row 16 (LK.D4)
+GET /api/artists/missing | /api/artists/missing?name=Orbit%20Lane | 200 | waiting DC3 | row 17 (LK.D4)
+GET /api/artists/picks | /api/artists/picks | 400 | - | reads only what is kept
+GET /api/artists/related | /api/artists/related?id={artist} | 200 | waiting DC3 | row 15 (LK.D4)
+GET /api/artists/{id}/photo | /api/artists/{artist}/photo | 404 | - | reads only what is kept
+GET /api/artists/{source} | /api/artists/cratarr | 409 | - | reads only what is kept
+GET /api/artists/{source}/favorite | /api/artists/cratarr/favorite | 200 | - | reads only what is kept
+GET /api/auth/check | /api/auth/check | 204 | - | reads only what is kept
+GET /api/auth/keys | /api/auth/keys | 200 | - | reads only what is kept
+GET /api/auth/required | /api/auth/required | 200 | - | reads only what is kept
+GET /api/auth/session | /api/auth/session | 200 | - | reads only what is kept
+GET /api/auth/sessions | /api/auth/sessions | 200 | - | reads only what is kept
+GET /api/auth/sessions/{id} | /api/auth/sessions/x | 405 | - | reads only what is kept
+GET /api/bandcamp/find | /api/bandcamp/find?artist=Glass%20Harbour&album=Tide%20Tables&release_group={rg} | 409 | waiting DC3 | row 7 (LK.D1)
+GET /api/capabilities | /api/capabilities | 200 | - | reads only what is kept
+GET /api/catalogue | /api/catalogue | 200 | - | reads only what is kept
+GET /api/catalogue/problems | /api/catalogue/problems | 200 | - | reads only what is kept
+GET /api/changes | /api/changes | 200 | - | reads only what is kept
+GET /api/classical/composers | /api/classical/composers | 200 | - | reads only what is kept
+GET /api/classical/composers/{key} | /api/classical/composers/x | 404 | - | reads only what is kept
+GET /api/classical/composers/{key}/works | /api/classical/composers/x/works | 404 | - | reads only what is kept
+GET /api/collection | /api/collection | 200 | - | reads only what is kept
+GET /api/connections/home-assistant | /api/connections/home-assistant | 200 | - | reads only what is kept
+GET /api/cover/{source}/{id} | /api/cover/cratarr/{track} | 200 | - | a track's cover, its file's
+GET /api/cover/{source}/{id} | /api/cover/bandcamp/{bc_album} | 404 | waiting DC3 | row 8 (LK.D2)
+GET /api/covers/release-group/{rg} | /api/covers/release-group/{rg} | 404 | waiting DC3 | row 9 (LK.D2)
+GET /api/covers/stamps | /api/covers/stamps | 200 | - | reads only what is kept
+GET /api/crates | /api/crates | 200 | - | reads only what is kept
+GET /api/crates/axes | /api/crates/axes | 200 | - | reads only what is kept
+GET /api/crates/fits | /api/crates/fits | 200 | - | reads only what is kept
+GET /api/crates/{id} | /api/crates/x | 404 | - | reads only what is kept
+GET /api/crates/{id}/fit | /api/crates/x/fit | 409 | - | reads only what is kept
+GET /api/crates/{id}/image | /api/crates/x/image | 404 | - | reads only what is kept
+GET /api/crates/{id}/left-out | /api/crates/x/left-out | 404 | - | reads only what is kept
+GET /api/crates/{id}/rows | /api/crates/x/rows | 404 | - | reads only what is kept
+GET /api/crates/{id}/similar | /api/crates/x/similar | 404 | - | reads only what is kept
+GET /api/crates/{id}/tempo | /api/crates/x/tempo | 404 | - | reads only what is kept
+GET /api/diagnostics | /api/diagnostics | 409 | - | reads only what is kept
+GET /api/diagnostics/download | /api/diagnostics/download | 409 | - | reads only what is kept
+GET /api/diagnostics/levels | /api/diagnostics/levels | 200 | - | reads only what is kept
+GET /api/discover | /api/discover | 200 | waiting DC3 | row 21 (LK.D5)
+GET /api/discover/around | /api/discover/around | 200 | waiting DC3 | row 22 (LK.D5)
+GET /api/discover/artist | /api/discover/artist?name=Glass%20Harbour | 200 | waiting DC3 | row 13 (LK.D3)
+GET /api/discover/artist/albums | /api/discover/artist/albums?name=Glass%20Harbour | 200 | waiting DC3 | row 14 (LK.D5)
+GET /api/discover/artist/photo | /api/discover/artist/photo | 404 | - | reads only what is kept
+GET /api/discover/excluded | /api/discover/excluded | 200 | - | reads only what is kept
+GET /api/discover/missing | /api/discover/missing | 200 | - | reads only what is kept
+GET /api/events | /api/events | 200 | - | reads only what is kept
+GET /api/events/players | /api/events/players | 200 | - | reads only what is kept
+GET /api/excluded | /api/excluded | 200 | - | reads only what is kept
+GET /api/export | /api/export | 409 | - | reads only what is kept
+GET /api/export/{token} | /api/export/x | 404 | - | reads only what is kept
+GET /api/favorites/{source}/albums | /api/favorites/cratarr/albums | 200 | - | reads only what is kept
+GET /api/favorites/{source}/artists | /api/favorites/cratarr/artists | 200 | - | reads only what is kept
+GET /api/favorites/{source}/tracks | /api/favorites/cratarr/tracks | 200 | - | reads only what is kept
+GET /api/file-changes/plans/{kind} | /api/file-changes/plans/fix:library:genre | 200 | waiting lane-C | rows 29-32: refused by GEN.58 (LK.B3, LK.C1)
+GET /api/file-changes/runs | /api/file-changes/runs | 200 | - | reads only what is kept
+GET /api/file-changes/runs/{id} | /api/file-changes/runs/x | 409 | - | reads only what is kept
+GET /api/file/{source}/{id} | /api/file/cratarr/{track} | 200 | - | reads only what is kept
+GET /api/folders | /api/folders | 200 | - | reads only what is kept
+GET /api/folders/status | /api/folders/status | 400 | - | reads only what is kept
+GET /api/folders/suggested | /api/folders/suggested | 200 | - | reads only what is kept
+GET /api/follow/followers | /api/follow/followers | 200 | - | reads only what is kept
+GET /api/follow/leaders | /api/follow/leaders | 200 | - | reads only what is kept
+GET /api/genres/aliases | /api/genres/aliases | 200 | - | reads only what is kept
+GET /api/groups/{group}/visuals | /api/groups/x/visuals | 404 | - | reads only what is kept
+GET /api/groups/{leader}/listen.pcm | /api/groups/x/listen.pcm | 400 | - | reads only what is kept
+GET /api/groups/{leader}/listen.wav | /api/groups/x/listen.wav | 400 | - | reads only what is kept
+GET /api/guest/albums/{id} | /api/guest/albums/x | 404 | - | reads only what is kept
+GET /api/guest/now | /api/guest/now | 404 | - | reads only what is kept
+GET /api/guest/queue-requests | /api/guest/queue-requests | 404 | - | reads only what is kept
+GET /api/guest/search | /api/guest/search | 404 | - | reads only what is kept
+GET /api/health | /api/health | 200 | - | reads only what is kept
+GET /api/health/report | /api/health/report | 200 | - | reads only what is kept
+GET /api/history/lastfm | /api/history/lastfm | 200 | - | reads only what is kept
+GET /api/history/listenbrainz | /api/history/listenbrainz | 200 | - | reads only what is kept
+GET /api/history/listening | /api/history/listening | 200 | - | reads only what is kept
+GET /api/history/profile | /api/history/profile | 200 | - | reads only what is kept
+GET /api/home/artists | /api/home/artists | 200 | waiting DC3 | row 12 (LK.D3)
+GET /api/home/back | /api/home/back | 200 | - | reads only what is kept
+GET /api/home/digging | /api/home/digging | 200 | - | reads only what is kept
+GET /api/home/moment | /api/home/moment | 200 | - | reads only what is kept
+GET /api/home/new | /api/home/new | 200 | - | reads only what is kept
+GET /api/home/week | /api/home/week | 200 | - | reads only what is kept
+GET /api/incoming | /api/incoming | 200 | - | reads only what is kept
+GET /api/incoming/jobs | /api/incoming/jobs | 200 | - | reads only what is kept
+GET /api/incoming/keep/{source}/{album} | /api/incoming/keep/cratarr/{had} | 409 | - | reads only what is kept
+GET /api/incoming/replace/{source}/{album} | /api/incoming/replace/cratarr/{had} | 409 | - | reads only what is kept
+GET /api/index | /api/index | 200 | - | reads only what is kept
+GET /api/index/changes | /api/index/changes | 400 | - | reads only what is kept
+GET /api/index/covers | /api/index/covers | 200 | - | reads only what is kept
+GET /api/index/covers/changes | /api/index/covers/changes | 400 | - | reads only what is kept
+GET /api/index/own | /api/index/own | 200 | - | reads only what is kept
+GET /api/index/sounds | /api/index/sounds | 200 | - | reads only what is kept
+GET /api/index/sounds/changes | /api/index/sounds/changes | 400 | - | reads only what is kept
+GET /api/insights | /api/insights | 200 | - | reads only what is kept
+GET /api/intake/waiting | /api/intake/waiting | 200 | - | reads only what is kept
+GET /api/labels/{id} | /api/labels/{label} | 200 | waiting DC3 | row 18 (LK.D6)
+GET /api/libraries | /api/libraries | 200 | - | reads only what is kept
+GET /api/library/albums/{album} | /api/library/albums/{had} | 200 | - | reads only what is kept
+GET /api/library/albums/{album}/resume | /api/library/albums/{had}/resume | 200 | - | reads only what is kept
+GET /api/library/find | /api/library/find | 200 | - | reads only what is kept
+GET /api/library/health | /api/library/health | 200 | - | reads only what is kept
+GET /api/library/incoming | /api/library/incoming | 200 | - | reads only what is kept
+GET /api/library/tags | /api/library/tags | 200 | - | reads only what is kept
+GET /api/library/tags/{tag} | /api/library/tags/x | 200 | - | reads only what is kept
+GET /api/library/tracks | /api/library/tracks | 200 | - | reads only what is kept
+GET /api/library/tracks/{track} | /api/library/tracks/{track} | 200 | - | reads only what is kept
+GET /api/library/tracks/{track}/file | /api/library/tracks/{track}/file | 200 | - | reads only what is kept
+GET /api/like-curve | /api/like-curve | 400 | - | reads only what is kept
+GET /api/me | /api/me | 200 | - | reads only what is kept
+GET /api/me/excluded-artists | /api/me/excluded-artists | 200 | - | reads only what is kept
+GET /api/me/preferences | /api/me/preferences | 200 | - | reads only what is kept
+GET /api/me/settings | /api/me/settings | 200 | - | reads only what is kept
+GET /api/musicbrainz/search | /api/musicbrainz/search?q=harbour | 200 | waiting DC3 | row 20 (LK.D8)
+GET /api/players | /api/players | 200 | - | reads only what is kept
+GET /api/players/settings | /api/players/settings | 200 | - | reads only what is kept
+GET /api/players/{name} | /api/players/kitchen | 404 | - | reads only what is kept
+GET /api/players/{name}/connect | /api/players/kitchen/connect | 200 | - | reads only what is kept
+GET /api/players/{name}/log | /api/players/kitchen/log | 400 | - | reads only what is kept
+GET /api/playlists/by-name | /api/playlists/by-name | 400 | - | reads only what is kept
+GET /api/playlists/favorites | /api/playlists/favorites | 200 | - | reads only what is kept
+GET /api/playlists/moved | /api/playlists/moved | 200 | - | reads only what is kept
+GET /api/playlists/stats | /api/playlists/stats | 200 | - | reads only what is kept
+GET /api/playlists/{id}/covers | /api/playlists/x/covers | 404 | - | reads only what is kept
+GET /api/playlists/{id}/rows | /api/playlists/x/rows | 404 | - | reads only what is kept
+GET /api/playlists/{id}/similar | /api/playlists/x/similar | 200 | - | reads only what is kept
+GET /api/playlists/{id}/tracks | /api/playlists/x/tracks | 404 | - | reads only what is kept
+GET /api/preview/bandcamp | /api/preview/bandcamp | 400 | - | reads only what is kept
+GET /api/preview/bandcamp/artist | /api/preview/bandcamp/artist?name=Glass%20Harbour&mbid={artist_mbid} | 200 | waiting DC3 | row 6 (LK.D1; M9)
+GET /api/queue-requests | /api/queue-requests | 200 | - | reads only what is kept
+GET /api/queue-requests/mine | /api/queue-requests/mine | 200 | - | reads only what is kept
+GET /api/queue-requests/{id}/decline | /api/queue-requests/x/decline | 405 | - | reads only what is kept
+GET /api/records/{id} | /api/records/{had} | 200 | - | reads only what is kept
+GET /api/repairs | /api/repairs | 200 | - | reads only what is kept
+GET /api/requests | /api/requests | 200 | - | reads only what is kept
+GET /api/requests/watching | /api/requests/watching | 200 | - | reads only what is kept
+GET /api/requests/{id} | /api/requests/x | 400 | - | reads only what is kept
+GET /api/scrobble | /api/scrobble | 200 | - | reads only what is kept
+GET /api/scrobble/lastfm/callback/{code} | /api/scrobble/lastfm/callback/a-code | 400 | - | reads only what is kept
+GET /api/search | /api/search | 200 | - | reads only what is kept
+GET /api/search/beyond | /api/search/beyond?q=harbour | 200 | waiting DC3 | row 19 (LK.D8)
+GET /api/settings | /api/settings | 200 | - | reads only what is kept
+GET /api/settings/acoustid | /api/settings/acoustid | 200 | - | reads only what is kept
+GET /api/settings/background | /api/settings/background | 200 | - | reads only what is kept
+GET /api/settings/bandcamp | /api/settings/bandcamp | 200 | - | reads only what is kept
+GET /api/settings/connections/state | /api/settings/connections/state | 200 | - | reads only what is kept
+GET /api/settings/discogs | /api/settings/discogs | 200 | - | reads only what is kept
+GET /api/settings/file-facts | /api/settings/file-facts | 200 | - | reads only what is kept
+GET /api/settings/floor | /api/settings/floor | 200 | - | reads only what is kept
+GET /api/settings/lastfm | /api/settings/lastfm | 200 | - | reads only what is kept
+GET /api/settings/lidarr/options | /api/settings/lidarr/options | 409 | - | reads only what is kept
+GET /api/settings/musicbrainz | /api/settings/musicbrainz | 200 | - | reads only what is kept
+GET /api/settings/naming | /api/settings/naming | 200 | - | reads only what is kept
+GET /api/settings/server-runtime | /api/settings/server-runtime | 200 | - | reads only what is kept
+GET /api/settings/slskd | /api/settings/slskd | 200 | - | reads only what is kept
+GET /api/soulseek | /api/soulseek | 200 | - | row 33: the list as kept, the round the server's (DC2 run 6, LK.B4)
+GET /api/spotify | /api/spotify | 200 | - | reads only what is kept
+GET /api/spotify/albums | /api/spotify/albums | 200 | - | reads only what is kept
+GET /api/spotify/artists | /api/spotify/artists | 200 | - | reads only what is kept
+GET /api/spotify/callback | /api/spotify/callback?state=none&code=x | 303 | - | row 34: the sign-in alone (DC2 run 7, LK.E1, T-LK-3)
+GET /api/spotify/cover/{kind}/{id} | /api/spotify/cover/fix:library:genre/x | 404 | - | reads only what is kept
+GET /api/spotify/playlists | /api/spotify/playlists | 200 | - | reads only what is kept
+GET /api/spotify/playlists/{id} | /api/spotify/playlists/x | 404 | - | reads only what is kept
+GET /api/spotify/tracks | /api/spotify/tracks | 200 | - | reads only what is kept
+GET /api/state | /api/state | 200 | - | reads only what is kept
+GET /api/status | /api/status | 200 | - | reads only what is kept
+GET /api/stream/{source}/{id} | /api/stream/cratarr/{track} | 422 | - | reads only what is kept
+GET /api/stream/{source}/{id}/rewind | /api/stream/cratarr/{track}/rewind | 400 | - | reads only what is kept
+GET /api/stream/{source}/{id}/wind | /api/stream/cratarr/{track}/wind | 400 | - | reads only what is kept
+GET /api/subsonic/accounts | /api/subsonic/accounts | 200 | - | reads only what is kept
+GET /api/subsonic/import | /api/subsonic/import | 200 | - | reads only what is kept
+GET /api/subsonic/import/sources | /api/subsonic/import/sources | 200 | - | reads only what is kept
+GET /api/sync/measure | /api/sync/measure | 200 | - | reads only what is kept
+GET /api/sync/targets | /api/sync/targets | 200 | - | reads only what is kept
+GET /api/tasks | /api/tasks | 200 | - | reads only what is kept
+GET /api/time | /api/time | 200 | - | reads only what is kept
+GET /api/track-fetch/{id} | /api/track-fetch/x | 409 | - | reads only what is kept
+GET /api/track-files | /api/track-files | 409 | - | reads only what is kept
+GET /api/track-intake | /api/track-intake | 200 | - | reads only what is kept
+GET /api/track-search/{id} | /api/track-search/x | 409 | - | reads only what is kept
+GET /api/track/{source}/{id} | /api/track/cratarr/{track} | 200 | - | reads only what is kept
+GET /api/track/{source}/{id}/band-wave | /api/track/cratarr/{track}/band-wave | 503 | - | reads only what is kept
+GET /api/track/{source}/{id}/bands | /api/track/cratarr/{track}/bands | 503 | - | reads only what is kept
+GET /api/track/{source}/{id}/beats | /api/track/cratarr/{track}/beats | 503 | - | reads only what is kept
+GET /api/track/{source}/{id}/details | /api/track/cratarr/{track}/details | 404 | - | a track's details, as kept
+GET /api/track/{source}/{id}/details | /api/track/bandcamp/{bc_track}/details | 404 | waiting DC3 | row 3 (LK.D1)
+GET /api/track/{source}/{id}/gain | /api/track/cratarr/{track}/gain | 200 | - | reads only what is kept
+GET /api/track/{source}/{id}/playlists | /api/track/cratarr/{track}/playlists | 200 | - | reads only what is kept
+GET /api/track/{source}/{id}/spectrum | /api/track/cratarr/{track}/spectrum | 503 | - | reads only what is kept
+GET /api/track/{source}/{id}/waveform | /api/track/cratarr/{track}/waveform | 404 | - | reads only what is kept
+GET /api/tracks/{source}/{id}/versions | /api/tracks/cratarr/{track}/versions | 404 | - | reads only what is kept
+GET /api/users | /api/users | 200 | - | reads only what is kept
+GET /api/users/{name}/devices/{id} | /api/users/kitchen/devices/x | 405 | - | reads only what is kept
+GET /api/visuals/limits | /api/visuals/limits | 404 | - | reads only what is kept
+GET /api/visuals/ratings | /api/visuals/ratings | 200 | - | reads only what is kept
+GET /api/visuals/snapshots | /api/visuals/snapshots | 200 | - | reads only what is kept
+GET /api/words/catalogue | /api/words/catalogue | 200 | - | reads only what is kept
+GET /api/works/{mbid} | /api/works/x | 404 | - | reads only what is kept
+GET /guest | /guest | 404 | - | reads only what is kept
+GET /mcp | /mcp | 401 | unproved R-N6 | MCP's stream, until its tools' per-request wrapper exists
+GET /signin | /signin | 303 | - | reads only what is kept
+GET /rest/createBookmark | /rest/createBookmark?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/createPlaylist | /rest/createPlaylist?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/deleteBookmark | /rest/deleteBookmark?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/deletePlaylist | /rest/deletePlaylist?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/download | /rest/download?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getAlbum | /rest/getAlbum?u=me&p=pw&v=1.16.1&c=scan&f=json&id={had} | 200 | - | Subsonic: reads only the library
+GET /rest/getAlbumInfo | /rest/getAlbumInfo?u=me&p=pw&v=1.16.1&c=scan&f=json&id={had} | 200 | - | Subsonic: reads only the library
+GET /rest/getAlbumInfo2 | /rest/getAlbumInfo2?u=me&p=pw&v=1.16.1&c=scan&f=json&id={had} | 200 | - | Subsonic: reads only the library
+GET /rest/getAlbumList | /rest/getAlbumList?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getAlbumList2 | /rest/getAlbumList2?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getArtist | /rest/getArtist?u=me&p=pw&v=1.16.1&c=scan&f=json&id={artist} | 200 | - | Subsonic: reads only the library
+GET /rest/getArtistInfo | /rest/getArtistInfo?u=me&p=pw&v=1.16.1&c=scan&f=json&id={artist} | 200 | - | Subsonic: reads only the library
+GET /rest/getArtistInfo2 | /rest/getArtistInfo2?u=me&p=pw&v=1.16.1&c=scan&f=json&id={artist} | 200 | - | Subsonic: reads only the library
+GET /rest/getArtists | /rest/getArtists?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getBookmarks | /rest/getBookmarks?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getCoverArt | /rest/getCoverArt?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getGenres | /rest/getGenres?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getIndexes | /rest/getIndexes?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getLicense | /rest/getLicense?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getMusicFolders | /rest/getMusicFolders?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getNowPlaying | /rest/getNowPlaying?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getOpenSubsonicExtensions | /rest/getOpenSubsonicExtensions?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getPlayQueue | /rest/getPlayQueue?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getPlayQueueByIndex | /rest/getPlayQueueByIndex?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getPlaylist | /rest/getPlaylist?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getPlaylists | /rest/getPlaylists?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getRandomSongs | /rest/getRandomSongs?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getScanStatus | /rest/getScanStatus?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getSimilarSongs | /rest/getSimilarSongs?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getSimilarSongs2 | /rest/getSimilarSongs2?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getSong | /rest/getSong?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getSongsByGenre | /rest/getSongsByGenre?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getStarred | /rest/getStarred?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getStarred2 | /rest/getStarred2?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getTopSongs | /rest/getTopSongs?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/getUser | /rest/getUser?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/ping | /rest/ping?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/reportPlayback | /rest/reportPlayback?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/savePlayQueue | /rest/savePlayQueue?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/savePlayQueueByIndex | /rest/savePlayQueueByIndex?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/scrobble | /rest/scrobble?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/search2 | /rest/search2?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/search3 | /rest/search3?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/setRating | /rest/setRating?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/star | /rest/star?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/startScan | /rest/startScan?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/stream | /rest/stream?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/unstar | /rest/unstar?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library
+GET /rest/updatePlaylist | /rest/updatePlaylist?u=me&p=pw&v=1.16.1&c=scan&f=json&id={track} | 200 | - | Subsonic: reads only the library

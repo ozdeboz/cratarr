@@ -702,6 +702,9 @@ where
 {
     let task = handle.runner.list().iter().find(|k| k.task.id == handle.id).map(|k| k.task.clone()).ok_or("The task went missing.")?;
     let fut = work(handle.clone());
+    // Tests: its work marked a job's in the scope it was begun in (LOOKUPS LK.0b: an ask inside a job's work is the job's).
+    #[cfg(any(test, feature = "test-support"))]
+    let fut = cratarr_store::run::scope::as_job(fut);
     // As the account that asked (a playlist an import makes is its own).
     cratarr_store::run::spawn(cratarr_store::serve::who::carried(async move {
         let result = fut.await;

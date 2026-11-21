@@ -338,16 +338,32 @@ pub struct Journal {
 static NEXT_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// The server's journal, once its start opened it (`set_instance`): what the saved queues and the runner keep their rows in.
+#[cfg(not(any(test, feature = "test-support")))]
 static INSTANCE: std::sync::OnceLock<std::sync::Arc<Journal>> = std::sync::OnceLock::new();
+/// Tests: the journal a test's boot set, the last one (LOOKUPS LK.0's harness 3).
+#[cfg(any(test, feature = "test-support"))]
+static INSTANCE: std::sync::RwLock<Option<std::sync::Arc<Journal>>> = std::sync::RwLock::new(None);
 
 /// The server's journal, opened at its start before anything asks a source (RN): kept for the parts that have no app to ask.
 pub fn set_instance(journal: std::sync::Arc<Journal>) {
+    #[cfg(not(any(test, feature = "test-support")))]
     let _ = INSTANCE.set(journal);
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        *INSTANCE.write().unwrap_or_else(|p| p.into_inner()) = Some(journal);
+    }
 }
 
 /// The server's journal, where its start set one (none in tests that open their own).
+#[cfg(not(any(test, feature = "test-support")))]
 pub fn instance() -> Option<std::sync::Arc<Journal>> {
     INSTANCE.get().cloned()
+}
+
+/// Tests: the journal the last boot set.
+#[cfg(any(test, feature = "test-support"))]
+pub fn instance() -> Option<std::sync::Arc<Journal>> {
+    INSTANCE.read().unwrap_or_else(|p| p.into_inner()).clone()
 }
 
 #[cfg(any(test, feature = "test-support"))]

@@ -43,6 +43,9 @@ mod gen_words_tests;
 pub mod runtime;
 // The server's start: every loop that asks an outside source, begun in one place (LK.S1).
 pub mod start;
+// LK.S1: every schedule a moved lookup hangs on, begun by the server's start (run by name, in a process of its own).
+#[cfg(test)]
+mod lookups_schedules;
 mod app_search;
 mod app_requests;
 // Incoming's tests that run the one path on the whole app, moved up (the app split's phase 2).

@@ -372,7 +372,8 @@ impl Sent for reqwest::RequestBuilder {
 pub mod stand_ins {
     use std::sync::{Arc, Mutex};
 
-    /// One ask, as the stand-ins saw it.
+    /// One ask, as the stand-ins saw it: and the route's scope it was made in (LK.0's harness 2), and whether inside a runner job's
+    /// work (LK.0b).
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Asked {
         pub source: &'static str,
@@ -380,6 +381,8 @@ pub mod stand_ins {
         pub host: String,
         pub path: String,
         pub query: String,
+        pub scope: Option<u64>,
+        pub job: bool,
     }
 
     /// What answers an ask: its status and body (JSON or a page), or none (refused).
@@ -397,6 +400,20 @@ pub mod stand_ins {
 
     fn set() -> std::sync::MutexGuard<'static, Option<Set>> {
         SET.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A process given over to the stand-ins (LK.0's scan, each of its asks in a process of its own): every ask of a known source
+    /// goes to them, MusicBrainz's web service at its own address too (`discover::mb_ws`), so none passes uncounted.
+    static EVERYTHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// This process given over to the stand-ins, for good.
+    pub fn give_everything() {
+        EVERYTHING.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether this process is given over to the stand-ins.
+    pub fn everything() -> bool {
+        EVERYTHING.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The stand-ins of one test, until dropped.
@@ -459,12 +476,15 @@ pub mod stand_ins {
         if url.port().is_some() {
             return None;
         }
+        let scope = crate::run::scope::current();
         let asked = Asked {
             source,
             method: req.method().to_string(),
             host: url.host_str().unwrap_or_default().to_string(),
             path: url.path().to_string(),
             query: url.query().unwrap_or_default().to_string(),
+            scope: scope.as_ref().map(|s| s.id),
+            job: scope.is_some_and(|s| s.job),
         };
         let answer = {
             let mut s = set();

@@ -307,11 +307,14 @@ thread_local! {
     static MB_FAKE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Tests: MusicBrainz's web service is the test's fake (`FakeMusicBrainz`), else an address that reaches nothing (plain http,
-/// which `reach::client` never asks): no test asks musicbrainz.org.
+/// Tests: MusicBrainz's web service is the test's fake (`FakeMusicBrainz`); else, in a process given over to the stand-ins (LOOKUPS
+/// LK.0's scan), its own address, which they answer and count before any connection; else an address that reaches nothing (plain
+/// http, which `reach::client` never asks): no test asks musicbrainz.org.
 #[cfg(any(test, feature = "test-support"))]
 pub fn mb_ws() -> String {
-    MB_FAKE.with(|f| f.borrow().clone()).unwrap_or_else(|| "http://127.0.0.1:9/ws/2".to_string())
+    MB_FAKE.with(|f| f.borrow().clone()).unwrap_or_else(|| {
+        if super::reach::stand_ins::everything() { "https://musicbrainz.org/ws/2".to_string() } else { "http://127.0.0.1:9/ws/2".to_string() }
+    })
 }
 
 /// Tests: this thread's questions through `mb_ws` go to a fake MusicBrainz at `at` (its web service, as `http://…/ws/2`), asked

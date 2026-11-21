@@ -58,6 +58,9 @@ mod one_path;
 
 #[cfg(test)]
 mod lookups_dc2;
+// SCENARIOS-LOOKUPS LK.0 and LK.0b: every route's outside asks counted (run by name, alone in its process).
+#[cfg(test)]
+mod lookups_scan;
 
 
 /// What the arguments ask (W4): with none, the server; a known flag, its own work; anything else, nothing at all. So a flag
