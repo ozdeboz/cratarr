@@ -39,6 +39,8 @@ ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 cratarr-crates = { workspace = true, features = ["test-support"] }
+# VR49: the record's view's one rule for its secondaries, held against the served words and the index.
+cratarr-domain.workspace = true
 # Radio's modes are among the page's types the tests write, and live in the rules.
 cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
 flacenc.workspace = true

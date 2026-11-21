@@ -71,6 +71,9 @@ pub struct Credits {
     pub musicbrainz: HashMap<String, i64>,
     /// Each record's stored title, where it has one: what a copy whose files name no album shows (WM.3, WM.12, COU.3).
     pub titles: HashMap<i64, String>,
+    /// Each record's kept cover's stamp, and whether it is a choice (above the files) or a service's first (below them): what the
+    /// served album's cover names (COU.11, the one resolver).
+    pub pictures: HashMap<i64, (String, bool)>,
 }
 
 /// A new artist of a name, with their number (C55).
@@ -271,6 +274,7 @@ impl Catalogue {
                 let (record, title) = row?;
                 credits.titles.insert(record, title);
             }
+            credits.pictures = super::covers::prints_in(db)?;
             Ok(credits)
         };
         match self.reader() {

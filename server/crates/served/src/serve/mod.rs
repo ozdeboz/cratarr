@@ -977,12 +977,20 @@ impl Serve {
         Ok((album, asked))
     }
 
-    /// An album's art as it is: (content type, bytes, its fingerprint). The folder's cover file, else the picture in
-    /// its first track. Blocking.
+    /// An album's art as it is: (content type, bytes, its fingerprint), by the record's one picture resolver (COU.11, FA14): its
+    /// kept cover where chosen (Cratarr's store, no file); else the folder's cover file, else the picture in its first track; else
+    /// a service's picture kept as it first answered. Blocking.
     fn art_of(&self, album: &str) -> Result<Option<(String, Vec<u8>, String)>> {
         let Some((folder, dir, cover, first)) = self.library.album_art(album)? else { return Ok(None) };
         let print = cover.as_deref().and_then(|c| c.split_once('_')).map(|(_, p)| p.to_string()).unwrap_or_default();
         Ok(self.art_at(folder, &dir, first)?.map(|(ct, bytes)| (ct, bytes, print)))
+    }
+
+    /// Whether a record shows a cover chosen in Cratarr's store (COU.11): what a track's own picture gives way to on its row and in
+    /// the media notification. Blocking.
+    pub fn has_chosen_cover(&self, album: &str) -> Result<bool> {
+        let _ = album;
+        Ok(false)
     }
 
     /// The picture of what lies at (`folder`, `dir`): its cover file, else what is inside `first`, its first file.

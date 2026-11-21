@@ -434,6 +434,31 @@ pub fn resolve_type(hand: Option<&str>, had_rule: Option<&str>, picked_rule: Opt
     }
 }
 
+/// One secondary type of a record (Live, Soundtrack, Compilation…) and the sources that say it (VR49): `hand`, `rule` (rule 8's
+/// compilation), or a service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Secondary {
+    pub word: String,
+    pub by: Vec<String>,
+}
+
+/// A record's secondary types (VR49; AMENDMENTS 2026-11-21 17:31-17:32; the metadata rule's "sets are unions naming their
+/// sources"): the hand's list where one is set, final for its kind (0097), each word by the hand alone; else one set, the union of
+/// every service's words (a guess's count nowhere, M4) in the order first heard (the order asked, then as given), and the rule's
+/// words (its "compilation") after them, each word once, naming every source that says it. A service's word the hand's list leaves
+/// out stays in its References row, never among the record's. Never "MusicBrainz's, else Discogs'", never ranked by a source.
+pub fn secondaries(hand: Option<&[String]>, said: &[Said<Vec<String>>], rule: &[String]) -> Vec<Secondary> {
+    let _ = (hand, said, rule);
+    Vec::new()
+}
+
+/// The rule's secondary types of a record (rule 8 as SPLIT narrowed it; NAMES.20's rows 3 and 4; VR49 (b), (f)): a compilation
+/// where its album artist is Various Artists over five or more track artists; a split (one to four) is none.
+pub fn rule_secondaries(various: bool, track_artists: usize) -> Vec<String> {
+    let _ = (various, track_artists);
+    Vec::new()
+}
+
 /// The tracks of a list each source keeps, by source (a test's and a report's view of `versions`).
 pub fn by_source(lists: &[List]) -> BTreeMap<String, usize> {
     lists.iter().map(|l| (l.reference.source.clone(), l.tracks.len())).collect()
@@ -762,6 +787,52 @@ mod tests {
         assert_eq!((r.value.as_deref(), type_why(&r.by)), (Some("Album"), "by the picked list"));
         let guessed = [said("musicbrainz", "EP", true), said("discogs", "Album", false)];
         assert_eq!(resolve_type(None, None, None, &guessed).value.as_deref(), Some("Album"), "a guess's type counts in nothing");
+    }
+
+    /// VR49: a record's secondaries are one set, each word with the sources that say it; a hand's list is final, and Reset brings
+    /// back the union; a guess counts nowhere; the order is first heard, the rule's Compilation last, never a source's rank. Red
+    /// first: no set (the served words alone, no sources).
+    #[test]
+    fn a_records_secondaries_are_one_set_naming_their_sources() {
+        let said = |source: &str, words: &[&str], guessed: bool| Said {
+            reference: Some(Reference::new(source, "release", &format!("{source}-1"))),
+            source: source.to_string(),
+            value: Some(words.iter().map(|w| w.to_string()).collect::<Vec<String>>()),
+            guessed,
+        };
+        fn shown(s: &[Secondary]) -> Vec<(&str, Vec<&str>)> {
+            s.iter().map(|s| (s.word.as_str(), names(&s.by))).collect()
+        }
+        let compilation = ["compilation".to_string()];
+        // (a) Night Ferry: MusicBrainz's Live; Discogs says nothing of secondaries.
+        let a = secondaries(None, &[said("musicbrainz", &["live"], false), said("discogs", &[], false)], &[]);
+        assert_eq!(shown(&a), [("live", vec!["musicbrainz"])], "(a)");
+        // (b) a soundtrack: MusicBrainz's Soundtrack; the rule's Compilation, last.
+        let b = secondaries(None, &[said("musicbrainz", &["soundtrack"], false)], &compilation);
+        assert_eq!(shown(&b), [("soundtrack", vec!["musicbrainz"]), ("compilation", vec!["rule"])], "(b)");
+        // (c) Salt Lines: MusicBrainz Live; Discogs Live and Remix. Asked the other way round: the same.
+        let c = [said("musicbrainz", &["live"], false), said("discogs", &["live", "remix"], false)];
+        assert_eq!(shown(&secondaries(None, &c, &[])), [("live", vec!["musicbrainz", "discogs"]), ("remix", vec!["discogs"])], "(c)");
+        let mut turned = c.to_vec();
+        turned.reverse();
+        assert_eq!(secondaries(None, &turned, &[]), secondaries(None, &c, &[]), "never by the order given");
+        // (d) Low Ceiling: Discogs' Compilation; root's Live by hand, alone; after Reset, Discogs' Compilation.
+        let d = [said("discogs", &["compilation"], false)];
+        let hand = ["live".to_string()];
+        assert_eq!(shown(&secondaries(Some(&hand), &d, &[])), [("live", vec!["hand"])], "(d) the hand's list is final, never merged");
+        assert_eq!(shown(&secondaries(None, &d, &[])), [("compilation", vec!["discogs"])], "(d) after Reset");
+        // A hand's empty list removes every service's word.
+        assert!(secondaries(Some(&[]), &d, &compilation).is_empty(), "a hand's list is final for its kind");
+        // (e) Thin Walls: its only reference a guess saying Live: none.
+        assert!(secondaries(None, &[said("musicbrainz", &["live"], true)], &[]).is_empty(), "(e) a guess counts nowhere");
+        // (f) a split: the rule gives none; MusicBrainz's Compilation shows, named.
+        let f = secondaries(None, &[said("musicbrainz", &["compilation"], false)], &[]);
+        assert_eq!(shown(&f), [("compilation", vec!["musicbrainz"])], "(f)");
+        // A word the rule and a service both say: once, at the service's place, naming both.
+        let both = secondaries(None, &[said("musicbrainz", &["compilation", "live"], false)], &compilation);
+        assert_eq!(shown(&both), [("compilation", vec!["musicbrainz", "rule"]), ("live", vec!["musicbrainz"])]);
+        // The rule: Various Artists over five or more artists is a compilation; a split (two) none.
+        assert_eq!((rule_secondaries(true, 5), rule_secondaries(true, 2), rule_secondaries(false, 9)), (compilation.to_vec(), Vec::new(), Vec::new()));
     }
 
     /// FA13's type: the hand's, else the release type rule's (the store passes `release_type_of`'s answer); the files' type tag

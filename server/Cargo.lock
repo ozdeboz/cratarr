@@ -601,6 +601,7 @@ version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
+ "cratarr-domain",
  "cratarr-playing",
  "cratarr-requests",
  "image",
@@ -661,6 +662,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "cratarr-crates",
+ "cratarr-domain",
  "cratarr-rules",
  "flacenc",
  "flate2",

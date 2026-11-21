@@ -2,7 +2,8 @@
 //! of records"; decision 0089): its type, secondary types, year, genres and whether it is classical,
 //! each winning over its files, MusicBrainz, Discogs and the rules until it is reset. Household-wide and by the record, so a
 //! setting holds whichever copies it has. The classical marks (0.10) are its
-//! `classical`. A record's own words (title, artists, track numbers) are its files': those are fixed in its tags.
+//! `classical`. Its title too (SCENARIOS-COUPLING COU.13 (d), OQ-COU-2 (a)): a hand fact with Reset, shown on every surface, the files'
+//! ALBUM left as it is. Its artists and track numbers are its files' and its pairing's.
 
 use std::collections::HashMap;
 
@@ -27,6 +28,9 @@ pub const TYPES: [&str; 5] = ["album", "ep", "single", "broadcast", "other"];
 pub struct Overrides {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// Its title by hand (COU.13 (d)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49,6 +53,7 @@ impl Overrides {
     pub fn fields(&self) -> Vec<&'static str> {
         let set = [
             ("type", self.kind.is_some()),
+            ("title", self.title.is_some()),
             ("secondary", self.secondary.is_some()),
             ("year", self.year.is_some()),
             ("genres", self.genres.is_some()),
@@ -64,6 +69,7 @@ impl Overrides {
     fn read(&mut self, field: &str, value: Value) {
         match field {
             "type" => self.kind = value.as_str().map(str::to_string),
+            "title" => self.title = value.as_str().map(str::to_string),
             "secondary" => self.secondary = serde_json::from_value(value).ok(),
             "year" => self.year = value.as_u64().and_then(|y| u32::try_from(y).ok()),
             "genres" => self.genres = serde_json::from_value(value).ok(),
@@ -208,7 +214,10 @@ mod tests {
         assert_eq!(check("genres", &json!(["Jazz", " jazz", "", "Soul"])), Ok(Some(json!(["Jazz", "Soul"]))));
         assert_eq!(check("classical", &json!(false)), Ok(Some(json!(false))));
         assert_eq!(check("genres", &Value::Null), Ok(None), "null resets");
-        assert!(check("title", &json!("Kind of Blue")).is_err(), "a file's own words are fixed in its tags");
+        // Changed by design (COU.13 (d), OQ-COU-2 (a)): a record's title is a hand fact with Reset; its artists stay its files'.
+        assert_eq!(check("title", &json!(" Kind of Blue ")), Ok(Some(json!("Kind of Blue"))), "a title by hand");
+        assert!(check("title", &json!("  ")).is_err(), "a title is some words");
+        assert!(check("artist", &json!("Miles Davis")).is_err(), "a file's own artists are its credit");
     }
 
     #[test]

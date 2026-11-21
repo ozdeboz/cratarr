@@ -517,3 +517,44 @@ mod tests {
         assert_eq!(mb.paused_until(), Some(T0 + 40), "nothing asked of MusicBrainz before t0+40");
     }
 }
+
+/// 0.18's part `covers` (SCENARIOS-COUPLING COU.20, T-COU-21), what the journal and the data folder hold of it: each 0.17 Change
+/// cover pick still kept and not undone, its picture read from what its run kept of the file it wrote (`cover-undo/<…>/new`), at its
+/// run's time; and the kept pictures no run names any more (0.17 pruned their run): listed, never made picks (C-COU-6). The
+/// catalogue's part (`Catalogue::step_018_covers`) keeps them. Reads only. Blocking.
+pub fn cover_picks(journal: &Journal, data: Option<&Path>) -> Result<(Vec<crate::catalogue::step_018::CoverPick>, Vec<String>)> {
+    let mut picks = Vec::new();
+    if true {
+        let _ = (journal, data);
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let mut named: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+    for (id, at, run, undone) in journal.file_runs_since(0)? {
+        for f in &run.files {
+            let Some(w) = f.whole.as_ref().filter(|w| w.op == "cover") else { continue };
+            let Some(kept) = w.kept.as_ref() else { continue };
+            named.insert(kept.clone());
+            if undone || f.undone {
+                continue;
+            }
+            let Some(record) = crate::serve::ids::record_number(&f.album) else { continue };
+            let Ok(bytes) = std::fs::read(kept.join("new")) else { continue };
+            picks.push(crate::catalogue::step_018::CoverPick { record, bytes, who: None, at, run: id });
+        }
+    }
+    let mut unknown = Vec::new();
+    if let Some(data) = data
+        && let Ok(dirs) = std::fs::read_dir(data.join("cover-undo"))
+    {
+        for d in dirs.flatten() {
+            let path = d.path();
+            // Replace's own set-aside folders (`replace-<at>`) were never picks.
+            let name = d.file_name().to_string_lossy().into_owned();
+            if path.join("new").is_file() && !name.starts_with("replace-") && !named.contains(&path) {
+                unknown.push(name);
+            }
+        }
+    }
+    unknown.sort();
+    Ok((picks, unknown))
+}

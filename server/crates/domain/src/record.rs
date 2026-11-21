@@ -62,7 +62,8 @@ pub struct EditionOf {
 pub struct RecordFacts {
     pub id: i64,
     pub title: String,
-    /// Its release type ("Album", "EP"…) and its secondary ones ("Compilation"…).
+    /// Its release type ("Album", "EP"…), and its secondary ones ("Compilation"…) as a hand set them (where `hand` names
+    /// "secondary": final for its kind, VR49).
     pub kind: Option<String>,
     pub secondary: Vec<String>,
     pub year: Option<i32>,
@@ -86,6 +87,10 @@ pub struct RecordFacts {
     /// Each source's year and type of it, per reference, each a guess's or not (FA15, VR40): what `resolve()` reads (VR39).
     pub years: Vec<crate::facts::Said<i32>>,
     pub types: Vec<crate::facts::Said<String>>,
+    /// Each service's secondary types of it, per reference, each a guess's or not, and the rule's (rule 8's compilation): with the
+    /// hand's, what `secondaries_now()` reads (VR49).
+    pub secondaries: Vec<crate::facts::Said<Vec<String>>>,
+    pub rule_secondary: Vec<String>,
     /// The release type rule's type over its picked list's titles and lengths (VR39, M10), where one is picked.
     pub picked_kind: Option<String>,
     /// The catalogue folder of the copy that plays for this viewer in this place (`copy_for` over the place's set), if one does.
@@ -119,7 +124,15 @@ impl RecordFacts {
     }
 
     fn word(&self) -> &'static str {
-        record_word(self.kind_now().value.as_deref(), &self.secondary)
+        let secondary: Vec<String> = self.secondaries_now().into_iter().map(|s| s.word).collect();
+        record_word(self.kind_now().value.as_deref(), &secondary)
+    }
+
+    /// Its secondary types (VR49): the hand's list where one is set, final; else the union of its services' (no guess's) and the
+    /// rule's, each word naming its sources. One rule for the Head, References' Type item, the served words and the device's index.
+    pub fn secondaries_now(&self) -> Vec<crate::facts::Secondary> {
+        let hand = self.hand.iter().any(|h| h == "secondary").then_some(self.secondary.as_slice());
+        crate::facts::secondaries(hand, &self.secondaries, &self.rule_secondary)
     }
 
     /// Whether a copy of it is present anywhere.
@@ -591,6 +604,7 @@ fn properties(r: &RecordFacts) -> RecordProperties {
     RecordProperties {
         type_why: crate::facts::type_why(&kind.by).to_string(),
         kind: FactView { value: kind.value, by: kind.by, versions: Vec::new() },
+        secondary: Some(r.secondaries_now().into_iter().map(|s| crate::view::FactVersion { value: s.word, by: s.by }).collect::<Vec<_>>()).filter(|s| !s.is_empty()),
         title: FactView { value: r.title.clone(), by: fact("title"), versions: Vec::new() },
         artists: FactView { value: r.artists.clone(), by: fact("artist"), versions: Vec::new() },
         credit: credit_text(&names, None),

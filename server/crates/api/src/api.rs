@@ -324,7 +324,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/connections/state", get(connections_state))
             .route(
                 "/api/albums/{source}/{album}/covers",
-                get(album_covers).post(set_album_cover).put(upload_album_cover).layer(axum::extract::DefaultBodyLimit::max(13 << 20)),
+                get(album_covers).post(set_album_cover).put(upload_album_cover).delete(reset_album_cover).layer(axum::extract::DefaultBodyLimit::max(13 << 20)),
             )
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
@@ -1007,6 +1007,33 @@ async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Q
             Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
             Err(e) => cover_unread(&album, &format!("{e:#}")),
         };
+    }
+    // The record's one picture (COU.11, FA14): a record's id (`record_picture`'s address) is its resolved cover, and a song of a
+    // record whose cover is chosen in Cratarr's store shows that (the media notification), never its own file's picture.
+    if let Some(served) = ctx.served.clone()
+        && source == crate::source::cratarr::KIND.id
+        && (id.starts_with(crate::serve::ids::ALBUM) || id.starts_with(crate::serve::ids::SONG))
+    {
+        let (s, asked) = (served.clone(), id.clone());
+        let chosen = crate::run::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+            if asked.starts_with(crate::serve::ids::ALBUM) {
+                return Ok(Some(asked));
+            }
+            let Some(album) = s.album_of_song_read(&asked)? else { return Ok(None) };
+            Ok(s.has_chosen_cover(&album)?.then_some(album))
+        })
+        .await;
+        match chosen {
+            Ok(Ok(Some(album))) => {
+                return match served.cover(&album, None, &headers).await {
+                    Ok(r) => r,
+                    Err(e) => cover_unread(&album, &format!("{e:#}")),
+                };
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(e)) => return cover_unread(&id, &format!("{e:#}")),
+            Err(e) => return cover_unread(&id, &e.to_string()),
+        }
     }
     match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
@@ -4239,6 +4266,21 @@ async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Qu
         },
         found => found,
     };
+    // COU.12 (a): a record you have whose files hold no picture: the first of its sources to answer, kept in Cratarr's store as it
+    // answered, the library built so every surface shows the one picture.
+    let found = match found {
+        None if own => match crate::app::cover_cache::first_answer(ctx.app.library.catalogue(), &album).await {
+            Ok(Some((bytes, mime))) => {
+                if let Some(served) = ctx.served.clone() {
+                    drop(crate::run::spawn_blocking(move || served.refresh()));
+                }
+                Some((mime.to_string(), bytes))
+            }
+            Ok(None) => None,
+            Err(e) => return cover_unread(&album, &format!("{e:#}")),
+        },
+        found => found,
+    };
     match found {
         Some((content_type, bytes)) => {
             // Another server's album comes with what that server says.
@@ -7390,11 +7432,28 @@ async fn look_album_covers(ctx: Ctx, Path((source, album)): Path<(String, String
     started(crate::app::covers::start(&account, &album))
 }
 
-/// Upload cover (0.9.6): the picture sent as the body (JPEG, PNG or WebP) set as a chosen cover is; Undo as there.
-async fn upload_album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+/// Upload cover (0.9.6): the picture sent as the body (JPEG, PNG or WebP) kept as the record's chosen cover, as a chosen one is
+/// (COU.11); its Undo as there.
+async fn upload_album_cover(ctx: Ctx, headers: HeaderMap, Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<Answer<Option<String>>>, ApiError> {
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::ChangeCover, None, None).await?;
     own_album(&source)?;
-    // A run on the one path (0.14): the upload is the yes, Undo the run's.
-    Ok(Json(crate::app::covers::run(&app, &album, None, Some(body.to_vec())).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+    let (serve, record) = (ctx.serve()?, cover_record(&album)?);
+    let pick = crate::app::covers::PickCover::uploaded(serve.clone(), record, body.to_vec()).map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(ctx.app.commands.run(&crate::app::requests::viewer(&serve), idempotency_key(&headers), &pick).await?))
+}
+
+/// Reset of Change cover (COU.11, FA14): the record's chosen cover let go, its files' picture shown again; an Undo puts it back.
+async fn reset_album_cover(ctx: Ctx, headers: HeaderMap, Path((source, album)): Path<(String, String)>) -> Result<Json<Answer<Option<String>>>, ApiError> {
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::ChangeCover, None, None).await?;
+    own_album(&source)?;
+    let (serve, record) = (ctx.serve()?, cover_record(&album)?);
+    let reset = crate::app::covers::PickCover { serve: serve.clone(), record, picture: None };
+    Ok(Json(ctx.app.commands.run(&crate::app::requests::viewer(&serve), idempotency_key(&headers), &reset).await?))
+}
+
+/// The record a cover route names (`al-<n>`).
+fn cover_record(album: &str) -> Result<i64, ApiError> {
+    Ok(crate::serve::ids::record_number(album).ok_or_else(|| ToggleError::Refused("No such album in Cratarr's own library".into()))?)
 }
 
 /// Renumber's look (0.9.6) as a task: its result the preview, what `POST …/renumber` would write.
@@ -7450,13 +7509,14 @@ struct SetCover {
     url: String,
 }
 
-/// An album's cover set to one of its candidates: beside its tracks and inside each; Undo puts the old one back.
-async fn set_album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+/// Change cover (COU.11, FA14): one of its candidates kept as the record's chosen cover in Cratarr's store, a command on the one path:
+/// `{ result: its stamp, undo, rev }`; every surface shows it, and no file changes (GEN.58). Undo gives back the cover shown before.
+async fn set_album_cover(ctx: Ctx, headers: HeaderMap, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<Answer<Option<String>>>, ApiError> {
     crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::ChangeCover, None, None).await?;
-    let app = ctx.app.clone();
     own_album(&source)?;
-    // A run on the one path (0.14): the choice is the yes, Undo the run's.
-    Ok(Json(crate::app::covers::run(&app, &album, Some(&b.url), None).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+    let (serve, record) = (ctx.serve()?, cover_record(&album)?);
+    let pick = crate::app::covers::PickCover::chosen(serve.clone(), record, &b.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(ctx.app.commands.run(&crate::app::requests::viewer(&serve), idempotency_key(&headers), &pick).await?))
 }
 
 /// How MusicBrainz stands (0.9.6, Settings › Connections): when last reached, the last failure, the background pass.

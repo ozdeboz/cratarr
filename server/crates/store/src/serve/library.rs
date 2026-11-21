@@ -783,6 +783,11 @@ impl Library {
     }
 
     /// The release types found on MusicBrainz and Discogs (0.9.6); a change builds the library again.
+    /// The release types kept for `key` (`mb:<release>`, `dc:<album id>`), as the build reads them (VR49's sources).
+    pub fn release_types_of(&self, key: &str) -> Option<Kept> {
+        self.release_types.lock().unwrap_or_else(|p| p.into_inner()).get(key).cloned()
+    }
+
     pub fn set_release_types(&self, types: HashMap<String, Kept>) {
         *self.release_types.lock().unwrap_or_else(|p| p.into_inner()) = types;
     }
@@ -1651,7 +1656,7 @@ fn row_src(r: &ServedRow) -> String {
 fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: &Facts, covers: &Covers) -> String {
     use md5::Digest;
     let said = format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         facts.added.get(album),
         release.and_then(|m| facts.originals.get(m)),
         facts.extra_genres.get(album),
@@ -1662,6 +1667,7 @@ fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: 
         facts.overrides.get(album),
         ids::record_number(album).and_then(|r| facts.credits.records.get(&r)),
         ids::record_number(album).and_then(|r| facts.credits.titles.get(&r)),
+        ids::record_number(album).and_then(|r| facts.credits.pictures.get(&r)),
     );
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
 }
@@ -1832,6 +1838,12 @@ fn with_records(folders: &[FolderRows], rules: &FolderRules) -> Vec<FolderRows> 
     };
     let of = |f: &FolderRows, r: &ServedRow| ServedRow { record: r.record.or_else(|| groups.get(&(f.folder, r.rel.clone())).map(record)), ..r.clone() };
     folders.iter().map(|f| FolderRows { folder: f.folder, root: f.root.clone(), rows: f.rows.iter().map(|r| of(f, r)).collect() }).collect()
+}
+
+/// A file's place in the one order (T-COU-4): its track's, else its own numbers; one with no number after those with one, by path.
+fn track_order(row: &ServedRow) -> (u32, bool, Option<u32>, String) {
+    let (disc, number) = row.place.unwrap_or_else(|| (row.first("discnumber").and_then(leading_number), row.first("tracknumber").and_then(leading_number)));
+    (disc.unwrap_or(1), number.is_none(), number, row.rel.clone())
 }
 
 /// The albums these folders make, each as the catalogue gives it a record: the library's own grouping, so a record is
@@ -2157,8 +2169,20 @@ fn write_albums(
         let artist_id = facts.album_artist(first, &first.album_artists[0])?;
         // The art's id: the album's, with a fingerprint of its picture (see `art`).
         let root = roots.get(&row.copy.folder).copied().unwrap_or("");
+        // The record's one picture resolver (COU.11, FA14): its kept cover where chosen, else its files' (T-COU-22: a cover file, else
+        // the picture inside its files that speak, in track order: a file Cratarr placed, as placed, says nothing), else a service's
+        // first kept: the stamp every surface and the device's covers feed go by.
+        let _ = track_order;
         let first_track = row.songs.first().map(|s| Path::new(root).join(&s.row.rel));
-        let cover = super::art::album_print(&Path::new(root).join(dir), first_track.as_deref()).map(|p| format!("{album_id}_{p}"));
+        let files_print = super::art::album_print(&Path::new(root).join(dir), first_track.as_deref());
+        let kept = facts.credits.pictures.get(&first.record);
+        let picture = cratarr_domain::picture::resolve(kept.map(|(_, chosen)| (if *chosen { "hand" } else { cratarr_domain::picture::FIRST }, "")), files_print.as_ref().map(|_| "files"));
+        let cover = match picture.shows {
+            cratarr_domain::picture::Shows::Kept => kept.map(|(p, _)| p.clone()),
+            cratarr_domain::picture::Shows::Files => files_print,
+            cratarr_domain::picture::Shows::None => None,
+        }
+        .map(|p| format!("{album_id}_{p}"));
         let duration_ms = songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>();
         let whole = facts.incomplete.get(album_id);
         let shape = Shape {
@@ -4177,7 +4201,9 @@ mod tests {
         lib.refresh(&folders, &FolderRules::default()).unwrap();
         assert_eq!(lib.counts().unwrap().1, 1);
         let year: i64 = lib.db().query_row("SELECT year FROM albums", [], |r| r.get(0)).unwrap();
-        assert_eq!(year, 2015, "the album's aggregates still count every song");
+        // Changed by design (T-COU-12, COU.3): a record fact is its files' by majority, a tie to the first in track order; was the
+        // latest date of any file, 2015.
+        assert_eq!(year, 2013, "the year most of its files name");
     }
 
     /// SIM.21: one year, the record's as the library resolves it, for every reader of a song's year: the catalogue's facts and the

@@ -772,6 +772,73 @@ pub(super) mod tests {
         s.cat.pick_list(night_ferry, None).unwrap();
         let reset = s.index().rows().records.iter().find(|r| r.id == night_ferry).unwrap().whole_tracks;
         assert_eq!(reset, None, "after Reset, none again");
+
+        // VR49: a record's secondaries are one set naming their sources: the served words (`albums.secondary`), the index's and the
+        // record's view (the domain's one rule over what the build heard, with the hand's) carry the same words in the same order.
+        // Tide Tables: MusicBrainz's Live on its release, Discogs' Soundtrack and Live; a split (two artists under Various Artists):
+        // the rule gives none, MusicBrainz's Compilation shows, named; then a hand's list, final.
+        let tide: Vec<(String, Vec<(&str, String)>)> = ["Ebb", "Flow"]
+            .iter()
+            .enumerate()
+            .map(|(n, t)| {
+                let tags = vec![("album", "Tide Tables".to_string()), ("albumartist", "Glass Harbour".to_string()), ("artist", "Glass Harbour".to_string()), ("title", t.to_string())];
+                (format!("Glass Harbour/Tide Tables/{n:02} {t}.flac"), [tags, vec![("musicbrainz_albumid", "rel-tide".to_string())]].concat())
+            })
+            .collect();
+        let split: Vec<(String, Vec<(&str, String)>)> = [("Kelpe", "Drome"), ("Anz", "Ex")]
+            .iter()
+            .enumerate()
+            .map(|(n, (a, t))| (format!("Various/Split/{n:02} {t}.flac"), vec![("album", "Split".to_string()), ("albumartist", "Various Artists".to_string()), ("artist", a.to_string()), ("title", t.to_string()), ("musicbrainz_albumid", "rel-split".to_string())]))
+            .collect();
+        let pair: Vec<(String, Vec<(&str, String)>)> = [("Kelpe", "Rooms"), ("Anz", "Halls")]
+            .iter()
+            .enumerate()
+            .map(|(n, (a, t))| (format!("Various/Pair/{n:02} {t}.flac"), vec![("album", "Pair".to_string()), ("albumartist", "Various Artists".to_string()), ("artist", a.to_string()), ("title", t.to_string())]))
+            .collect();
+        for files in [&tide, &split, &pair] {
+            let tags: Vec<(&str, Vec<(&str, &str)>)> = files.iter().map(|(rel, t)| (rel.as_str(), t.iter().map(|(k, v)| (*k, v.as_str())).collect())).collect();
+            s.add(0, &tags.iter().map(|(rel, t)| (*rel, t.as_slice())).collect::<Vec<_>>());
+        }
+        s.built();
+        let (tide_id, split_id) = (id("Tide Tables"), id("Split"));
+        let kept = |k: &str, words: &[&str]| (k.to_string(), (Some("album".to_string()), words.iter().map(|w| w.to_string()).collect::<Vec<String>>()));
+        s.serve.library.set_release_types(HashMap::from([
+            kept("mb:rel-tide", &["live"]),
+            kept(&format!("dc:{}", ids::record(tide_id)), &["soundtrack", "live"]),
+            kept("mb:rel-split", &["compilation"]),
+        ]));
+        s.built();
+        let words_of = |record: i64| -> (Vec<String>, Vec<String>, Vec<(String, Vec<String>)>) {
+            let album = ids::record(record);
+            let served = s.serve.record_types(std::slice::from_ref(&album)).remove(&album).map(|(_, w)| w).unwrap_or_default();
+            let indexed = s.index().rows().records.iter().find(|r| r.id == record).unwrap().secondary.clone();
+            let h = s.serve.library.secondaries_heard(&album).unwrap().unwrap();
+            let said = |source: &str, words: Option<Vec<String>>| words.map(|w| cratarr_domain::facts::Said { reference: None, source: source.to_string(), value: Some(w), guessed: false });
+            let hand = s.serve.userdata.overrides_of(&album).unwrap().secondary;
+            let heard: Vec<_> = said("musicbrainz", h.musicbrainz).into_iter().chain(said("discogs", h.discogs)).collect();
+            let view = cratarr_domain::facts::secondaries(hand.as_deref(), &heard, &h.rule).into_iter().map(|s| (s.word, s.by)).collect();
+            (served, indexed, view)
+        };
+        let named = |pairs: &[(&str, &[&str])]| pairs.iter().map(|(w, by)| (w.to_string(), by.iter().map(|b| b.to_string()).collect())).collect::<Vec<_>>();
+        let (served, indexed, view) = words_of(tide_id);
+        assert_eq!(view, named(&[("live", &["musicbrainz", "discogs"]), ("soundtrack", &["discogs"])]), "one set, each word naming its sources");
+        assert_eq!((served.clone(), indexed), (vec!["live".to_string(), "soundtrack".to_string()], served), "the served words and the index's: the view's, in its order");
+        let (served, indexed, view) = words_of(split_id);
+        assert_eq!(view, named(&[("compilation", &["musicbrainz"])]), "a split: the rule's none, MusicBrainz's named");
+        assert_eq!((served.clone(), indexed), (vec!["compilation".to_string()], served));
+        let (served, indexed, view) = words_of(id("Pair"));
+        assert!(view.is_empty() && served.is_empty() && indexed.is_empty(), "never the rule's Compilation on a split: {served:?}");
+        // A hand's list is final: MusicBrainz's and Discogs' left out; Reset brings back the union.
+        let album = ids::record(tide_id);
+        s.serve.userdata.set_overrides(std::slice::from_ref(&album), &[("secondary".to_string(), Some(serde_json::json!(["remix"])))], 100).unwrap();
+        s.serve.library.set_overrides(s.serve.userdata.overrides().unwrap());
+        s.built();
+        let (served, indexed, view) = words_of(tide_id);
+        assert_eq!((view, served, indexed), (named(&[("remix", &["hand"])]), vec!["remix".to_string()], vec!["remix".to_string()]), "the hand alone");
+        s.serve.userdata.set_overrides(std::slice::from_ref(&album), &[("secondary".to_string(), None)], 101).unwrap();
+        s.serve.library.set_overrides(s.serve.userdata.overrides().unwrap());
+        s.built();
+        assert_eq!(words_of(tide_id).0, ["live", "soundtrack"], "after Reset, the union again");
     }
 
     /// What the library's build makes of what is no file: a year set by hand, a type, a whole release's count. Nothing is written
