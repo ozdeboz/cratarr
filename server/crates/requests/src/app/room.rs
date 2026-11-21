@@ -127,10 +127,10 @@ pub fn rooms_in(cat: &Catalogue, kinds: &[(i64, LibraryKind)], asked: &HashMap<i
 
 // ---- The disk floor (AL03)
 
-/// The floor where an administrator set none (0084).
+/// The most a floor is by default (0084's 200 GB, the owner's NAS), and what an install upgrading from 0.17 keeps as saved (PL4 (c)).
 pub const FLOOR: u64 = 200 * GB;
-/// How far above the floor the disks must be before the server is no longer short (OQ-F3): it changes once per crossing, never
-/// flapping at the floor.
+/// The most the margin is: how far above the floor the disks must be before the server is no longer short (OQ-F3), so it changes
+/// once per crossing, never flapping at the floor. 10% of the floor, at least 1 GB (`margin`).
 pub const MARGIN: u64 = 10 * GB;
 /// The floor an administrator set, in bytes, as the user data's meta keeps it.
 const FLOOR_KEY: &str = "room:floor";
@@ -142,7 +142,7 @@ const CLEAR: &str = "clear";
 const UNREADABLE: &str = "unreadable";
 
 /// The free space of the disk a folder is on (OQ-F2): statvfs on the server (`folders::free`); the tests' stand in. And the disk's
-/// size (statvfs' total), which a new install's floor is a share of (PL4).
+/// size (statvfs' total, `folders::size`), which a floor where none is saved is a share of (PL4); none where it can't be read.
 pub trait Disks: Send + Sync {
     fn free(&self, dir: &Path) -> Option<u64>;
     fn size(&self, _dir: &Path) -> Option<u64> {
@@ -157,6 +157,10 @@ impl Disks for TheDisks {
     fn free(&self, dir: &Path) -> Option<u64> {
         crate::folders::free(dir)
     }
+
+    fn size(&self, dir: &Path) -> Option<u64> {
+        crate::folders::size(dir)
+    }
 }
 
 /// The floor and the disks as just read (AL03): the floor, the lowest free space of the disks users' music lands on (none where none
@@ -170,25 +174,25 @@ pub struct Space {
     pub default: bool,
 }
 
-/// The floor in bytes: an administrator's, else `FLOOR`. Blocking.
-pub fn floor(ud: &UserData) -> u64 {
-    ud.meta(FLOOR_KEY).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(FLOOR)
-}
-
 /// The floor an administrator saved, in bytes, where one is. Blocking.
 pub fn saved_floor(ud: &UserData) -> Option<u64> {
     ud.meta(FLOOR_KEY).ok().flatten().and_then(|v| v.parse().ok())
 }
 
-/// The floor where none is saved (PL4), from the disks the floor reads (`dirs`).
-pub fn default_floor(_disks: &dyn Disks, _dirs: &[PathBuf]) -> u64 {
-    FLOOR
+/// The floor where none is saved (PL4, the owner 2026-11-21, "A share of the disk"): 10% of the smallest disk the floor reads
+/// (`dirs`), at most `FLOOR`; `FLOOR` where no disk's size can be read. Blocking.
+pub fn default_floor(disks: &dyn Disks, dirs: &[PathBuf]) -> u64 {
+    dirs.iter().filter_map(|d| disks.size(d)).min().map_or(FLOOR, |smallest| (smallest / 10).min(FLOOR))
 }
 
-/// How far above `floor` the disks must be before the server is no longer short (OQ-F3, PL4).
-pub fn margin(_floor: u64) -> u64 {
-    MARGIN
+/// How far above `floor` the disks must be before the server is no longer short (OQ-F3, PL4): 10% of the floor, at least 1 GB and at
+/// most `MARGIN`, so a small disk isn't held three times its floor. Pure.
+pub fn margin(floor: u64) -> u64 {
+    (floor / 10).clamp(GB, MARGIN)
 }
+
+/// What a floor where none is saved is, in the Settings' words (PL4).
+pub const DEFAULT_WHY: &str = "10% of the smallest disk it watches";
 
 /// The floor an administrator sets, in bytes. Blocking.
 pub fn set_floor(ud: &UserData, bytes: u64) -> Result<()> {
@@ -217,14 +221,17 @@ pub fn floor_folders(serve: &Serve) -> Vec<PathBuf> {
 pub fn space(ud: &UserData, disks: &dyn Disks, dirs: &[PathBuf]) -> Space {
     static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = ONE.lock().unwrap_or_else(|p| p.into_inner());
-    let floor = floor(ud);
+    let (floor, default) = match saved_floor(ud) {
+        Some(saved) => (saved, false),
+        None => (default_floor(disks, dirs), true),
+    };
     let was = ud.meta(SHORT_KEY).ok().flatten().unwrap_or_else(|| CLEAR.to_string());
     let free = dirs.iter().filter_map(|d| disks.free(d)).min();
     let now = match free {
         None if dirs.is_empty() => CLEAR,
         None => UNREADABLE,
         Some(f) if f < floor => SHORT,
-        Some(f) if f >= floor.saturating_add(MARGIN) => CLEAR,
+        Some(f) if f >= floor.saturating_add(margin(floor)) => CLEAR,
         Some(_) if was == SHORT => SHORT,
         Some(_) => CLEAR,
     };
@@ -243,7 +250,6 @@ pub fn space(ud: &UserData, disks: &dyn Disks, dirs: &[PathBuf]) -> Space {
             super::soulseek::space_again();
         }
     }
-    let default = ud.meta(FLOOR_KEY).ok().flatten().is_none();
     Space { floor, free, short: now == SHORT, default }
 }
 
@@ -954,7 +960,7 @@ pub mod tests {
         };
         let mut seen = Vec::new();
         let serve = room_shape_in(Some(&data), None);
-        assert_eq!(floor(&serve.userdata), gb(200.0), "none set: 200 GB");
+        assert_eq!((saved_floor(&serve.userdata), default_floor(&stand, &dirs)), (None, gb(200.0)), "none set: 200 GB where no disk's size is read");
         let mut said = floor_said(|| {
             for n in [199.9, 200.1, 199.95, 205.0] {
                 read(&serve, n, &mut seen);

@@ -36,8 +36,8 @@
 //!   the record is held at its check with its folder, its tick and its user, and asked about again (`hold`).
 //! - **Into its own Incoming library** (the owner, 2026-11-03): the Incoming library whose fetcher is "soulseek"
 //!   (decision 0096), as Artist/Record (Year), for the intake card. Never straight into Music. Placed whole through a hidden
-//!   folder, the record's cover beside it (`cover.jpg`, its large picture: Y3); a placing that fails keeps its checked files and
-//!   is tried again (X4).
+//!   folder, nothing written beside its files (C-WM-7: the record's cover stays in Cratarr's store); a placing that fails keeps its
+//!   checked files and is tried again (X4).
 //!   Trouble on Cratarr's own side (a disk full or read-only, slskd's folder refused it or gone) blames no user; free space is
 //!   looked at before a fetch. Only slskd's own words that it could not store a file count as such (Y9); a name too long for its
 //!   disk is the folder's, and its user is failed (V5). A part of its path or a file of it not found is slskd's own folder gone
@@ -100,13 +100,6 @@ const SET_ASIDE: &str = "soulseek-set-aside";
 const SET_ASIDE_KEPT: i64 = 14 * 86_400;
 /// Room kept free beyond a fetch's files, on slskd's disk and the library's (X4).
 const ROOM_SPARE: u64 = 1 << 30;
-/// A placed album's `cover.jpg` is no larger than this on its longer side (Y3).
-const COVER_PX: u32 = 1200;
-/// The most of a placed album's cover read (Y3): an original at the Cover Art Archive may be large.
-const COVER_MOST: usize = 10 * 1024 * 1024;
-/// The longest side of a cover decoded for `cover.jpg` (V7): a larger one is refused from its header, never decoded (an 8000-px
-/// original is some 190 MB of pixels, beside the server's own memory).
-const COVER_READ_PX: u32 = 6000;
 
 // ---- What is kept
 
@@ -2906,17 +2899,13 @@ fn folders_for(lib: &Path, r: &Record) -> impl Iterator<Item = PathBuf> {
     (1..).map(move |n| if n == 1 { base.clone() } else { base.with_file_name(format!("{name} {n}")) }).filter(|to| !to.exists())
 }
 
-/// The checked files placed (X4), the record's cover beside them, and the batch's folder they came from removed. A placing that
+/// The checked files placed (X4), nothing beside them (C-WM-7), and the batch's folder they came from removed. A placing that
 /// fails keeps them there: the batch is let go (`checked`), no user is failed, and the record is placed again from them later. One
 /// taken off the list meanwhile (Y2: its record had otherwise, or its request gone) is placed nowhere, and its files go.
 async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf], places: &Places) {
     let lib = places.library.clone().map_err(|e| anyhow::anyhow!(e));
-    // Its cover only once there is somewhere to put it: it may have to be fetched.
-    let cover = match &lib {
-        Ok(_) => cover_for(kept(|k| record_now(k, id)).map_or(it.record.record, |r| r.record)).await,
-        Err(_) => None,
-    };
-    // The list looked at again after the cover's wait (Y2): an item gone from it meanwhile is placed nowhere.
+    // The list looked at again (Y2): an item gone from it meanwhile is placed nowhere. No cover is written beside the files (C-WM-7,
+    // TA1): the record's cover stays in Cratarr's store.
     let Some(r) = kept(|k| record_now(k, id)) else {
         std::fs::remove_dir_all(dir).ok();
         tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "not placed: it left the list");
@@ -2925,7 +2914,7 @@ async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf], places: 
     // Its target noted before the rename (Y10), with when, in the list's last look, which the rename follows (V4): an item taken off
     // since is placed nowhere, and one noted is taken off by nothing (`stays`).
     let noted = |to: &Path| kept(|k| note_placing(k, id, to, now()));
-    let placed = lib.and_then(|lib| place(&lib, &r, files, cover.as_deref(), noted));
+    let placed = lib.and_then(|lib| place(&lib, &r, files, noted));
     match placed {
         Ok(to) => {
             tracing::info!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), to = %to.display(), "placed in Incoming");
@@ -2977,94 +2966,16 @@ impl std::fmt::Display for LeftTheList {
 
 impl std::error::Error for LeftTheList {}
 
-/// The record's cover as JPEG, for `cover.jpg` beside its placed files (X4), from where it comes (`cover_source`), as its large
-/// picture (Y3, `large_cover`), never the cover cache's thumbnail; none where it has none, or it cannot be had now.
-async fn cover_for(record: i64) -> Option<Vec<u8>> {
-    let cat = crate::serve::instance()?.catalogue().clone();
-    let q = crate::run::spawn_blocking(move || cat.requested(&[record])).await.ok()?.ok()?.remove(&record)?;
-    let of = cover_source(q.row.cover.as_deref(), &q.groups)?;
-    // The covers' hosts only, each answer read in pieces to its cap (O1).
-    let http = super::reach::client(super::reach::Purpose::Covers).timeout(Duration::from_secs(30)).build().ok()?;
-    let http = &http;
-    large_cover(&of, |url: String| async move { super::cover_cache::image(http, &url, COVER_MOST).await }).await
-}
-
-/// An album's large picture, as `cover.jpg` takes it (Y3), each address read through `get` (the covers' client; the tests' stands
-/// in): a release group's from the Cover Art Archive at 1200 px, else its original, else its Discogs master's picture as the cover
-/// cache falls back to, never the archive's 250-px thumbnail; a Bandcamp album's at Bandcamp's large size (`_10`), as its page
-/// names it. None where none of them gives one.
-async fn large_cover<G, F>(of: &super::cover_cache::Of, get: G) -> Option<Vec<u8>>
-where
-    G: Fn(String) -> F,
-    F: std::future::Future<Output = Result<Option<Vec<u8>>>>,
-{
-    use super::cover_cache::Of;
-    match of {
-        Of::ReleaseGroup(rg) => {
-            let archive = ["front-1200", "front"].map(|size| format!("https://coverartarchive.org/release-group/{rg}/{size}"));
-            if let Some(b) = first_picture(&archive, &get).await {
-                return Some(b);
-            }
-            let other = super::discogs::release_group_cover(rg).await.ok().flatten().filter(|u| !u.contains("coverartarchive.org"))?;
-            first_picture(&[other], &get).await
-        }
-        Of::Bandcamp(page) => {
-            let large = crate::bandcamp::Bandcamp::get().album(page).await.ok()?.cover?;
-            first_picture(&[large], &get).await
-        }
-    }
-}
-
-/// The first of `addresses` that gives a picture through `get`, as `cover.jpg` takes it (`cover_jpg`); one that cannot be read is
-/// said in the log, and the next tried.
-async fn first_picture<G, F>(addresses: &[String], get: &G) -> Option<Vec<u8>>
-where
-    G: Fn(String) -> F,
-    F: std::future::Future<Output = Result<Option<Vec<u8>>>>,
-{
-    for url in addresses {
-        match get(url.clone()).await {
-            // Read on a blocking thread (V7): a large original's decode is seconds of work.
-            Ok(Some(b)) => match crate::run::spawn_blocking(move || cover_jpg(b)).await.ok().flatten() {
-                Some(jpg) => return Some(jpg),
-                None => tracing::warn!(target: "soulseek", url = %url, "a cover that is no picture Cratarr can read, or too large to read"),
-            },
-            Ok(None) => {}
-            Err(e) => tracing::warn!(target: "soulseek", url = %url, reason = %format!("{e:#}"), "a cover not read"),
-        }
-    }
-    None
-}
-
-/// A picture as `cover.jpg` takes it (Y3): a JPEG within `COVER_PX` as it came; any other made JPEG, scaled to fit. Its size is read
-/// first, from its header (V7): one over `COVER_READ_PX` on its longer side is never decoded, and the decode itself is held to that
-/// (`art::jpeg_within_at_most`). None where it is no picture Cratarr can read, or too large. Blocking.
-fn cover_jpg(b: Vec<u8>) -> Option<Vec<u8>> {
-    let r = image::ImageReader::new(std::io::Cursor::new(&b)).with_guessed_format().ok()?;
-    let jpeg = r.format() == Some(image::ImageFormat::Jpeg);
-    let (w, h) = r.into_dimensions().ok()?;
-    if w.max(h) > COVER_READ_PX {
-        return None;
-    }
-    if jpeg && w.max(h) <= COVER_PX { Some(b) } else { crate::serve::art::jpeg_within_at_most(&b, COVER_PX, COVER_READ_PX).ok() }
-}
-
-/// Where a record's cover comes from (X4): its cover's own address (the Cover Art Archive's for a release group, Bandcamp's for an
-/// album page), else its first release group's. Pure.
-fn cover_source(cover: Option<&str>, groups: &[String]) -> Option<super::cover_cache::Of> {
-    cover.and_then(super::cover_cache::Of::of_address).or_else(|| groups.first().map(|g| super::cover_cache::Of::ReleaseGroup(g.clone())))
-}
-
 /// The checked files into the Soulseek library `lib` (`place_with`); the record's folder. The catalogue is told first that the
 /// album arriving there is the record (`Catalogue::expect_record`, C50), so its tracks join that record rather than make another,
 /// and again once it is in place, from when the expectation waits its week (F9).
-fn place(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, noted: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
+fn place(lib: &Path, r: &Record, files: &[PathBuf], noted: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
     let served = crate::serve::instance();
     let expect = |to: &Path| match served.as_ref().filter(|_| r.record != 0).and_then(|s| Some((s, s.catalogue().place_of_path(to)?))) {
         Some((s, (folder, dir))) => s.catalogue().expect_record(folder, &dir, r.record),
         None => Ok(true),
     };
-    place_with(lib, r, files, cover, expect, noted)
+    place_with(lib, r, files, expect, noted)
 }
 
 /// A record's hidden folder in the library `lib`, its album made in it before the rename (X4): its own, so a placing cut short is
@@ -3083,13 +2994,13 @@ const FOLDERS_AT_MOST: usize = 50;
 
 /// `place`, `expect` telling the catalogue that the album arriving in a folder is the record, and whether it took that. A
 /// folder another record is still expected in is passed over for the next free one, numbered as a folder that is there already
-/// (R27, N10): an album placed there would join that other record. The files are copied into a hidden folder of the library, the
-/// cover beside them, and the folder renamed into place whole (X4): no catalogue pass sees half an album, and the checked files
+/// (R27, N10): an album placed there would join that other record. The files are copied into a hidden folder of the library, and
+/// the folder renamed into place whole (X4): no catalogue pass sees half an album, and the checked files
 /// stay where they are until it is in place, so a placing that fails, or is cut short, loses none. Said again once in place; a
 /// failure then is said in the log and the files stay placed: they are in Incoming, and fetching them again would not help. Its
 /// target is told to `noted` before the rename (Y10), and nothing is placed where `noted` says its item left the list (V4:
 /// `LeftTheList`).
-fn place_with(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, expect: impl Fn(&Path) -> Result<bool>, noted: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
+fn place_with(lib: &Path, r: &Record, files: &[PathBuf], expect: impl Fn(&Path) -> Result<bool>, noted: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
     let mut to = None;
     for folder in folders_for(lib, r).take(FOLDERS_AT_MOST) {
         if expect(&folder)? {
@@ -3100,7 +3011,7 @@ fn place_with(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, e
     let to = to.context("Another record is expected in every folder it could go in")?;
     let hidden = hidden_folder(lib, r);
     std::fs::remove_dir_all(&hidden).ok();
-    let made = fill(&hidden, files, cover).and_then(|()| {
+    let made = fill(&hidden, files).and_then(|()| {
         // The list's last look, the target noted in it (V4): an item gone from the list is placed nowhere.
         if !noted(&to) {
             return Err(anyhow::Error::new(LeftTheList));
@@ -3120,8 +3031,8 @@ fn place_with(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, e
 }
 
 /// The files copied into `into`, a new folder (`place_with`): each disc's into its disc folder (X3), as the catalogue reads a
-/// release of several, and the cover beside them.
-fn fill(into: &Path, files: &[PathBuf], cover: Option<&[u8]>) -> Result<()> {
+/// release of several; nothing else (C-WM-7).
+fn fill(into: &Path, files: &[PathBuf]) -> Result<()> {
     std::fs::create_dir_all(into).with_context(|| format!("{} cannot be made", into.display()))?;
     for f in files {
         let name = f.file_name().context("no file name")?;
@@ -3133,9 +3044,6 @@ fn fill(into: &Path, files: &[PathBuf], cover: Option<&[u8]>) -> Result<()> {
             None => into.to_path_buf(),
         };
         std::fs::copy(f, at.join(name)).with_context(|| format!("copying {}", f.display()))?;
-    }
-    if let Some(c) = cover {
-        std::fs::write(into.join("cover.jpg"), c).context("its cover could not be written")?;
     }
     Ok(())
 }
@@ -3806,7 +3714,7 @@ pub mod tests {
                 _ => Ok(to != taken.as_path()),
             }
         };
-        let to = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, expect, |_| true).unwrap();
+        let to = place_with(&lib, &r, &[from.join("01 Pier.flac")], expect, |_| true).unwrap();
         assert_eq!(to, lib.join("Glass Harbour").join("Harbour Lights (2014) 2"));
         assert!(to.join("01 Pier.flac").exists() && !taken.exists());
         assert_eq!(*asked.lock().unwrap(), 3, "told again once placed");
@@ -3826,12 +3734,12 @@ pub mod tests {
         let to = lib.join("Glass Harbour").join("Harbour Lights (2014)");
         let files = [from.join("01 Pier.flac"), from.join("CD2").join("01 Quay.flac")];
         // A file gone on the way: nothing placed, nothing left half made, the checked files where they were.
-        let err = place_with(&lib, &r, &[files[0].clone(), from.join("02 Gone.flac")], None, |_| Ok(true), |_| true).unwrap_err();
+        let err = place_with(&lib, &r, &[files[0].clone(), from.join("02 Gone.flac")], |_| Ok(true), |_| true).unwrap_err();
         assert!(format!("{err:#}").contains("02 Gone.flac"), "{err:#}");
         assert!(!to.exists(), "no half album");
         assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 0, "no hidden folder left behind");
         assert!(files.iter().all(|f| f.exists()), "the checked files kept");
-        let placed = place_with(&lib, &r, &files, None, |_| Ok(true), |_| true).unwrap();
+        let placed = place_with(&lib, &r, &files, |_| Ok(true), |_| true).unwrap();
         assert_eq!(placed, to);
         assert!(to.join("01 Pier.flac").exists() && to.join("CD2").join("01 Quay.flac").exists(), "whole, each disc in its folder");
         assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 1, "the artist's folder alone");
@@ -3847,7 +3755,7 @@ pub mod tests {
         let (lib, from) = (d.join("soulseek"), d.join("fetched"));
         std::fs::create_dir_all(&from).unwrap();
         std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
-        let to = place_with(&lib, &record("Glass Harbour", "Harbour Lights", Some(2014)), &[from.join("01 Pier.flac")], None, |_| Ok(true), |_| true).unwrap();
+        let to = place_with(&lib, &record("Glass Harbour", "Harbour Lights", Some(2014)), &[from.join("01 Pier.flac")], |_| Ok(true), |_| true).unwrap();
         let names: Vec<String> = std::fs::read_dir(&to).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["01 Pier.flac"], "the placed files alone");
         let code = include_str!("soulseek.rs").split("pub mod tests {").next().unwrap();
@@ -3855,81 +3763,6 @@ pub mod tests {
             assert!(!code.contains(written), "no placing writes or fetches a cover: {written}");
         }
         std::fs::remove_dir_all(&d).ok();
-    }
-
-    /// A picture `w` by `h` pixels, as `format` writes it.
-    fn picture(w: u32, h: u32, format: image::ImageFormat) -> Vec<u8> {
-        let mut out = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgb8(image::RgbImage::new(w, h)).write_to(&mut out, format).unwrap();
-        out.into_inner()
-    }
-
-    /// Y3: the cover placed beside an album is the large picture, for a release group the Cover Art Archive's 1200-px one, kept as it
-    /// came where it is a JPEG within 1200 px: never the 250-px thumbnail the pages' cover cache keeps.
-    #[tokio::test]
-    async fn the_placed_cover_is_the_large_one_not_the_thumbnail() {
-        let rg = "00000000-0000-4000-8000-000000000141";
-        let jpeg = picture(120, 120, image::ImageFormat::Jpeg);
-        let asked = Mutex::new(Vec::new());
-        let get = |url: String| {
-            asked.lock().unwrap().push(url.clone());
-            std::future::ready(Ok(url.ends_with("/front-1200").then(|| jpeg.clone())))
-        };
-        let cover = large_cover(&super::super::cover_cache::Of::ReleaseGroup(rg.into()), get).await;
-        assert_eq!(cover.as_deref(), Some(jpeg.as_slice()), "as it came");
-        assert_eq!(*asked.lock().unwrap(), [format!("https://coverartarchive.org/release-group/{rg}/front-1200")]);
-    }
-
-    /// Y3: where the Cover Art Archive has no 1200-px picture, its original is read, made JPEG and scaled to fit 1200 px. A picture
-    /// none of its addresses gives is no cover, and the album is placed without one.
-    #[tokio::test]
-    async fn a_large_original_cover_is_made_jpeg_within_1200_px() {
-        let rg = "00000000-0000-4000-8000-000000000142";
-        let png = picture(1600, 900, image::ImageFormat::Png);
-        let asked = Mutex::new(Vec::new());
-        let get = |url: String| {
-            asked.lock().unwrap().push(url.clone());
-            std::future::ready(Ok(url.ends_with("/front").then(|| png.clone())))
-        };
-        let of = super::super::cover_cache::Of::ReleaseGroup(rg.into());
-        let cover = large_cover(&of, get).await.expect("its original");
-        let read = image::load_from_memory_with_format(&cover, image::ImageFormat::Jpeg).expect("made JPEG");
-        assert_eq!((read.width(), read.height()), (1200, 675));
-        assert_eq!(asked.lock().unwrap().len(), 2, "its 1200-px picture asked first");
-        assert_eq!(large_cover(&of, |_| std::future::ready(Ok(Some(b"not a picture".to_vec())))).await, None);
-    }
-
-    /// A JPEG of a few pixels whose header says it is `w` by `h` (its frame's size written over): what a decoder would make room for.
-    fn said_to_be(w: u16, h: u16) -> Vec<u8> {
-        let mut b = picture(16, 16, image::ImageFormat::Jpeg);
-        let frame = b.windows(2).position(|m| m[0] == 0xFF && matches!(m[1], 0xC0..=0xC2)).expect("its frame");
-        b[frame + 5..frame + 7].copy_from_slice(&h.to_be_bytes());
-        b[frame + 7..frame + 9].copy_from_slice(&w.to_be_bytes());
-        b
-    }
-
-    /// V7: a cover's size is read from its header before it is decoded: one over 6000 px on its longer side is no cover, and the decode
-    /// itself is held to that size, so it is refused from the header, its pixels never read. Up to 6000 px it is made JPEG within
-    /// 1200 px as before. The placing's reader reads it on a blocking thread, and asks the next address.
-    #[tokio::test]
-    async fn an_oversized_original_is_not_decoded() {
-        let huge = said_to_be(7000, 8);
-        let r = image::ImageReader::new(std::io::Cursor::new(&huge)).with_guessed_format().unwrap();
-        assert_eq!(r.into_dimensions().unwrap(), (7000, 8), "its header says so");
-        assert_eq!(cover_jpg(huge.clone()), None, "no cover");
-        let refused = crate::serve::art::jpeg_within_at_most(&huge, COVER_PX, COVER_READ_PX).unwrap_err();
-        assert!(matches!(refused.downcast_ref::<image::ImageError>(), Some(image::ImageError::Limits(_))), "refused from its header: {refused:#}");
-        assert_eq!(cover_jpg(picture(6001, 2, image::ImageFormat::Png)), None, "its longer side over 6000 px");
-        let within = cover_jpg(picture(6000, 5, image::ImageFormat::Png)).expect("6000 px is read");
-        assert_eq!(image::load_from_memory_with_format(&within, image::ImageFormat::Jpeg).unwrap().width(), COVER_PX);
-        let asked = Mutex::new(0);
-        let get = |_: String| {
-            *asked.lock().unwrap() += 1;
-            std::future::ready(Ok(Some(huge.clone())))
-        };
-        let addresses = ["front-1200", "front"].map(|size| format!("https://coverartarchive.org/release-group/x/{size}"));
-        assert_eq!(first_picture(&addresses, &get).await, None);
-        assert_eq!(*asked.lock().unwrap(), 2, "the next address asked");
     }
 
     /// X4: a folder set aside is kept 14 days, then deleted and taken off its item.
@@ -4314,7 +4147,7 @@ pub mod tests {
             told.set(!to.exists() && hidden_folder(&lib, &r).is_dir());
             true
         };
-        let placed = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, |_| Ok(true), noted).unwrap();
+        let placed = place_with(&lib, &r, &[from.join("01 Pier.flac")], |_| Ok(true), noted).unwrap();
         assert!(told.get() && renamed(&placed, &r), "noted before its rename, its hidden folder there then");
         std::fs::remove_dir_all(&d).ok();
     }
@@ -4363,7 +4196,7 @@ pub mod tests {
         std::fs::create_dir_all(&from).unwrap();
         std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
         let r = record("Glass Harbour", "Harbour Lights", Some(2014));
-        let err = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, |_| Ok(true), |_| false).unwrap_err();
+        let err = place_with(&lib, &r, &[from.join("01 Pier.flac")], |_| Ok(true), |_| false).unwrap_err();
         assert!(err.is::<LeftTheList>(), "{err:#}");
         assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 0, "placed nowhere, no hidden folder left");
         assert!(from.join("01 Pier.flac").exists(), "its checked files where they were");

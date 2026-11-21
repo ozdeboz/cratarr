@@ -39,8 +39,10 @@ impl Server {
         Self::start_with(data, &[]).await
     }
 
-    /// `start`, with these in its environment.
+    /// `start`, with these in its environment. A new data folder's server is given a floor of 0 before anything else is asked (PL3):
+    /// no test's result hangs on the machine's free space, and the space tests set their own.
     async fn start_with(data: &Path, env: &[(&str, &str)]) -> Server {
+        let fresh = !data.join("userdata.sqlite").exists();
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let child = Command::new(BIN)
             .env("CRATARR_DATA_DIR", data)
@@ -54,6 +56,10 @@ impl Server {
         let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new(), acting: std::sync::Mutex::new(None) };
         let answered = |r: reqwest::Response| r.status().is_success() || r.status() == reqwest::StatusCode::UNAUTHORIZED;
         s.until("the server answers", Duration::from_secs(60), || async { s.http.get(format!("{}/api/albums", s.base)).send().await.is_ok_and(answered) }).await;
+        if fresh {
+            let (status, floor) = s.anyone().send(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+            assert_eq!(status, 200, "the harness's floor: {floor}");
+        }
         s
     }
 

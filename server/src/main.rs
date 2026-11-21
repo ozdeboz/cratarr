@@ -261,7 +261,9 @@ async fn main() -> Result<()> {
     // source (each waits minutes first). The app's journal is the server's (RN's R1: the saved queues and the runner's jobs in it).
     journal::set_instance(app.journal.clone());
     // 0.18's step, RN's parts (DI06): 0.17's bulk queue and its kept holds onto the journal's rows, before the turns take the holds up.
-    app::step_018::run(&app.journal, data_dir.as_deref().map(std::path::Path::new), &served.userdata, app::moment::now_secs()).context("cannot finish 0.18's step")?;
+    // An install upgrading from 0.17 is one whose settings file was from before 0.18 (its tag rules copied to each library now).
+    let upgrading = tag_rules_report.is_some();
+    app::step_018::run(&app.journal, data_dir.as_deref().map(std::path::Path::new), &served.userdata, app::moment::now_secs(), upgrading).context("cannot finish 0.18's step")?;
     // Every outside service's hold kept across a restart taken up before anything is asked (OQ-T3), Bandcamp's day after its bot
     // check among them (Y8); their holds kept from now on, in the journal's file (RN's R4).
     app::turn::keep_all(&app.journal, &[&app::discogs::TURN, &app::lastfm::FM]);
