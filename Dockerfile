@@ -31,7 +31,8 @@ WORKDIR /app/server
 # The same build settings in every stage that compiles the server's own crates (tests, e2e): a stage that differs
 # compiles them again (0.13: the e2e stage rebuilt them for 15 minutes beside the tests'). Release is not incremental.
 ENV CARGO_INCREMENTAL=0
-ENV RUSTC_WRAPPER=sccache SCCACHE_DIR=/sccache
+# SCCACHE_IDLE_TIMEOUT=0 (2026-11-21, the ThinkPad's A/B): the server idled out during the long link, so --show-stats read 0.
+ENV RUSTC_WRAPPER=sccache SCCACHE_DIR=/sccache SCCACHE_IDLE_TIMEOUT=0
 # Every compile starts by giving the sources the time now (2026-11-02). All builds share one target cache, and COPY
 # keeps the times the files had (a git archive's: the commit's), so a source older than the last build's artifacts (a
 # branch built before another, built again) was judged unchanged and the other branch's binary was tested or shipped.
