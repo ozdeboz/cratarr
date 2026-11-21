@@ -12,5 +12,7 @@ pub mod library_api;
 pub mod queues;
 pub mod review;
 pub mod routes;
+// The objects' views (DC1a, decision 0104 point 5): one answer each, wherever it shows.
+pub mod views;
 #[cfg(test)]
 mod served_tests_api;

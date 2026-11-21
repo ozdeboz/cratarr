@@ -442,6 +442,7 @@ dependencies = [
  "anyhow",
  "axum",
  "cratarr-app",
+ "cratarr-domain",
  "getrandom 0.3.4",
  "reqwest",
  "rmcp",
@@ -453,6 +454,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "ts-rs",
 ]
 
 [[package]]
@@ -460,6 +462,7 @@ name = "cratarr-app"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "cratarr-domain",
  "cratarr-health",
  "cratarr-rules",
  "cratarr-search",
@@ -562,6 +565,7 @@ dependencies = [
  "cratarr-rules",
  "serde",
  "serde_json",
+ "ts-rs",
 ]
 
 [[package]]

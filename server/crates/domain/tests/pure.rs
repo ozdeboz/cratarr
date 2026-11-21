@@ -38,12 +38,12 @@ fn the_domain_depends_on_the_rules_and_serde_alone() {
     let manifest = include_str!("../Cargo.toml").replace('\r', "");
     let (_, rest) = manifest.split_once("[dependencies]\n").unwrap();
     let dependencies = rest.split_once("\n[").map_or(rest, |(dependencies, _)| dependencies);
-    // `name.workspace = true` or `name = "1"`: the name is what comes before the first dot, space or equals sign.
-    let names: Vec<&str> = dependencies
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.split([' ', '.', '=']).next().unwrap_or(l))
-        .collect();
-    assert_eq!(names, ["cratarr-rules", "serde"], "the domain stays pure: no app, store or runtime crate");
+    // `name.workspace = true` or `name = "1"`: the name is what comes before the first dot, space or equals sign. An optional one
+    // is built only by a feature: ts-rs, for the page's generated types (TY1, TY5), and nothing that runs.
+    let lines: Vec<&str> = dependencies.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+    let name = |l: &&str| l.split([' ', '.', '=']).next().unwrap_or(l).to_string();
+    let always: Vec<String> = lines.iter().filter(|l| !l.contains("optional = true")).map(name).collect();
+    let optional: Vec<String> = lines.iter().filter(|l| l.contains("optional = true")).map(name).collect();
+    assert_eq!(always, ["cratarr-rules", "serde"], "the domain stays pure: no app, store or runtime crate");
+    assert_eq!(optional, ["ts-rs"], "the generated types' alone, by the `ts` feature");
 }

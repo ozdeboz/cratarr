@@ -255,14 +255,16 @@ pub mod said {
     pub const KEY: &str = "This key can't change anything.";
     pub const OWNER: &str = "This is for the owner of this music.";
     pub const ASKERS: &str = "This is for administrators and whoever asked for it.";
-    pub const UNDOER: &str = "Only whoever did it can undo it.";
+    /// CHECK-DC1's ruling 3 (AMENDMENTS 2026-11-20 23:59): shared data is undone by its maker or any administrator.
+    pub const UNDOER: &str = "That isn't yours to undo.";
     pub const HIDDEN: &str = "Not found.";
     pub const NOTHING_PLAYS: &str = "Nothing of it plays here.";
     pub const NOT_HAD: &str = "Not in your library";
     pub const HAD: &str = "In your library";
     pub const REQUESTED: &str = "Requested";
     pub const NOT_REQUESTED: &str = "No request of yours is open.";
-    pub const NO_COPY: &str = "That copy isn't there.";
+    /// RS19's words: a copy gone while its sheet was open.
+    pub const NO_COPY: &str = "That copy is gone";
     pub const CONVERTING: &str = "Its copy is being converted.";
     pub const NOT_CONVERTING: &str = "Its copy isn't being converted.";
     pub const NOT_A_TARGET: &str = "It can't go there.";
@@ -438,6 +440,18 @@ fn full(v: &Viewer) -> Result<(), &'static str> {
     if v.scope == Scope::Full { Ok(()) } else { Err(said::KEY) }
 }
 
+/// What a key that controls may do besides (CHECK-DC1's rulings 1 and 2): play (a reading key never: it is GET-only); and, an
+/// administrator's control key alone, what Home Assistant does (HA-CONTRACT-0.18: a heart, a rating, the review of an arrival
+/// and its Undo).
+fn controls(v: &Viewer) -> Result<(), &'static str> {
+    if v.scope == Scope::Read { Err(said::KEY) } else { Ok(()) }
+}
+
+/// Home Assistant's: a full key, or an administrator's control key.
+fn reviews(v: &Viewer) -> Result<(), &'static str> {
+    if v.scope == Scope::Full || (v.scope == Scope::Control && v.role.administers()) { Ok(()) } else { Err(said::KEY) }
+}
+
 fn administers(v: &Viewer) -> Result<(), &'static str> {
     if v.role.administers() { Ok(()) } else { Err(said::ADMINISTRATORS) }
 }
@@ -489,13 +503,8 @@ fn into_own(v: &Viewer, to: &Target) -> bool {
 /// Whether the viewer may (a 403 where not), once the state allows it.
 fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
     match a {
-        // Reading and playing: anyone, a key of any scope too (§5: "a reading key too").
+        // Reading: anyone, a key of any scope too (§5: "a reading key too"). Play and Play from read the record's tracks (a GET).
         Action::Play
-        | Action::Shuffle
-        | Action::PlayNext
-        | Action::AddToQueue
-        | Action::StartRadio
-        | Action::Resume
         | Action::SoundsLike
         | Action::PlayFrom { .. }
         | Action::Share
@@ -505,7 +514,9 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
         | Action::View
         | Action::Requested
         | Action::RemoveFromDevice => Ok(Decision::Allow),
-        Action::Favourite | Action::Rating => full(v).map(|()| Decision::Allow),
+        // Queued or started on a player (a POST): never a reading key.
+        Action::Shuffle | Action::PlayNext | Action::AddToQueue | Action::StartRadio | Action::Resume => controls(v).map(|()| Decision::Allow),
+        Action::Favourite | Action::Rating => reviews(v).map(|()| Decision::Allow),
         Action::Want => {
             full(v)?;
             granted(v, v.may.request, said::REQUEST).map(|()| Decision::Allow)
@@ -537,12 +548,13 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
             administers(v).map(|()| Decision::Allow)
         }
         Action::Delete { copy } | Action::DeleteArrival { copy } => {
-            full(v)?;
+            // An arrival's Delete is the review's reject: Home Assistant's too.
+            if matches!(a, Action::DeleteArrival { .. }) { reviews(v)? } else { full(v)? }
             may_delete(v, copy_at(r, *copy)?)?;
             Ok(Decision::AskFirst(Plan::Delete { copy: *copy }))
         }
         Action::AddTo { copy, to } => {
-            full(v)?;
+            reviews(v)?;
             if v.role.administers() {
                 return Ok(Decision::Allow);
             }
@@ -552,10 +564,12 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
             // Its asker adds it to their own music only, its default target.
             if into_own(v, to) { Ok(Decision::Allow) } else { Err(said::ADMINISTRATORS) }
         }
+        // An arrival's answer is shared data: undone by whoever gave it, or any administrator (AMENDMENTS 2026-11-20 23:59). What is
+        // kept per account (playlists, crates, hearts, Out…) is its account's alone: GF's `may_undo`, no record action yet.
         Action::Undo { copy } => {
-            full(v)?;
+            reviews(v)?;
             let by = copy_at(r, *copy)?.arrival.as_ref().and_then(|x| x.by.as_deref());
-            if by == Some(v.account.as_str()) { Ok(Decision::Allow) } else { Err(said::UNDOER) }
+            if by == Some(v.account.as_str()) || v.role.administers() { Ok(Decision::Allow) } else { Err(said::UNDOER) }
         }
     }
 }
@@ -782,9 +796,11 @@ mod tests {
         assert_eq!(decide(&alice(), &Action::Play, &preview), Decision::Allow);
         assert!(refused_state(decide(&alice(), &Action::Play, &not_had())));
         assert!(refused_state(decide(&alice(), &Action::Shuffle, &preview)), "the preview's Play row is Play alone");
-        // The reading key: the Play row.
-        for action in [Action::Play, Action::Shuffle, Action::PlayNext, Action::AddToQueue, Action::StartRadio] {
-            assert_eq!(decide(&key(), &action, &night_ferry(Some(0))), Decision::Allow, "{action:?}");
+        // The reading key: Play and Play from (a GET); never what is queued or started on a player (a POST: CHECK-DC1's ruling 1).
+        assert_eq!(decide(&key(), &Action::Play, &night_ferry(Some(0))), Decision::Allow);
+        assert_eq!(decide(&key(), &Action::PlayFrom { copy: 1 }, &night_ferry(Some(0))), Decision::Allow);
+        for action in [Action::Shuffle, Action::PlayNext, Action::AddToQueue, Action::StartRadio] {
+            assert!(refused_right(decide(&key(), &action, &night_ferry(Some(0)))), "{action:?}");
         }
     }
 

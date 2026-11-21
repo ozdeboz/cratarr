@@ -16,6 +16,8 @@ test-support = ["cratarr-app/test-support"]
 
 [dependencies]
 cratarr-app.workspace = true
+# The record's view and its routes (DC1a): the domain's shapes, as the page's generated types have them.
+cratarr-domain.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 getrandom.workspace = true
@@ -30,6 +32,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 cratarr-app = { workspace = true, features = ["test-support"] }
+cratarr-domain = { workspace = true, features = ["ts"] }
+ts-rs.workspace = true
 tower.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true

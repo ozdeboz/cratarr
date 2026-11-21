@@ -539,6 +539,24 @@ mod index_exports {
         };
         u32::from(s.whole) | u32::from(s.stopped) << 1 | s.lost.min(255) << 8 | s.failed.min(255) << 16
     }
+
+    /// A record's artists as one text (`names::credit_text`, NAMES.24's one formatter), from `{"names": […], "phrase": …}` as JSON;
+    /// null where it cannot be read.
+    ///
+    /// # Safety
+    /// `ptr` holds `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn credit_text(ptr: *const u8, len: usize) -> *mut u8 {
+        #[derive(serde::Deserialize)]
+        struct Credit {
+            names: Vec<String>,
+            #[serde(default)]
+            phrase: Option<String>,
+        }
+        let Ok(c) = serde_json::from_slice::<Credit>(unsafe { input(ptr, len) }) else { return core::ptr::null_mut() };
+        let names: Vec<&str> = c.names.iter().map(String::as_str).collect();
+        answer(crate::names::credit_text(&names, c.phrase.as_deref()).as_bytes())
+    }
 }
 
 // A crate's records kept apart (0.13, one spread: the page's own copy goes): numbers in and out, the page giving each
