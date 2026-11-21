@@ -779,12 +779,13 @@
             {/if}
           {/each}
           {#if resumeAt}<MenuGroup><MenuEntry icon="resume" label={ENTRY_NAME.removeResume ?? ''} onclick={forgetResume} /></MenuGroup>{/if}
-          <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
         </MenuCards>
       {/if}
     {:else}
       <PlaylistsStep to={toList} bind:step {onclose} />
     {/if}
+    <!-- Change cover's Upload, in every step: the cover step's own button opens it. -->
+    <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
   </MenuSheet>
 {/if}
 
