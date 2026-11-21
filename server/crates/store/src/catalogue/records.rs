@@ -5234,12 +5234,12 @@ mod tests {
                 db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, 0, 'TITLE', 'title', ?3)", params![folder, rel, title]).unwrap();
             }
         }
-        let single = not_had(&cat, "Deep Harbour", Some("single"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001101")]);
-        let ep = not_had(&cat, "Deep Harbour", Some("ep"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001102")]);
-        let singles = counted(&cat, &[owned, single, ep], true);
-        assert_eq!(sorted(&singles), vec![vec![owned, single]], "the owned record a single by its titles, one with the single of its name");
-        let read = cat.requested(&[single, ep]).unwrap();
-        assert_eq!((read[&single].holder, read[&ep].holder), (Some(owned), None), "the single had, the EP not");
+        // The same four tracks with no titles read: an EP by the 4–6 rule, as before VERSIONS.
+        let untitled = untyped(&cat, "Deep Harbour", &[Some(251_000); 4]);
+        let db = cat.db();
+        let had = live_had_of(&db, &[owned, untitled]).unwrap();
+        let classes = classes_of(&db, &[owned, untitled], &had).unwrap();
+        assert_eq!((classes[&owned], classes[&untitled]), (Class::Single, Class::Ep), "a single by its files' titles; without them an EP");
     }
 
     /// T10.3: the rule's edges, by the rule itself (`library::type_by_files`, on `release_type_of`), never a second classifier. An
@@ -5274,7 +5274,7 @@ mod tests {
         let library = include_str!("../serve/library.rs").replace("\r\n", "\n");
         let at = library.find("pub fn type_by_files(").unwrap();
         let rule = &library[at..at + library[at..].find("\n}\n").unwrap()];
-        assert!(rule.contains("release_type_of(None, None, &shape)"), "{rule}");
+        assert!(rule.contains("release_type_of(&shape)"), "{rule}");
     }
 
     /// T10.4, the census's 156 (production's shape): a had album, untagged and of ten tracks, shadowed by the record of its name that
