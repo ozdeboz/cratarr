@@ -17,6 +17,8 @@ use crate::journal::{Entry, Event, EventId, Journal, TrackMove};
 use crate::ports::{Acquisition, Files};
 
 mod carry_on;
+#[cfg(test)]
+mod layout_tests;
 mod queue;
 mod replace;
 #[cfg(test)]
@@ -104,6 +106,10 @@ pub struct KeepPreview {
     pub refused: Option<KeepRefused>,
     /// Lossless files above the target's quality limit, converted first (Keep then waits in the queue).
     pub convert: usize,
+    /// The layout the plan names where the library neither saved one nor follows one (PL1: none to infer): Keep is the yes that
+    /// saves it as the library's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
     /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
     pub acquisition: bool,
     /// A copy (C40): the album stays where it is, and the copied files are all that is written.
@@ -129,6 +135,17 @@ pub enum KeepRefused {
     NeedsYear,
     /// Another reason, said as is.
     Other(String),
+    /// The target library's layout is still being learnt (PL1): a Keep waits for it in the queue, its words said.
+    Learning(String),
+}
+
+impl From<KeepRefused> for ToggleError {
+    fn from(r: KeepRefused) -> Self {
+        match r {
+            KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
+            KeepRefused::Other(why) | KeepRefused::Learning(why) => ToggleError::Refused(why),
+        }
+    }
 }
 
 /// What became of an album that left Incoming, for a page still showing it by its old id (the panel, the player's
@@ -1219,13 +1236,32 @@ impl IncomingService {
         self.locate_listed(source_id, album).await
     }
 
+    /// How Keep and Replace name an album in the main library at `target` (PL1): its layout's template, and whether the plan names
+    /// one the library neither saved nor follows (none to infer: the default, asked); while it is pending, what a placing waits with.
+    pub(super) fn placing_layout(&self, source_id: &str, target: i64) -> Result<(crate::naming::Template, bool), String> {
+        use crate::app::library::Layout;
+        match self.lib.layout_now(target) {
+            Layout::Saved(t) | Layout::Inferred(t) => Ok((t, false)),
+            Layout::NoneToInfer => Ok((crate::naming::Template::default(), true)),
+            Layout::Pending => Err(crate::app::library::learning_words(&self.library_name(source_id, target))),
+        }
+    }
+
+    /// The layout a plan into `target` names and asks the administrator's yes for (PL1: none to infer), as Settings writes it.
+    pub(super) fn asked_layout(&self, source_id: &str, target: i64) -> Option<String> {
+        self.lib.is_kept(target).then(|| self.placing_layout(source_id, target).ok()).flatten().filter(|(_, asks)| *asks).map(|(t, _)| t.to_string())
+    }
+
     /// Work out Keep for an album into the main library in catalogue folder `target`: its new names, or why not. Reads
     /// the disk and the catalogue; changes nothing.
     async fn plan_keep(&self, at: &Located, target: i64, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
         let music = self.root_of(target)?;
         let name = self.library_name(&at.source, target);
-        let (c, folder, dir, root, music_, year, template) =
-            (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string), self.lib.template());
+        let template = match self.placing_layout(&at.source, target) {
+            Ok((t, _)) => t,
+            Err(waits) => return Ok((music, Err(KeepRefused::Learning(waits)))),
+        };
+        let (c, folder, dir, root, music_, year) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string));
         let plan = crate::run::spawn_blocking(move || -> Result<Result<crate::incoming::KeepPlan, KeepRefused>> {
             let prefix = format!("{dir}/");
             let music_files: Vec<(String, crate::naming::Tags)> = c
@@ -1257,9 +1293,10 @@ impl IncomingService {
         let (_, plan) = self.plan_keep(&at, target, year).await?;
         let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some();
+        let layout = self.asked_layout(source_id, target);
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, layout, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, layout: None, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
         })
     }
 
@@ -1422,9 +1459,10 @@ impl IncomingService {
         let (_, plan) = self.plan_move(&at, target, year).await?;
         let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some() && !self.lib.is_kept(at.dir.folder);
+        let layout = self.asked_layout(source_id, target);
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, layout, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, layout: None, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
         })
     }
 
@@ -1457,8 +1495,8 @@ impl IncomingService {
         let (target, _) = self.destination_of(source_id, to)?;
         let (_, plan) = self.plan_move(&at, target, year).await?;
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert: 0, acquisition: false, copy: true, from_dir: Some(at.dir.dir.clone()) },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert: 0, acquisition: false, copy: true, from_dir: Some(at.dir.dir.clone()) },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert: 0, layout: None, acquisition: false, copy: true, from_dir: Some(at.dir.dir.clone()) },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert: 0, layout: None, acquisition: false, copy: true, from_dir: Some(at.dir.dir.clone()) },
         })
     }
 
@@ -1468,10 +1506,7 @@ impl IncomingService {
     async fn copying(&self, at: &Located, target: i64, year: Option<&str>, sheet: Option<&CopySheet>) -> Result<KeepResult, ToggleError> {
         let _alone = self.alone(&at.album.id, target, &at.album.title, "being copied")?;
         let (root, plan) = self.plan_move(at, target, year).await?;
-        let plan = plan.map_err(|r| match r {
-            KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
-            KeepRefused::Other(why) => ToggleError::Refused(why),
-        })?;
+        let plan = plan.map_err(ToggleError::from)?;
         // The tap carries what its sheet showed (RF10): a copy that would now be another, or written elsewhere or with more or fewer
         // files, is refused with nothing written.
         if let Some(s) = sheet
@@ -1557,11 +1592,17 @@ impl IncomingService {
     }
 
     async fn move_located(&self, source_id: &str, at: Located, target: i64, quality: settings::Quality, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let asked = self.asked_layout(source_id, target);
         let (root, plan) = self.plan_move(&at, target, year).await?;
-        let plan = plan.map_err(|r| match r {
-            KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
-            KeepRefused::Other(why) => ToggleError::Refused(why),
-        })?;
+        // The library's layout still being learnt (PL1): the Keep waits in the queue until it is known, never placed by a guess.
+        let plan = match plan {
+            Err(KeepRefused::Learning(waits)) => return Ok(self.enqueue_waiting(source_id, at, queue::Action::Keep, year, target, waits)),
+            plan => plan.map_err(ToggleError::from)?,
+        };
+        // None to infer: the plan named the default, and this Keep is the administrator's yes to it, saved as the library's own.
+        if let Some(t) = asked.as_deref().and_then(|t| t.parse::<crate::naming::Template>().ok()) {
+            self.lib.save_layout(target, &t);
+        }
         if !self.can_write(&at.root).await || !self.can_write(&root).await {
             return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
@@ -1669,10 +1710,7 @@ impl IncomingService {
         // Nothing put inside or beside the files (COU.12, GEN.58): an arrival is added as it arrived, its picture the store's
         // resolver's to show.
         let (root, plan) = self.plan_move(at, target, year).await?;
-        let plan = plan.map_err(|r| match r {
-            KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
-            KeepRefused::Other(why) => ToggleError::Refused(why),
-        })?;
+        let plan = plan.map_err(ToggleError::from)?;
         if !self.can_write(&at.root).await || !self.can_write(&root).await {
             return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
@@ -2205,6 +2243,8 @@ mod tests {
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
         let lib = Library::new(None, Some(music.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db, None).await.unwrap();
         lib.catalogue().set_folders(vec![music.to_path_buf(), inc.to_path_buf()]).unwrap();
+        // Music's layout known, as Settings' default (PL1): these tests place by it; PL1's own take it away (`layout_tests`).
+        lib.set_saved_template(Some(crate::naming::Template::default()));
         let shelves = Arc::new(Shelves::new(lib.clone(), None));
         IncomingService::new(lib, crate::ports::disk(), Arc::new(Journal::open(None).unwrap()), None, crate::trash::DEFAULT_KEEP_DAYS, None, shelves)
     }

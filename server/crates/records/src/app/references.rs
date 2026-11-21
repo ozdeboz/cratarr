@@ -362,12 +362,15 @@ where
     let mut said: Vec<(&'static str, Outcome)> = Vec::new();
     let mut stop = None;
     let mut off = None;
+    // A source out of reach that Soulseek's judging passed over (KM13; OQ-VR-10 (b), decision 0105 rule 1: a busy source never stops
+    // another): where no other gives a list, the judging waits for it.
+    let mut busy: Option<anyhow::Error> = None;
     for (n, source) in sources.into_iter().enumerate() {
         // Its own list alone, the others only where it has no lengths (R33); where its own source is switched off, the next judges
         // and its count stays (Y12).
         // A page's read asks every source with a reference, each once a round, the order only who is asked first (VR1, decision
         // 0105 rule 1); Soulseek's judging its own first, the others where its own has no lengths (R33; DC2's to change).
-        if !page && n > 0 && row.counting.is_some() && judging.untimed.is_none() && off.is_none() {
+        if !page && n > 0 && row.counting.is_some() && judging.untimed.is_none() && off.is_none() && busy.is_none() {
             break;
         }
         let list = match kept_of(source) {
@@ -396,13 +399,17 @@ where
                             continue;
                         }
                         // F13: a page's read passes over a source out of reach (unanswered, Bandcamp's bot check) for the next, as no source
-                        // ranks above another; what it read after it counts nothing. Soulseek's judging keeps R23: out of reach, it stops,
-                        // asked again later, nothing said against the record. What a read would ask (`ToAsk`) stops either.
-                        if page && !e.is::<ToAsk>() {
-                            continue;
+                        // ranks above another; what it read after it counts nothing. Soulseek's judging likewise (KM13, OQ-VR-10 (b): R23
+                        // goes): judged by the lists the others give, the busy one asked again later; where none gives one, it waits for
+                        // the busy one. What a read would ask (`ToAsk`) stops either.
+                        if e.is::<ToAsk>() {
+                            stop = Some(e);
+                            break;
                         }
-                        stop = Some(e);
-                        break;
+                        if !page {
+                            busy.get_or_insert(e);
+                        }
+                        continue;
                     }
                 }
             }
@@ -422,7 +429,11 @@ where
             judging.untimed = Some((source.to_string(), list));
         }
     }
-    let answer = if judging.timed.is_some() || judging.untimed.is_some() {
+    let judged = judging.timed.is_some() || judging.untimed.is_some();
+    if !judged && stop.is_none() {
+        stop = busy;
+    }
+    let answer = if judged {
         Ok(judging)
     } else {
         let none: Vec<String> = said.iter().filter(|(_, o)| *o == Outcome::None).map(|(s, _)| format!("{} has no list of it", source_name(s))).collect();

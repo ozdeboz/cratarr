@@ -172,7 +172,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 r = arrived.recv(), if open[2] => changed(&out, r, &mut open[2], &["incoming"]).await,
                 r = collected.recv(), if open[3] => changed(&out, r, &mut open[3], &["collection"]).await,
                 r = tasks.recv() => match r {
-                    Ok(t) if account.as_deref() == Some(t.account.as_str()) => match Message::of("task", &t) {
+                    // Its own jobs, and the Cratarr-owned ones it follows (N8): never another's.
+                    Ok(t) if account.as_deref().is_some_and(|a| t.told_to(a)) => match Message::of("task", &t) {
                         Some(m) => out.send(m).await.is_ok(),
                         None => true,
                     },

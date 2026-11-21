@@ -20,6 +20,8 @@ pub trait SettingsIncoming: Send + Sync {
     fn apply_settings(&self, lidarr: LidarrPair, trash_days: u32);
     /// Servers and libraries may have changed: the lists are read again on the next look.
     fn forget_lists(&self) -> Later<'_, ()>;
+    /// A library's layout is known now (PL1): the placings that waited for it go on.
+    fn layouts_known(&self);
 }
 
 pub trait SettingsPlaylists: Send + Sync {

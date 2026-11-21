@@ -540,23 +540,6 @@ pub fn ladder(r: &Record) -> Vec<String> {
 
 // ---- Judging folders
 
-/// A file's title from its name: without the extension, the track number in front, or "Artist - " (each way tried).
-fn titles_of(name: &str) -> Vec<String> {
-    let base = crate::slskd::base_name(name);
-    let base = base.rsplit_once('.').map_or(base, |(b, _)| b);
-    let no_number = base.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | ' ' | ')')).trim();
-    let mut out = vec![base.trim().to_string(), no_number.to_string()];
-    for s in [base, no_number] {
-        if let Some((_, after)) = s.split_once(" - ") {
-            out.push(after.trim().to_string());
-        }
-        if let Some((_, after)) = s.rsplit_once(" - ") {
-            out.push(after.trim().to_string());
-        }
-    }
-    out.dedup();
-    out
-}
 
 /// Whether a folder's name is one disc's of a release (X3): "CD1", "CD 2", "Disc 1", "Disk 2 - …".
 fn is_disc_folder(name: &str) -> bool {
@@ -618,7 +601,8 @@ pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Ve
             }
             // Each file's length in whole milliseconds, by a checked multiply (T4): none where it can't be held.
             let ms: Vec<Option<i64>> = files.iter().map(|f| f.length.and_then(ms_of_secs)).collect();
-            let titles: Vec<Vec<String>> = files.iter().map(|f| titles_of(&f.filename)).collect();
+            // A file's titles from its name, by the one reader (WM.25, T-WM-7): Soulseek gives no tags, so its name's, each cleaned.
+            let titles: Vec<Vec<String>> = files.iter().map(|f| cratarr_rules::hygiene::file_titles(None, crate::slskd::base_name(&f.filename))).collect();
             let places: Vec<(Option<u32>, Option<u32>)> = files.iter().map(|f| place_of(&f.filename)).collect();
             let list: Vec<Side> = tracks.iter().map(|t| Side { disc: Some(t.disc), number: Some(t.position), key: &t.title, length_ms: t.length_ms }).collect();
             let sides: Vec<Side> = files.iter().zip(&places).zip(&ms).map(|((f, (disc, number)), ms)| Side { disc: *disc, number: *number, key: &f.filename, length_ms: *ms }).collect();
@@ -797,8 +781,13 @@ pub struct View {
     pub library: Option<String>,
 }
 
-pub fn view<H: RequestsHost>(app: &Arc<H>) -> View {
-    start(app);
+/// The list as kept (SCENARIOS-LOOKUPS LK.B4: the page starts nothing; the round is the server's, begun at its start).
+pub fn view<H: RequestsHost>(_app: &Arc<H>) -> View {
+    kept_view()
+}
+
+/// [`view`], with no host: what is kept, and nothing begun.
+pub fn kept_view() -> View {
     View { items: kept(|k| k.items.clone()), library: library().ok().map(|p| p.display().to_string()) }
 }
 
@@ -820,10 +809,16 @@ pub const SOURCE_GONE: &str = "That source is gone; look again";
 
 /// These records approved, each with the folder given (else the best); the queue as it is now. A tick naming a source no longer at
 /// its place is refused (`SOURCE_GONE`), and nothing is ticked.
-pub fn approve<H: RequestsHost>(app: &Arc<H>, picked: &[Pick]) -> Result<View> {
+pub fn approve<H: RequestsHost>(_app: &Arc<H>, picked: &[Pick]) -> Result<View> {
+    approve_items(picked)
+}
+
+/// [`approve`], with no host: the ticks kept, and the round begun at once as a job (LK.B4), not a bare spawn.
+pub fn approve_items(picked: &[Pick]) -> Result<View> {
     kept(|k| approve_in(&mut k.items, picked))?;
     wake();
-    Ok(view(app))
+    round_now();
+    Ok(kept_view())
 }
 
 /// [`approve`]'s, on the list's items: each Found item ticked approved with its folder (the first tick wins: one approved since is
@@ -851,10 +846,11 @@ fn approve_in(items: &mut [Item], picked: &[Pick]) -> Result<()> {
 }
 
 /// A record searched now, whatever its wait (and from the ladder's first rung).
-pub fn search_now<H: RequestsHost>(app: &Arc<H>, id: &str) -> View {
+pub fn search_now<H: RequestsHost>(_app: &Arc<H>, id: &str) -> View {
     with_item(id, search_again);
     wake();
-    view(app)
+    round_now();
+    kept_view()
 }
 
 /// An item searched again by hand (Search now): due now, its word gone, and its list read again, as its record counts now (R25,
@@ -1219,10 +1215,28 @@ fn library_in(saved: &crate::settings::Saved) -> Option<PathBuf> {
 
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-/// The searcher woken (a Request approved: taken in now, not at the next round).
+/// The searcher woken (a Request approved: taken in now, not at the next round): its approved Requests read again at once.
 pub fn wake() {
+    REQUESTS_READ.store(0, std::sync::atomic::Ordering::SeqCst);
     WAKE.notify_waiters();
     wake_starts();
+}
+
+/// The placings 0.17 still holds (SCENARIOS-WM WM.22's seeds, T-WM-9): each Placed item still listing its placing folder, as the
+/// catalogue knows that folder (its catalogue folder and its path there), with the record it was fetched for; read from
+/// `soulseek.json` before DC2 moves it onto rows. Never one invented: an item with no folder, or one the catalogue does not hold, is
+/// none. Blocking.
+pub fn placed_seeds(data_dir: &Path, cat: &crate::catalogue::Catalogue) -> Vec<(i64, String, i64)> {
+    let Ok(text) = std::fs::read(data_dir.join("soulseek.json")) else { return Vec::new() };
+    let Ok(kept) = serde_json::from_slice::<Kept>(&text) else { return Vec::new() };
+    kept.items
+        .iter()
+        .filter(|i| i.state == State::Placed && i.record.record > 0)
+        .filter_map(|i| {
+            let (folder, dir) = cat.place_of_path(Path::new(i.placed.as_deref()?))?;
+            Some((folder, dir, i.record.record))
+        })
+        .collect()
 }
 
 /// Whether Soulseek fetches here: slskd set up and switched on (Settings › Server), as single-track intake's.
@@ -1236,6 +1250,66 @@ pub fn start<H: RequestsHost>(app: &Arc<H>) {
     start_on(app.clone())
 }
 
+/// Soulseek's round on the runner (SCENARIOS-LOOKUPS LK.S1, LK.B4): a schedule of this kind, each search a job of it, Activity
+/// showing it; an approval's or a Search now's round begun at once as one (one at a time, whoever asked).
+pub const ROUND: &str = "soulseek:round";
+/// The round's tick: a search at most this often (the old loop's pace between two).
+const ROUND_EVERY: Duration = Duration::from_secs(5);
+/// The approved Requests read by the round at most this often, and at once when woken (the old loop's idle minute).
+const REQUESTS_EVERY: i64 = 60;
+/// When the round last read the approved Requests (epoch s); 0: at its next tick.
+static REQUESTS_READ: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// The host the round reads the approved Requests through, set at the start.
+static HOST: std::sync::OnceLock<Arc<dyn RequestsHost>> = std::sync::OnceLock::new();
+
+/// The round's paused: never by its own switch (its lists' reads wait while background reading is paused, `listing`).
+fn never_paused() -> bool {
+    false
+}
+
+/// What the round does next, asked without a job (LK.S1): the approved Requests read where due (Cratarr's own: no service asked),
+/// then the record due its search, if any, keyed as the round. Nothing while no Incoming library takes Soulseek's records.
+async fn round_due() -> Option<(String, String)> {
+    let served = crate::serve::instance()?;
+    // Nothing searched until an Incoming library takes Soulseek's records (soularr may still be at work).
+    library().ok()?;
+    let now = now();
+    if let Some(app) = HOST.get()
+        && now - REQUESTS_READ.load(std::sync::atomic::Ordering::SeqCst) >= REQUESTS_EVERY
+    {
+        REQUESTS_READ.store(now, std::sync::atomic::Ordering::SeqCst);
+        if let Err(e) = read_requests(&served, &**app).await {
+            tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "the approved Requests not read");
+        }
+    }
+    next_search().map(|id| (ROUND.to_string(), id))
+}
+
+/// The round begun now as a job (an approval, a Search now: LK.B4), not waiting for its next tick; one running already looks again
+/// at its own next tick.
+fn round_now() {
+    REQUESTS_READ.store(0, std::sync::atomic::Ordering::SeqCst);
+    let runner = crate::runner::runner();
+    let Ok(handle) = runner.begin_keyed(ROUND, ROUND, None) else { return };
+    let begun = crate::runner::jobs::run(std::sync::Arc::new(handle), |_| async {
+        if let Some((_, id)) = round_due().await {
+            search(&id).await;
+        }
+        Ok(())
+    });
+    if let Err(e) = begun {
+        tracing::debug!(target: "soulseek", "the round not begun: {e}");
+    }
+}
+
+/// The round's schedule on the runner, once (LK.S1): a second is refused.
+pub fn schedule_round() -> std::result::Result<(), String> {
+    crate::runner::runner().every_woken(ROUND, ROUND_EVERY, never_paused, &WAKE, round_due, |id: String| async move {
+        search(&id).await;
+        Ok(())
+    })
+}
+
 /// [`start`], on its host.
 fn start_on(app: Arc<dyn RequestsHost>) {
     static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
@@ -1246,30 +1320,10 @@ fn start_on(app: Arc<dyn RequestsHost>) {
         return;
     }
     restarted();
-    let round_app = app.clone();
-    crate::run::spawn(async move {
-        let app = round_app;
-        loop {
-            // Nothing searched until an Incoming library takes Soulseek's records (soularr may still be at work).
-            if library().is_err() {
-                let _ = tokio::time::timeout(Duration::from_secs(600), WAKE.notified()).await;
-                continue;
-            }
-            // The approved Requests, read each round (they are Cratarr's own: no service asked).
-            if let Err(e) = read_requests(&served, &*app).await {
-                tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "the approved Requests not read");
-            }
-            match next_search() {
-                Some(id) => {
-                    search(&id).await;
-                    tokio::time::sleep(PACE).await;
-                }
-                None => {
-                    let _ = tokio::time::timeout(Duration::from_secs(60), WAKE.notified()).await;
-                }
-            }
-        }
-    });
+    let _ = HOST.set(app.clone());
+    if let Err(e) = schedule_round() {
+        tracing::warn!(target: "soulseek", "the round not scheduled: {e}");
+    }
     crate::run::spawn(async move {
         // Hidden folders placings left (Y12): swept once, before this start's first fetch, so none of its own is taken.
         sweep_at_start().await;
@@ -5315,6 +5369,146 @@ pub mod tests {
         assert_eq!(kept_now.tracks, list);
         assert!(door.asked().is_empty(), "nothing asked of Bandcamp: {:?}", door.asked());
         assert!(door.violations().is_empty(), "{:?}", door.violations());
+    }
+
+    /// WM.22's seeds (T-WM-9): Soulseek's items still Placed, listing their placing folder, go to the step as placements, with the
+    /// record each was fetched for; one fetching, one placed with no folder, and one whose folder no library holds give none; the
+    /// step seeds exactly those. Never a placement invented where 0.17 holds no evidence of one. Red first: `main` passed none.
+    #[test]
+    fn soulseeks_placed_items_seed_the_018_step() {
+        let d = std::env::temp_dir().join(format!("cratarr-wm22-seeds-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let (data, inc) = (d.join("data"), d.join("incoming"));
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(inc.join("Glass Harbour").join("Tide Tables (2012)")).unwrap();
+        let cat = crate::catalogue::Catalogue::open(None, vec![inc.clone()]).unwrap();
+        let record = cat.record_for_tests("Tide Tables", 0);
+        let item = |id: &str, state: &str, placed: Option<std::path::PathBuf>| {
+            serde_json::json!({ "id": id, "record": { "record": record, "artist": "Glass Harbour", "album": "Tide Tables", "year": 2012, "request": 7 },
+                "state": state, "tracks": [], "folders": [], "failed": [], "misses": 0, "due": 0, "percent": 0.0, "set_aside": [], "placed": placed })
+        };
+        let queue = serde_json::json!({ "next": 4, "items": [
+            item("ss-1", "placed", Some(inc.join("Glass Harbour").join("Tide Tables (2012)"))),
+            item("ss-2", "fetching", None),
+            item("ss-3", "placed", None),
+            item("ss-4", "placed", Some(d.join("elsewhere").join("Tide Tables"))),
+        ] });
+        std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&queue).unwrap()).unwrap();
+        let seeds = placed_seeds(&data, &cat);
+        assert_eq!(seeds, [(0, "Glass Harbour/Tide Tables (2012)".to_string(), record)], "the placed item with its folder, alone");
+        let (report, _) = cat.step_018_wm(&seeds, &|| Ok(())).unwrap().expect("the step's part ran");
+        let counts = serde_json::to_value(&report.counts).unwrap();
+        assert_eq!(counts["placements seeded from placed items"], 1, "{counts}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// WM.25's Soulseek half (T-WM-7): a folder's file names are read by the one reader (`hygiene::file_titles`), so a name whose
+    /// title is a site's stamp after its own ("T4 - www.electronicfresh.com.mp3") pairs with its track "T4" by its cleaned name and
+    /// its length; and no reader of a name of Soulseek's own is left. Never two functions reading a file's name. Red first: Soulseek's
+    /// `titles_of` read "T4 - www.electronicfresh.com" and "www.electronicfresh.com", never "T4".
+    #[test]
+    fn soulseek_reads_a_files_name_through_the_one_reader() {
+        let tracks = vec![track(1, "Lamplight", 200), track(2, "T4", 180)];
+        let folder = answer("peer-a", true, vec![file(r"x\Kite Theory\Lamplight\01 Lamplight.mp3", 200), file(r"x\Kite Theory\Lamplight\T4 - www.electronicfresh.com.mp3", 180)]);
+        let found = folders_of(&[folder], &tracks, &[]);
+        assert_eq!(found.len(), 1, "the folder pairs whole by its cleaned names: {found:?}");
+        let code = include_str!("soulseek.rs").split("#[cfg(test)]").next().unwrap().to_string();
+        assert!(!code.contains(&["fn ", "titles_of"].concat()), "no reader of a name of Soulseek's own");
+        assert!(code.contains("hygiene::file_titles"), "the one reader");
+    }
+
+    /// LK.B4 (row 33): the Soulseek page starts nothing; the round is the server's. (a) The list read twice begins nothing: no round,
+    /// no schedule. (b) An approval begins the round as a job on the runner (Activity sees it), not a bare spawn. (c) The round's
+    /// schedule is on the runner, once: a second is refused. Never the view beginning the round. Red first: the view called `start`,
+    /// the approval only woke a bare loop.
+    #[tokio::test]
+    async fn the_soulseek_page_starts_nothing() {
+        let _state = crate::app::references::TestState::set().await;
+        let runner = crate::runner::runner();
+        let mut activity = runner.subscribe_activity();
+        let rounds = |rx: &mut tokio::sync::broadcast::Receiver<crate::runner::jobs::Row>| {
+            let mut n = 0;
+            while let Ok(row) = rx.try_recv() {
+                n += usize::from(row.kind == ROUND);
+            }
+            n
+        };
+        let id = "ss-lkb4";
+        kept(|q| q.items.push(Item { state: State::Found, ..found_twice(id) }));
+        for _ in 0..2 {
+            assert!(kept_view().items.iter().any(|i| i.id == id), "the list as kept");
+        }
+        assert_eq!(rounds(&mut activity), 0, "(a) the GET begins no round");
+        assert!(runner.schedules().iter().all(|s| s.kind != ROUND), "(a) nor the server's schedule");
+        approve_items(&[Pick { id: id.into(), ..Pick::default() }]).unwrap();
+        tokio::task::yield_now().await;
+        assert!(rounds(&mut activity) >= 1, "(b) the approval begins the round as a job");
+        assert_eq!(schedule_round(), Ok(()), "(c) the round's schedule, on the runner");
+        assert!(schedule_round().is_err(), "(c) once");
+        assert!(runner.schedules().iter().any(|s| s.kind == ROUND && s.period_secs == ROUND_EVERY.as_secs()), "{:?}", runner.schedules());
+        kept(|q| q.items.retain(|i| i.id != id));
+    }
+
+    /// KM13's busy-source half (OQ-VR-10 (b), X21, decision 0105 rule 1; VR27): a busy source never stops another. Record 11:
+    /// MusicBrainz paused for a minute, Bandcamp's list kept (an open read it), Discogs giving no list now: judged by the list kept
+    /// and searched now, MusicBrainz asked again later. A second record, MusicBrainz paused and no list kept: Waiting until the pause
+    /// ends, never Stuck. A third whose only reference is a Bandcamp page with no list kept: Waiting a round, nothing asked of
+    /// Bandcamp. Never a Bandcamp page read by the job; never Stuck for a pause or a list not yet kept. Red first: `judge` stops a
+    /// Soulseek reading at the first source not read (R23).
+    #[tokio::test]
+    async fn a_busy_source_never_stops_another_for_soulseek() {
+        use crate::catalogue::records::Ref;
+        let _state = crate::app::references::TestState::set().await;
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
+        let refer = |title: &str, refs: &[(&str, &str, &str)]| {
+            let record = cat.record_for_tests(title, 0);
+            for (source, kind, value) in refs {
+                assert!(cat.set_reference(&crate::serve::ids::record(record), &Ref::new(source, kind, value), "link").unwrap());
+            }
+            record
+        };
+        let page = |name: &str| format!("https://glassharbour.bandcamp.com/album/{name}");
+        let eleven = refer("Record 11", &[("musicbrainz", "release", "00000000-0000-4000-8000-000000000011"), ("discogs", "release", "2000011"), ("bandcamp", "album", &page("record-11"))]);
+        let second = refer("Record 12", &[("musicbrainz", "release", "00000000-0000-4000-8000-000000000012")]);
+        let third = refer("Record 13", &[("bandcamp", "album", &page("record-13"))]);
+        let list: Vec<Track> = [("Slack Water", 200_000), ("Neap", 180_000), ("Spring Tide", 240_000)].into_iter().zip(1..).map(|((title, ms), n)| Track { disc: 1, position: n, title: title.into(), length_ms: Some(ms), recording: None }).collect();
+        cat.set_reference_tracks(eleven, "bandcamp", &list).unwrap();
+        let t = now();
+        let asked: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let read = {
+            let asked = asked.clone();
+            move |r: Ref| -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<super::super::references::Read>>> + Send>> {
+                asked.lock().unwrap().push(r.source.clone());
+                Box::pin(std::future::ready(match r.source.as_str() {
+                    "musicbrainz" => Err(super::super::turn::Paused { source: "MusicBrainz", until: t + 60 }.into()),
+                    // The job reads no Bandcamp page (0109): as `list_reader` answers it.
+                    "bandcamp" => Err(NotKept.into()),
+                    _ => Ok(None),
+                }))
+            }
+        };
+        let mut seen = Vec::new();
+        for (id, record) in [("ss-km13-11", eleven), ("ss-km13-12", second), ("ss-km13-13", third)] {
+            let it = Item { record: Record { record, ..found_twice(id).record }, state: State::Waiting, due: 0, folders: Vec::new(), tracks: Vec::new(), untimed: Vec::new(), ..found_twice(id) };
+            kept(|q| q.items.push(it.clone()));
+            let goes = read_its_list(id, &it, &cat, read.clone()).await;
+            seen.push((goes, item(id).unwrap()));
+            kept(|q| q.items.retain(|i| i.id != id));
+        }
+        let (goes, now11) = &seen[0];
+        assert!(goes, "record 11 judged by the list kept, searched now: {:?}", now11.why);
+        assert_eq!(now11.tracks, list, "Bandcamp's kept list judges it");
+        assert_eq!(now11.state, State::Searching);
+        let (goes, now12) = &seen[1];
+        assert!(!goes);
+        assert_eq!(now12.state, State::Waiting, "a pause and no list kept: Waiting, never Stuck: {:?}", now12.why);
+        assert!((t + 59..=t + 61).contains(&now12.due), "until the pause ends: {}", now12.due - t);
+        let (goes, now13) = &seen[2];
+        assert!(!goes);
+        assert_eq!(now13.state, State::Waiting, "a Bandcamp list not kept: Waiting, never Stuck: {:?}", now13.why);
+        assert!(now13.due <= t + ROUND_AT_LEAST + 5, "a round on, never a day: {}", now13.due - t);
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked.iter().filter(|s| *s == "musicbrainz").count(), 2, "MusicBrainz asked for 11 and 12, again later: {asked:?}");
     }
 
     /// A1.4.2: 0.16.3's queue with items Stuck on "503 Service Temporarily Unavailable" and on "No list to judge by", due long since:

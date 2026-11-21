@@ -178,12 +178,14 @@ impl Drop for Sampled {
 pub struct Watched {
     fewest: Arc<Mutex<Option<usize>>>,
     stop: Arc<AtomicBool>,
+    dir: PathBuf,
 }
 
 /// Watches `dir`: the fewest audio files it held whenever it was there.
 pub fn whole_when_seen(dir: &Path) -> Watched {
     let (fewest, stop) = (Arc::new(Mutex::new(None::<usize>)), Arc::new(AtomicBool::new(false)));
-    let (into, stopped, dir) = (fewest.clone(), stop.clone(), dir.to_path_buf());
+    let (into, stopped, watched) = (fewest.clone(), stop.clone(), dir.to_path_buf());
+    let dir = watched.clone();
     std::thread::spawn(move || {
         while !stopped.load(Ordering::SeqCst) {
             if dir.is_dir() {
@@ -194,13 +196,20 @@ pub fn whole_when_seen(dir: &Path) -> Watched {
             std::thread::sleep(Duration::from_millis(20));
         }
     });
-    Watched { fewest, stop }
+    Watched { fewest, stop, dir: watched }
 }
 
 impl Watched {
-    /// The fewest audio files the folder held whenever it was seen; none where it never was.
+    /// The fewest audio files the folder held whenever it was seen; none where it never was. It takes a last look of its own first
+    /// (lane C's proof, 2026-11-21: a placing can end between two of the thread's looks, and a loaded machine can hold the thread
+    /// past it, so a folder placed whole went unseen): a folder there now is always seen, and what an earlier look saw still counts.
     pub fn get(&self) -> Option<usize> {
-        *self.fewest.lock().unwrap()
+        let mut f = self.fewest.lock().unwrap();
+        if self.dir.is_dir() {
+            let n = audio_in(&self.dir);
+            *f = Some(f.map_or(n, |m| m.min(n)));
+        }
+        *f
     }
 }
 

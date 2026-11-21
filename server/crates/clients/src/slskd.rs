@@ -938,16 +938,22 @@ pub mod scripted {
 
         fn end(&self, batch: &str, now: Now) {
             let (write, files) = {
-                let mut s = self.s.lock().unwrap();
+                let s = self.s.lock().unwrap();
                 let write = s.writes_to.clone().zip(Some(s.content.clone()));
-                let Some(b) = s.batches.get_mut(batch) else { panic!("no batch {batch}") };
-                b.now = now.clone();
+                let Some(b) = s.batches.get(batch) else { panic!("no batch {batch}") };
                 (write, b.files.clone())
             };
+            // Its files written before it reads done, as slskd moves a download into its folder before it says Succeeded: a follower
+            // reading in between met a batch done with no file (lane C's `all`, 2026-11-21: the bulk queue's fetch refused, its item
+            // back to Queued).
             if now == Now::Succeeded
                 && let Some((folder, content)) = write
             {
                 write_files(&folder, batch, &files, content.as_deref());
+            }
+            let mut s = self.s.lock().unwrap();
+            if let Some(b) = s.batches.get_mut(batch) {
+                b.now = now;
             }
         }
         /// The batch ends well, its files written.

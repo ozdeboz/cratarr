@@ -136,23 +136,114 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
         .map(|m| m.release))
 }
 
-/// The album's release, each track with the file that holds it.
+/// The album's release, each track with the file that holds it: the one kept by its open's job where there is one (LK.B2), else read
+/// now (the bulk queue's add, which an open's job does not yet precede).
 pub async fn release(album: &str) -> Result<ReleaseView> {
     let s = served()?;
+    if let Some(view) = kept_release(&s, album).await? {
+        return Ok(view);
+    }
     let a = album.to_string();
     let (id, files) = crate::run::spawn_blocking(move || -> Result<_> { Ok((release_id_of(&s, &a)?, super::renumber_base::tracks_of(&a)?.0)) }).await??;
     let id = id.context("This album has no MusicBrainz release yet")?;
-    let http = super::discover::http()?;
-    let v: Value = http
-        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits&fmt=json"))
-        .asked()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    let mut view = release_of(&v);
+    let mut view = release_of(&read_release(id).await?);
     place(&mut view, &files);
     Ok(view)
+}
+
+/// A release read for a Replace, Cratarr's own job on the runner (SCENARIOS-LOOKUPS LK.B2): begun by an administrator's open,
+/// keyed by the album (another album's read is another key, never refused), followed by its openers (N8).
+pub const RELEASE_KIND: &str = "release";
+/// How long a release read stays kept (LK.B2, the builder's): an hour, longer than a Replace's searches, fetches and adds take,
+/// and as long as the runner keeps its job's end for the pages that follow it.
+pub const RELEASE_KEPT_SECS: i64 = 3600;
+
+/// The releases read by their jobs, by album: when, and the release as MusicBrainz gave it (its tracks placed at each read).
+fn kept_releases() -> std::sync::MutexGuard<'static, HashMap<String, (i64, ReleaseView)>> {
+    static KEPT: std::sync::LazyLock<Mutex<HashMap<String, (i64, ReleaseView)>>> = std::sync::LazyLock::new(Mutex::default);
+    KEPT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The release kept for `album` within its time, each track with the file that holds it now (LK.B2: a GET reads only what is
+/// kept, and asks nothing). None: not read yet, or read too long ago.
+pub async fn kept_release(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Option<ReleaseView>> {
+    let now = crate::app::moment::now_secs();
+    let kept = kept_releases().get(album).filter(|(at, _)| now - at < RELEASE_KEPT_SECS).map(|(_, v)| v.clone());
+    let Some(mut view) = kept else { return Ok(None) };
+    let (s, a) = (served.clone(), album.to_string());
+    let files = crate::run::spawn_blocking(move || super::renumber_base::tracks_of_in(&s, &a)).await??.0;
+    place(&mut view, &files);
+    Ok(Some(view))
+}
+
+/// What an open of a release answers (LK.B2, R-M2): the release kept, at once; or the task of its job, begun or joined.
+pub enum ReleaseOpened {
+    Kept(ReleaseView),
+    Reading(crate::runner::jobs::Task),
+}
+
+/// An administrator's open of the album's release (LK.B2): the kept release answers at once; else its job, Cratarr's own and
+/// keyed by the album, is begun (or one running joined) and followed by `account`, reading MusicBrainz on its turn. MusicBrainz
+/// switched off refuses it in F1's words, asking nothing. The handler never waits on MusicBrainz.
+pub async fn open_release(served: &Arc<crate::serve::Serve>, album: &str, account: &str) -> Result<ReleaseOpened> {
+    if let Some(view) = kept_release(served, album).await? {
+        return Ok(ReleaseOpened::Kept(view));
+    }
+    let runner = crate::runner::runner();
+    if !super::switches::is_on(super::switches::MUSICBRAINZ) {
+        return Err(super::references::SwitchedOff("MusicBrainz").into());
+    }
+    let (s, a) = (served.clone(), album.to_string());
+    let id = crate::run::spawn_blocking(move || release_id_of(&s, &a)).await??.context("This album has no MusicBrainz release yet")?;
+    match runner.begin_keyed(RELEASE_KIND, album, None) {
+        Ok(handle) => {
+            let key = album.to_string();
+            crate::runner::jobs::run(Arc::new(handle), move |_| async move {
+                let view = release_of(&read_release(id).await?);
+                let tracks = view.tracks.len();
+                kept_releases().insert(key, (crate::app::moment::now_secs(), view));
+                Ok(serde_json::json!({ "tracks": tracks }))
+            })
+            .map_err(anyhow::Error::msg)?;
+        }
+        // One read of this album runs already (another administrator's open): followed, not doubled.
+        Err(Ok(_)) => {}
+        Err(Err(words)) => bail!(words),
+    }
+    runner.follow(RELEASE_KIND, album, account).map(ReleaseOpened::Reading).context("The task went missing.")
+}
+
+/// A release as MusicBrainz gives it, with its recordings and their credits: on MusicBrainz's turn, at its web service (a test's
+/// stand-in where one is set).
+async fn read_release(id: String) -> Result<Value> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(read) = release_stand_in() {
+        return read(id).await;
+    }
+    let http = super::discover::http()?;
+    Ok(http.get(format!("{}/release/{id}?inc=recordings+artist-credits&fmt=json", super::discover::mb_ws())).asked().await?.error_for_status()?.json().await?)
+}
+
+/// Tests: what a release's read asks instead of MusicBrainz (LK.B2's counting stand-in), for the whole process until taken away.
+#[cfg(any(test, feature = "test-support"))]
+pub type ReleaseStandIn = Arc<dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send>> + Send + Sync>;
+
+#[cfg(any(test, feature = "test-support"))]
+fn release_stand_ins() -> std::sync::MutexGuard<'static, Option<ReleaseStandIn>> {
+    static STAND_IN: Mutex<Option<ReleaseStandIn>> = Mutex::new(None);
+    STAND_IN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn release_stand_in() -> Option<ReleaseStandIn> {
+    release_stand_ins().clone()
+}
+
+/// Tests: a release's read asks `read` instead of MusicBrainz (none: as it would); the releases kept so far forgotten.
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_release_stand_in(read: Option<ReleaseStandIn>) {
+    *release_stand_ins() = read;
+    kept_releases().clear();
 }
 
 // ---- 2. Searching
@@ -988,28 +1079,6 @@ where
 
 // ---- 4. Add to album
 
-/// The album-wide tags a new track takes from its neighbour.
-const ALBUM_KEYS: [lofty::tag::ItemKey; 15] = {
-    use lofty::tag::ItemKey::*;
-    [
-        AlbumTitle,
-        AlbumArtist,
-        RecordingDate,
-        Year,
-        ReleaseDate,
-        OriginalReleaseDate,
-        Genre,
-        Label,
-        CatalogNumber,
-        Barcode,
-        TrackTotal,
-        DiscTotal,
-        MusicBrainzReleaseId,
-        MusicBrainzReleaseGroupId,
-        MusicBrainzReleaseArtistId,
-    ]
-};
-
 /// A new track's file name, as its neighbour's is made: the neighbour's with its number and title swapped for the new
 /// one's (its number's width kept); "NN Title" where the neighbour's name has no title in it.
 fn name_like(neighbour: &str, number: u32, title: &str, ext: &str) -> String {
@@ -1047,8 +1116,9 @@ struct Added {
     track: Option<i64>,
 }
 
-fn undo_file(id: &str) -> Result<PathBuf> {
-    let data = served()?.data_dir.clone().context("Cratarr's data folder is needed")?;
+/// Where a placed track's Undo is kept, in the server `s`'s data folder.
+fn undo_file_in(s: &crate::serve::Serve, id: &str) -> Result<PathBuf> {
+    let data = s.data_dir.clone().context("Cratarr's data folder is needed")?;
     Ok(Path::new(&data).join("track-fetch-undo").join(format!("{id}.json")))
 }
 
@@ -1114,7 +1184,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let copy = s.library.row_copy(&wanted.album)?.context("No such album in Cratarr's own library")?;
     let (folder, dir) = (copy.folder, copy.dir);
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
-    let (tracks, ..) = super::renumber_base::tracks_of(&wanted.album)?;
+    let (tracks, ..) = super::renumber_base::tracks_of_in(s, &wanted.album)?;
     let t = &wanted.track;
     let replaced = wanted.replace.as_ref().map(|id| tracks.iter().find(|x| &x.id == id).context("The track to replace is gone")).transpose()?;
     // The neighbour: the closest track on its disc, else any other.
@@ -1142,11 +1212,12 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let handed = replaced.and_then(|r| s.catalogue().place_of_path(&r.path)).and_then(|(f, rel)| s.catalogue().track_of(f, &rel));
     let old = replaced.map(|r| rel_of(&root, &r.path)).transpose()?;
     let now = super::moment::now_secs();
-    let trashed = swap_in(&root, &source, &dest, old.as_deref(), &neighbour.path, now, |part| tag(part, &neighbour.path, t))?;
-    // The album's cover inside it too (the owner's rule: inside every file and next to them).
-    if let Err(e) = crate::covers_inside::complete(&album_dir) {
-        tracing::warn!("track fetch: the cover not put inside {}: {e:#}", dest.display());
-    }
+    // Its placement said to the catalogue before it appears under its name (WM.23, COU.18 (d), T-COU-17): its record, the track it
+    // replaces where it has one, and its place on the record's list; it joins by it, whatever its tags say. Placed untouched: no tag
+    // written, no cover put inside (writing is quiet in 0.18; covers live in the database, C-WM-7).
+    let record = crate::serve::ids::record_number(&wanted.album).context("No such album in Cratarr's own library")?;
+    s.catalogue().place_file(folder, &rel_of(&root, &dest)?, record, handed, (t.disc, t.position))?;
+    let trashed = swap_in(&root, &source, &dest, old.as_deref(), &neighbour.path, now, |_| Ok(()))?;
     let id = now.to_string() + &new_id()[..4];
     if let (Some(track), Some(r)) = (handed, replaced)
         && let Err(e) = s.catalogue().hand_over(&dest, &r.path, track)
@@ -1154,7 +1225,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         tracing::warn!("track fetch: {} not handed its track: {e:#}", dest.display());
     }
     let undo = Added { root: root.clone(), added: rel_of(&root, &dest)?, trashed, track: handed };
-    let file = undo_file(&id)?;
+    let file = undo_file_in(s, &id)?;
     std::fs::create_dir_all(file.parent().context("no folder")?)?;
     std::fs::write(&file, serde_json::to_vec(&undo)?)?;
     let mut changed = vec![dest.clone()];
@@ -1204,51 +1275,6 @@ fn quality_at(saved: Option<&crate::settings::Saved>, root: &Path) -> crate::set
 
 fn rel_of(root: &Path, p: &Path) -> Result<String> {
     Ok(p.strip_prefix(root).context("not inside its library")?.to_string_lossy().replace('\\', "/"))
-}
-
-/// The new track's tags: the album's from its neighbour, its own from MusicBrainz; whatever the uploader's file had
-/// taken away first (its pictures too: the album's cover goes in after).
-fn tag(track: &Path, neighbour: &Path, t: &ReleaseTrack) -> Result<()> {
-    use lofty::prelude::*;
-    use lofty::tag::{ItemKey, ItemValue, TagItem};
-    let theirs: Vec<TagItem> = lofty::read_from_path(neighbour)
-        .ok()
-        .and_then(|f| f.primary_tag().cloned())
-        .map(|tag| tag.items().filter(|i| ALBUM_KEYS.contains(&i.key())).cloned().collect())
-        .unwrap_or_default();
-    let width = super::fixes_base::values(neighbour, &["tracknumber"])?.into_iter().next().flatten().filter(|n| n.starts_with('0')).map_or(1, |n| n.len());
-    let own: Vec<(ItemKey, String)> = [
-        (ItemKey::TrackTitle, Some(t.title.clone())),
-        (ItemKey::TrackArtist, Some(t.artist.clone())),
-        (ItemKey::TrackNumber, Some(format!("{:0width$}", t.position))),
-        (ItemKey::DiscNumber, Some(t.disc.to_string())),
-        (ItemKey::MusicBrainzRecordingId, Some(t.recording.clone()).filter(|r| !r.is_empty())),
-        (ItemKey::MusicBrainzTrackId, Some(t.track_id.clone()).filter(|r| !r.is_empty())),
-        (ItemKey::MusicBrainzArtistId, t.artist_id.clone()),
-    ]
-    .into_iter()
-    .filter_map(|(k, v)| Some((k, v?)))
-    .collect();
-    let (title, recording) = (t.title.clone(), t.recording.clone());
-    crate::retag::rewrite(
-        track,
-        |tag| {
-            tag.clear();
-            for i in theirs {
-                tag.insert(i);
-            }
-            for (k, v) in own {
-                tag.insert(TagItem::new(k, ItemValue::Text(v)));
-            }
-        },
-        |copy| {
-            let got = super::fixes_base::values(copy, &["title", "musicbrainz_trackid"])?;
-            if got[0].as_deref() != Some(title.as_str()) || (!recording.is_empty() && got[1].as_deref() != Some(recording.as_str())) {
-                bail!("its tags did not read back as written");
-            }
-            Ok(())
-        },
-    )
 }
 
 /// An added track's Undo from what its add kept (`file`): the new track to the trash, the one it replaced back.
@@ -1332,6 +1358,44 @@ mod tests {
         let a = Added { root: root.clone(), added: added.into(), trashed: Some(format!("100/{old}")), track: None };
         std::fs::write(&undo, serde_json::to_vec(&a).unwrap()).unwrap();
         (root, undo)
+    }
+
+    /// WM.23's placing half (COU.18 (d), T-COU-17; C-WM-7): a fetched track is placed untouched, its bytes the staged file's
+    /// (sha256 before and after), beside its neighbours under their naming, through a hidden name; the placement (its record, the
+    /// track's place on the list) said to the catalogue before it appears; no cover written in or beside. Never a tag cleared, copied
+    /// or set; never a file but the track written. Red first: the track was retagged from a neighbour and the cover put inside.
+    #[tokio::test]
+    async fn a_fetched_track_is_placed_untouched() {
+        use sha2::Digest;
+        let d = std::env::temp_dir().join(format!("cratarr-wm23-place-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let (music, data) = (d.join("music"), d.join("data"));
+        std::fs::create_dir_all(&data).unwrap();
+        let cat = std::sync::Arc::new(crate::catalogue::Catalogue::open(None, vec![music.clone()]).unwrap());
+        let serve = crate::serve::Serve::open(Some(&data), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.library.set_kinds(vec![(0, crate::serve::copies::Kind::Main)]);
+        serve.attach_catalogue(cat.clone());
+        crate::serve::testing::add(&cat, &music, 0, &[("Glass Harbour/Deep Water/01 Breakwater.flac", "Breakwater"), ("Glass Harbour/Deep Water/02 Sea Wall.flac", "Sea Wall"), ("Glass Harbour/Deep Water/04 Undertow.flac", "Undertow")]);
+        serve.refresh().unwrap();
+        let album = serve.library.album_in(0, "Glass Harbour/Deep Water").unwrap().expect("built");
+        let record = crate::serve::ids::record_number(&album).unwrap();
+        let staged = d.join("a1b2c3.mp3");
+        std::fs::write(&staged, b"the staged bytes, tags and all").unwrap();
+        let before = sha2::Sha256::digest(std::fs::read(&staged).unwrap());
+        let track = ReleaseTrack { disc: 1, position: 3, title: "Night Pier".into(), artist: "Glass Harbour".into(), length_ms: Some(200_000), recording: "rec-3".into(), have: None, track_id: "t-3".into(), artist_id: None, path: None };
+        let wanted = Wanted { album: album.clone(), track, replace: None };
+        let (dest, _undo) = place_track(&serve, &wanted, &staged).expect("placed");
+        assert_eq!(dest, music.join("Glass Harbour/Deep Water/03 Night Pier.mp3"), "named as its neighbours are");
+        assert_eq!(sha2::Sha256::digest(std::fs::read(&dest).unwrap()), before, "its bytes the staged file's: no tag written, no cover inside");
+        let mut names: Vec<String> = std::fs::read_dir(music.join("Glass Harbour/Deep Water")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["01 Breakwater.flac", "02 Sea Wall.flac", "03 Night Pier.mp3", "04 Undertow.flac"], "nothing written beside it, no hidden name left");
+        let placed: Option<(i64, u32, u32)> = cat
+            .db_for_tests()
+            .query_row("SELECT record, disc, number FROM placements WHERE folder = 0 AND path = ?1", ["Glass Harbour/Deep Water/03 Night Pier.mp3"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok();
+        assert_eq!(placed, Some((record, 1, 3)), "said to the catalogue as placed, at its place");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     fn album(tag: &str) -> PathBuf {
@@ -1640,18 +1704,9 @@ mod tests {
         let t = track_of(delight(), "r7", false).unwrap();
         assert_eq!((t.disc, t.position, t.title.as_str()), (1, 7, "Bloom"));
         assert!(track_of(delight(), "r9", false).is_err(), "not on the release");
-        // The file says 06; taken into the album beside 05, it is named and tagged 07.
-        let d = dir("trackfile-number");
-        let file = d.join("06 Bloom.flac");
-        old_flac(&file, "trackfile-number");
-        let neighbour = d.join("05 Euphoria.flac");
-        old_flac(&neighbour, "trackfile-neighbour");
-        tags(&neighbour, &[(ItemKey::TrackTitle, "Euphoria"), (ItemKey::TrackNumber, "05")]);
+        // The file says 06; taken into the album beside 05, it is named 07, its name padded as its neighbours'. Changed by the plan
+        // (WM.23, C-WM-7): it is no longer tagged 07; placed untouched, it is track 7 by its placement.
         assert_eq!(name_like("05 Euphoria.flac", t.position, &t.title, "flac"), "07 Bloom.flac");
-        tag(&file, &neighbour, &t).unwrap();
-        let got = super::super::fixes_base::values(&file, &["tracknumber", "title", "album", "musicbrainz_trackid"]).unwrap();
-        assert_eq!(got, [Some("7".to_string()), Some("Bloom".into()), Some("Delight".into()), Some("r7".into())], "the tag a plain number, as Cratarr tags; the name padded as its neighbours");
-        std::fs::remove_dir_all(&d).ok();
     }
 
     /// X3: AcoustID knowing nothing of a file (no print, or a print it holds no recording for) is judged by titles and lengths, as

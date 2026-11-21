@@ -334,6 +334,13 @@ impl Bandcamp {
         Ok(stream)
     }
 
+    /// An album page's facts as kept from its last read, reading nothing (SCENARIOS-LOOKUPS LK.P3: a Want names its record by what is
+    /// kept, never by a read in its handler). None where it was not read.
+    pub fn kept_album(&self, url: &str) -> Option<Album> {
+        let url = album_page(url)?;
+        self.kept.lock().unwrap_or_else(|p| p.into_inner()).get(&url).map(|(_, a)| a.clone())
+    }
+
     /// An album taken as read, as if its page had just been read (a fake Bandcamp's, in tests).
     #[cfg(any(test, feature = "test-support"))]
     pub fn keep(&self, album: Album) {

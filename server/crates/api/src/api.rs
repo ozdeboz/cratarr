@@ -333,7 +333,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/card", get(intake_card))
             // A record's own Health problems (0.14): its page's and its menu's.
             .route("/api/albums/{source}/{album}/health", get(album_health))
-            .route("/api/albums/{source}/{album}/release", get(album_release))
+            .route("/api/albums/{source}/{album}/release", get(album_release).post(open_album_release))
             .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
             // A record marked classical or not (0.10), library-wide.
             .route("/api/albums/{source}/{album}/classical", put(mark_classical))
@@ -5245,8 +5245,22 @@ async fn discover_want(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serd
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
     let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(refused_as_said)?;
-    // Where it stands with it (G11), as every view reads it.
-    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
+    let task = want_read(&serve, &account, r.record).await;
+    // Where it stands with it (G11), as every view reads it; the record's read beside it, where one runs (LK.P3).
+    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await, "task": task })))
+}
+
+/// A Want is an open of its record (SCENARIOS-LOOKUPS LK.P3, RV12): a record not had has its read begun as its job, which reads its
+/// pages by their links (Bandcamp's at most once a day, 0109), followed by the account. Its task, where one runs or ran its hour.
+async fn want_read(serve: &Arc<crate::serve::Serve>, account: &str, record: Option<i64>) -> Option<crate::runner::jobs::Task> {
+    let record = record?;
+    let cat = serve.catalogue().clone();
+    let had = crate::run::spawn_blocking(move || cat.record(record)).await.ok().and_then(Result::ok).flatten().is_none_or(|r| r.had);
+    if had {
+        return None;
+    }
+    let _ = crate::app::references::begin_read(serve.clone(), record).await;
+    crate::runner::runner().follow(crate::app::references::READ_KIND, &crate::serve::ids::record(record), account)
 }
 
 #[derive(Deserialize)]
@@ -5290,8 +5304,9 @@ async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_jso
         }
     }
     .map_err(refused_as_said)?;
-    // Where it stands with it (G11), as every view reads it.
-    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
+    let task = want_read(&serve, &account, r.record).await;
+    // Where it stands with it (G11), as every view reads it; the record's read beside it, where one runs (LK.P3).
+    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await, "task": task })))
 }
 
 /// An artist's missing albums (0.9.3): their albums and EPs the library has none of, newest first; read when asked
@@ -5393,15 +5408,18 @@ async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Res
     };
     // RV12: the record's read begins at its open, as a job (never on its GET): a record not had's sources read, what they say learnt;
     // a had record's references read for its References (the owner: every lookup a job begun by an open or a schedule).
-    let task = match ctx.serve() {
-        Ok(served) => crate::app::references::begin_read(served, record).await,
+    match ctx.serve() {
+        Ok(served) => {
+            let _ = crate::app::references::begin_read(served, record).await;
+        }
         Err(_) => {
             let _ = crate::app::references::read_at_open(&cat, record, crate::app::moment::now_secs(), crate::app::references_door::read).await;
-            crate::app::references::read_task(record)
         }
-    };
-    // Answered at once from what is kept (SCENARIOS-LOOKUPS, 2026-11-21): the record, and the read's task to follow by its key (a
-    // Cratarr job, no account's: one read of a record whoever opens it); what it learns reaches the page by `changed`.
+    }
+    // Answered at once from what is kept (SCENARIOS-LOOKUPS, 2026-11-21): the record, and the read's task (a Cratarr job, no
+    // account's: one read of a record whoever opens it), followed by this account by its id (N8: `GET /api/tasks` lists it, its
+    // patches reach this account's pages); none where no read was begun. What it learns reaches the page by `changed`.
+    let task = ctx.account().and_then(|a| crate::runner::runner().follow(crate::app::references::READ_KIND, &crate::serve::ids::record(record), &a));
     Ok(Json(json!({ "record": crate::serve::ids::record(record), "task": task })))
 }
 
@@ -7124,10 +7142,28 @@ async fn artist_discogs(ctx: Ctx, Query(q): Query<ArtistAsked>) -> Result<Json<s
 
 // ---- Single-track replacement (0.9.8)
 
-/// The album's MusicBrainz release, each track with the file that holds it (none: missing).
-async fn album_release(Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::track_fetch::ReleaseView>, ApiError> {
+/// The album's MusicBrainz release as its open's job kept it, each track with the file that holds it (none: missing); 404 where it
+/// is not read yet (SCENARIOS-LOOKUPS LK.B2: a GET reads only what is kept and asks nothing).
+async fn album_release(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::track_fetch::ReleaseView>, ApiError> {
     own_album(&source)?;
-    Ok(Json(crate::app::track_fetch::release(&album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+    let served = ctx.serve()?;
+    match crate::app::track_fetch::kept_release(&served, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))? {
+        Some(view) => Ok(Json(view)),
+        None => Err(ToggleError::NotFound(cratarr_domain::words::RELEASE_NOT_READ.into()).into()),
+    }
+}
+
+/// An administrator's open of the album's release (LK.B2, R-M2): 200 with the release kept; else 202 with the task of its job
+/// (Cratarr's own, keyed by the album, followed by this account: N8), which reads MusicBrainz on its turn. Never waits on it.
+async fn open_album_release(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<axum::response::Response, ApiError> {
+    use crate::app::track_fetch::ReleaseOpened;
+    own_album(&source)?;
+    let served = ctx.serve()?;
+    let account = ctx.account().unwrap_or_default();
+    Ok(match crate::app::track_fetch::open_release(&served, &album, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))? {
+        ReleaseOpened::Kept(view) => Json(view).into_response(),
+        ReleaseOpened::Reading(task) => (StatusCode::ACCEPTED, Json(json!({ "task": task }))).into_response(),
+    })
 }
 
 #[derive(Deserialize)]

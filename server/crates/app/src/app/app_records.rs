@@ -42,7 +42,10 @@ mod tests {
     /// open).
     #[tokio::test]
     async fn a_link_pasted_begins_the_records_read() {
-        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        // The process's one runner keys a record's read by its id, and another test's catalogue numbers its records from 1 too
+        // (GEN's `bandcamp_words_are_kept_by_the_records_job_only`): one at a time, or one follows the other's read and fails.
+        let _state = crate::app::references::TestState::set().await;
+        let serve =crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
         let cat = serve.catalogue().clone();
         let record = cat.record_for_tests("Answered", 0);

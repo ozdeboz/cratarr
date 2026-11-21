@@ -1546,6 +1546,12 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Whether Discover's search found this album page by a name (its memory, `bandcamp_found`): a guess, never a record's reference
+    /// (SCENARIOS-DC3 ENT.16; SCENARIOS-LOOKUPS LK.P3).
+    pub fn bandcamp_found_page(&self, page: &str) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM bandcamp_found WHERE page = ?1")?.exists([page])?)
+    }
+
     pub fn set_bandcamp_found(&self, album: &str, at: i64, page: Option<&str>) -> Result<()> {
         self.db().execute("INSERT OR REPLACE INTO bandcamp_found (album, at, page) VALUES (?1, ?2, ?3)", params![album, at, page])?;
         Ok(())

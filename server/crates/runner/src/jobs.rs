@@ -60,6 +60,18 @@ pub struct Task {
     /// What it brought, once finished without an error (the work's own answer); while it runs, what it has found so far where
     /// the work says (a covers look's, 0.9.6).
     pub result: Option<serde_json::Value>,
+    /// A Cratarr-owned job's followers (N8, SCENARIOS-LOOKUPS R-M1): each account that started or joined it by an open; its
+    /// patches reach their pages alone.
+    #[serde(skip)]
+    pub followers: Vec<String>,
+}
+
+impl Task {
+    /// Whether `account`'s pages are told of it (the live channel's `task`, `GET /api/tasks`): its own job, or a Cratarr-owned one
+    /// it follows (N8).
+    pub fn told_to(&self, account: &str) -> bool {
+        !account.is_empty() && (self.account == account || self.followers.iter().any(|f| f == account))
+    }
 }
 
 /// What a job waits for (its turn to decode, memory, a source's pause, the background switch), and until when where it is known.
@@ -249,6 +261,19 @@ impl Runner {
         WF: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
         T: Send + 'static,
     {
+        static NEVER: tokio::sync::Notify = tokio::sync::Notify::const_new();
+        self.every_woken(kind, period, paused, &NEVER, due, work)
+    }
+
+    /// [`every`], its tick also come at once when `wake` is told (Soulseek's round: a Search now, an approval, taken in at once, LK.B4).
+    pub fn every_woken<D, DF, W, WF, T>(&'static self, kind: &str, period: Duration, paused: fn() -> bool, wake: &'static tokio::sync::Notify, due: D, work: W) -> Result<(), String>
+    where
+        D: Fn() -> DF + Send + Sync + 'static,
+        DF: std::future::Future<Output = Option<(String, T)>> + Send + 'static,
+        W: Fn(T) -> WF + Send + Sync + 'static,
+        WF: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+        T: Send + 'static,
+    {
         {
             let mut schedules = self.schedules.lock().unwrap_or_else(|e| e.into_inner());
             if schedules.iter().any(|(s, _)| s.kind == kind) {
@@ -263,7 +288,10 @@ impl Runner {
             let mut every = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                every.tick().await;
+                tokio::select! {
+                    _ = every.tick() => {}
+                    _ = wake.notified() => {}
+                }
                 if paused() || busy.load(Ordering::SeqCst) {
                     continue;
                 }
@@ -335,6 +363,7 @@ impl Runner {
                 step: None,
                 error: row.error.clone(),
                 result: row.result.as_deref().and_then(|r| serde_json::from_str(r).ok()),
+                followers: Vec::new(),
             };
             list.push(Kept {
                 task,
@@ -373,7 +402,19 @@ impl Runner {
     pub fn of_at(&self, account: &str, now: i64) -> Vec<Task> {
         let mut list = self.list();
         list.retain(|k| k.ended.is_none_or(|e| now - e < KEPT_SECS));
-        list.iter().filter(|k| !k.own && k.task.account == account).map(|k| k.task.clone()).collect()
+        // Its own jobs, and the Cratarr-owned ones it follows (N8).
+        list.iter().filter(|k| k.task.told_to(account)).map(|k| k.task.clone()).collect()
+    }
+
+    /// `account` follows the Cratarr-owned job of `kind` and `key` (N8, R-M1: an open several accounts may make): the one running,
+    /// else the last kept its hour. Its task, to follow by its id; none where there is no such job.
+    pub fn follow(&self, kind: &str, key: &str, account: &str) -> Option<Task> {
+        let mut list = self.list();
+        let k = list.iter_mut().filter(|k| k.own && k.task.kind == kind && k.key.as_deref() == Some(key)).max_by_key(|k| (k.ended.is_none(), k.task.id))?;
+        if !account.is_empty() && !k.task.followers.iter().any(|f| f == account) {
+            k.task.followers.push(account.to_string());
+        }
+        Some(k.task.clone())
     }
 
     /// A task begun for `account`; refused while one of its kind runs for it.
@@ -403,7 +444,7 @@ impl Runner {
             list.retain(|k| !(!k.own && k.task.kind == kind && k.task.account == account));
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        let task = Task { id, kind: kind.into(), account: account.unwrap_or_default().into(), preview, started: now(), finished: None, step: None, error: None, result: None };
+        let task = Task { id, kind: kind.into(), account: account.unwrap_or_default().into(), preview, started: now(), finished: None, step: None, error: None, result: None, followers: Vec::new() };
         let stop = Arc::new(AtomicBool::new(false));
         let kept = Kept {
             task: task.clone(),
@@ -517,7 +558,8 @@ impl Runner {
         }
         if at_once || ended || k.told.elapsed() >= EVERY {
             k.told = Instant::now();
-            if !k.own {
+            // An account's job to its pages; a Cratarr-owned one to its followers' alone (N8): none followed, none told.
+            if !k.own || !k.task.followers.is_empty() {
                 let _ = self.tell.send(k.task.clone());
             }
             let _ = self.activity.send(k.row());
@@ -736,6 +778,49 @@ mod tests {
         PAUSED.store(false, Ordering::SeqCst);
         minute(60).await;
         assert_eq!((done.load(Ordering::SeqCst), jobs("al-8")), (2, 1), "on again: the work due is done");
+    }
+
+    /// N8 (SCENARIOS-LOOKUPS LK.B2, R-N8, the page's contract in PAGE4-REPORT): a Cratarr-owned job begun by an open is followed by
+    /// key. Root's open and dave's joining follow the release read of `al-42`; root's read-ahead of `al-43` is another key, never
+    /// refused. `of_at` (and so `GET /api/tasks`) lists each followed job to its followers alone, its patches reach them alone, an
+    /// unfollowed job of Cratarr's own reaches no account; ended, it is kept its hour for its followers. Never a Cratarr-owned job's
+    /// patches told to an account that does not follow it. Red first: `of_at` excludes Cratarr's own jobs.
+    #[tokio::test]
+    async fn a_cratarr_owned_job_is_followed_by_key() {
+        let r = fresh();
+        let mut told = r.subscribe();
+        let read = r.begin_keyed("release", "al-42", None).unwrap();
+        let rooted = r.follow("release", "al-42", "root").expect("root follows the running read");
+        assert_eq!(rooted.id, read.id(), "the task to follow by its id");
+        let joined = match r.begin_keyed("release", "al-42", None) {
+            Err(Ok(t)) => t,
+            _ => panic!("a second open of one key follows the first"),
+        };
+        assert_eq!(joined.id, read.id());
+        assert_eq!(r.follow("release", "al-42", "dave").map(|t| t.id), Some(read.id()));
+        let ahead = r.begin_keyed("release", "al-43", None).expect("another album's read is never refused");
+        r.follow("release", "al-43", "root").unwrap();
+        let quiet = r.begin_keyed("discogs:type", "discogs:type", None).unwrap();
+        let ids = |a: &str| r.of_at(a, now()).iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(ids("root"), [read.id(), ahead.id()], "each job root follows, and nothing of Cratarr's own besides");
+        assert_eq!(ids("dave"), [read.id()]);
+        assert!(ids("alice").is_empty(), "nothing alice follows");
+        read.step("Reading the release", 1, Some(1));
+        quiet.step("Typing records", 1, Some(1));
+        let mut seen = Vec::new();
+        while let Ok(Ok(t)) = tokio::time::timeout(Duration::from_millis(200), told.recv()).await {
+            seen.push(t);
+        }
+        let step = seen.iter().find(|t| t.id == read.id()).expect("the followed read's patch told");
+        assert!(step.told_to("root") && step.told_to("dave") && !step.told_to("alice"), "its followers alone: {:?}", step.followers);
+        assert!(seen.iter().filter(|t| t.id == quiet.id()).all(|t| !t.told_to("root") && !t.told_to("alice")), "an unfollowed job of Cratarr's own reaches no account");
+        let id = read.id();
+        read.finish(Ok(serde_json::json!({ "tracks": 10 })));
+        let ended = r.of_at("root", now()).into_iter().find(|t| t.id == id).expect("kept for its followers");
+        assert!(ended.finished.is_some() && ended.error.is_none());
+        assert_eq!(r.follow("release", "al-42", "erin").map(|t| t.id), Some(id), "a later open follows the read kept its hour");
+        assert!(r.of_at("root", now() + KEPT_SECS + 1).iter().all(|t| t.id != id), "its hour over, gone");
+        drop((ahead, quiet));
     }
 
     // ---- tasks.rs' three, moved with their assertions (SCENARIOS-RN's equivalence pins)

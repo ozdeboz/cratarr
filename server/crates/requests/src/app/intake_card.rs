@@ -171,8 +171,9 @@ fn folded(s: &str) -> String {
 
 /// The checks that read only the files (one record; its folder's name as its tags say). Blocking.
 fn file_checks(tracks: &[Track], tags: &[crate::catalogue::tags::FileTags]) -> Vec<Check> {
+    // The facts' cleaned values (C-WM-6, T-WM-2: the raw tags stay for the tag hash and the persistent ids alone).
     let field = |name: &str| -> BTreeSet<String> {
-        tags.iter().filter_map(|t| t.items.iter().find(|(_, n, _)| *n == Some(name)).map(|(_, _, v)| v.trim().to_string())).filter(|v| !v.is_empty()).collect()
+        tags.iter().filter_map(|t| t.items.iter().find(|(_, n, _)| *n == Some(name)).and_then(|(_, _, v)| crate::catalogue::fact_value(name, v))).filter(|v| !v.is_empty()).collect()
     };
     let folders: BTreeSet<String> = tracks.iter().filter_map(|t| t.path.parent().map(|p| p.display().to_string())).collect();
     let years: BTreeSet<String> = field("date").into_iter().filter_map(|d| d.get(..4).map(str::to_string)).collect();
@@ -634,6 +635,21 @@ mod tests {
         };
         assert_eq!(format_of(&[f("FLAC", Some(24), Some(96_000), None), f("FLAC", Some(24), Some(96_000), None)]), "FLAC 24/96");
         assert_eq!(format_of(&[f("FLAC", Some(16), Some(44_100), None), f("MP3", None, None, Some(320))]), "FLAC 16/44.1 · MP3 320");
+    }
+
+    /// C-WM-6 (T-WM-2): the arrival's file checks read the facts' cleaned values (`hygiene`), never the raw tags: an album name
+    /// with a site's stamp beside it is the same album as without, and a stamp alone is no album name. Red first: the raw values,
+    /// two album names.
+    #[test]
+    fn the_file_checks_read_the_cleaned_values() {
+        let t = |path: &str| Track { id: "s".into(), path: path.into(), place: (0, path.into()), file: "f".into(), title: "t".into(), ms: 0, disc: None, no: None };
+        let tags = |album: &str, artist: &str| crate::catalogue::tags::FileTags {
+            items: vec![("ALBUM".into(), Some("album"), album.into()), ("ALBUMARTIST".into(), Some("albumartist"), artist.into())],
+            ..Default::default()
+        };
+        let files = [t("/in/Mumia - Answered/1.mp3"), t("/in/Mumia - Answered/2.mp3"), t("/in/Mumia - Answered/3.mp3")];
+        let c = file_checks(&files, &[tags("Answered", "Mumia"), tags("Answered [www.electronicfresh.com]", "Mumia"), tags("Answered", "www.electronicfresh.com")]);
+        assert_eq!(c.iter().map(|c| (c.key, c.state)).collect::<Vec<_>>(), [("one_record", "green"), ("folder_name", "green")], "{c:?}");
     }
 
     #[test]

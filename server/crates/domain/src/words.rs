@@ -14,6 +14,9 @@ use crate::view::{Group, Is, Shown};
 /// What a record never made, or forgotten, answers (RV4): the existing notice says it.
 pub const GONE: &str = "That record is gone";
 
+/// What a release's GET answers before an open's job has read it (SCENARIOS-LOOKUPS LK.B2 (a)): the page opens it then.
+pub const RELEASE_NOT_READ: &str = "That release isn't read yet";
+
 /// What a state says, as the table writes it: its name, and its words with their blanks (`{has}`, `{of}`, `{library}`,
 /// `{owner}`). A time where it has one comes beside the words (`Shown::at`), said by the page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

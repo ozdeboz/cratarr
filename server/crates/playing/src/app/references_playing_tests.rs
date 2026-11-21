@@ -699,9 +699,10 @@ async fn the_busy_source_counts_once_it_answers() {
     }
 }
 
-/// F13.4: (a) two opens at once while MusicBrainz is busy: one read, MusicBrainz and Discogs asked once each, both opens looking;
-/// (b) Soulseek's judging while the page's read waits at the gate stops at MusicBrainz (R23); the page's read keeps Discogs' list
-/// uncounted; neither counts anything. Twenty rounds.
+/// F13.4: (a) two opens at once while MusicBrainz is busy: one read, MusicBrainz and Discogs asked once each, both opens
+/// looking; (b) changed by the plan (KM13, VR27; OQ-VR-10 (b): R23 goes): Soulseek's judging while the page's read waits at the gate
+/// is not stopped by the busy MusicBrainz but judged by Discogs' list; the page's read keeps Discogs' list uncounted; neither counts
+/// anything. Twenty rounds.
 #[tokio::test]
 async fn two_opens_while_musicbrainz_is_busy_read_once() {
     let _state = TestState::set().await;
@@ -717,11 +718,13 @@ async fn two_opens_while_musicbrainz_is_busy_read_once() {
         assert!(a.more.looking && b.more.looking, "round {round}: both say it is being read");
         asked_times(&asked, "musicbrainz:release", 1).await;
         let (busy, other_gate, soulseek_asked) = switched(BUSY);
-        assert!(tracklist(&cat, record, switching(&busy, &other_gate, &soulseek_asked)).await.is_err(), "round {round}: Soulseek stops at MusicBrainz");
+        let judged = tracklist(&cat, record, switching(&busy, &other_gate, &soulseek_asked)).await.expect("never stopped by the busy source").expect("a list");
+        assert_eq!(judged.timed.map(|(s, _)| s).as_deref(), Some("discogs"), "round {round}: Soulseek judged by Discogs' list while MusicBrainz is busy");
         assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "round {round}: Soulseek counted nothing");
         gate.add_permits(8);
         page_read_settled(&cat, record).await;
         assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release", "discogs:release"], "round {round}: one page read, each asked once");
+        assert_eq!(*soulseek_asked.lock().unwrap(), ["musicbrainz:release", "discogs:release"], "round {round}: Soulseek's judging passed MusicBrainz over for Discogs");
         assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "round {round}: nothing counted");
         assert_eq!(kept_sources(&cat, record), ["discogs"], "round {round}: Discogs' list kept, uncounted");
     }
@@ -777,8 +780,9 @@ async fn a_busy_source_passed_over_meets_merges_switches_and_arrivals() {
     assert_eq!(asked.lock().unwrap().len(), 1, "(c) no page read after");
 }
 
-/// F13.6: Discogs' list kept uncounted, MusicBrainz still busy: Soulseek's judging waits (R23: `Later`, its words MusicBrainz's),
-/// never judged by Discogs' uncounted list; once MusicBrainz answers with lengths, judged by its list, counted "musicbrainz".
+/// F13.6, changed by the plan (KM13, VR27; OQ-VR-10 (b): a busy source never stops another, R23 goes): Discogs' list kept,
+/// MusicBrainz still busy: Soulseek's judging no longer waits for MusicBrainz but is judged by Discogs' list, nothing counted; once
+/// MusicBrainz answers with lengths, judged by its list, still nothing counted.
 #[tokio::test]
 async fn soulseek_waits_for_a_busy_source_though_the_page_shows_the_next() {
     let _state = TestState::set().await;
@@ -790,8 +794,8 @@ async fn soulseek_waits_for_a_busy_source_though_the_page_shows_the_next() {
     opened(&cat, record, t, read.clone()).await;
     page_read_settled(&cat, record).await;
     assert_eq!(titles(&opened(&cat, record, t + 60, read.clone()).await), ["Lamplight", "Morning"], "the page shows Discogs' list");
-    let why = format!("{:#}", tracklist(&cat, record, read.clone()).await.err().expect("later, never judged by Discogs' uncounted list"));
-    assert!(why.contains("MusicBrainz"), "{why}");
+    let busy = tracklist(&cat, record, read.clone()).await.expect("never stopped by the busy source").expect("a list to judge by");
+    assert_eq!(busy.timed.map(|(s, l)| (s, l.len())), Some(("discogs".to_string(), 2)), "judged by Discogs' kept list while MusicBrainz is busy");
     assert_eq!(cat.record(record).unwrap().unwrap().counting, None);
     mode.store(ANSWERS, SeqCst);
     let judged = tracklist(&cat, record, read).await.unwrap().unwrap();

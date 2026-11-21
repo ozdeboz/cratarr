@@ -2994,6 +2994,9 @@ pub struct Wanted {
     pub year: Option<i32>,
     pub cover: Option<String>,
     pub page: Option<String>,
+    /// Its page is known by a link (SCENARIOS-LOOKUPS LK.P3: a Want's page Discover's search did not find by a name), kept as one;
+    /// else a page 0.16 found by a search, kept as a guess.
+    pub page_link: bool,
 }
 
 /// The record an album asked for is, in the caller's transaction (C49a): the record its release group names (`group_record_in`:
@@ -3186,7 +3189,8 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         Some(_) if owned => None,
         Some(page) => {
             let (r, subject) = (Ref::new("bandcamp", "album", page), ids::record(record));
-            if subjects_in(tx, &r)?.contains(&subject) { None } else { Some(put_reference(tx, &subject, &r, "search", at, false)?.kept()) }
+            let how = if w.page_link { "link" } else { "search" };
+            if subjects_in(tx, &r)?.contains(&subject) { None } else { Some(put_reference(tx, &subject, &r, how, at, false)?.kept()) }
         }
         None => None,
     };
@@ -3781,7 +3785,7 @@ impl Carrying<'_> {
                 }
                 kept
             });
-            let w = Wanted { group: r.group.clone(), artist: named.artist, artists: Vec::new(), title: named.title, label: named.label, year: r.year, cover, page };
+            let w = Wanted { group: r.group.clone(), artist: named.artist, artists: Vec::new(), title: named.title, label: named.label, year: r.year, cover, page, page_link: false };
             let RequestRecord { record, made: new, by_names, paged: mut page, shared } = request_record_in(self.tx, &w, r.at)?;
             if shared {
                 shared_names.push(format!("{} {} - {}", r.id, r.artist, r.album));
@@ -4834,7 +4838,9 @@ pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<
 pub fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, named: crate::bandcamp_ids::Named, artists: Vec<String>, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
     // Every way to a record checks its cover (O3).
     let cover = cover.filter(|c| cover_kept(c));
-    let wanted = Wanted { group: release_group.map(str::to_string), artist: named.artist, artists, title: named.title, label: named.label, year, cover, page };
+    // A Want's page is one the request sends, Discover's searched pages left out by the caller (LK.P3): by a link.
+    let page_link = page.is_some();
+    let wanted = Wanted { group: release_group.map(str::to_string), artist: named.artist, artists, title: named.title, label: named.label, year, cover, page, page_link };
     cat.record_for_request(&wanted)
 }
 

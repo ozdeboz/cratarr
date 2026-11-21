@@ -346,6 +346,13 @@ impl Sent for reqwest::RequestBuilder {
             let (client, req) = self.build_split();
             let req = req?;
             let name = name_of(req.url());
+            // Tests: while the stand-ins are set, an ask of a source this knows is answered by them, never sent (LK.0's harness 1).
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(n) = name
+                && let Some(answer) = stand_ins::answer(&req, n).await
+            {
+                return Ok(answer);
+            }
             // Its address left out of any error (0.9.7): a query holds keys, signatures and session keys (Last.fm's
             // `api_key`, `api_sig`, `sk`), and the error reaches the page, Health and Connections.
             let r = client.execute(req).await.map_err(reqwest::Error::without_url);
@@ -354,6 +361,128 @@ impl Sent for reqwest::RequestBuilder {
             }
             r
         }
+    }
+}
+
+/// Tests (SCENARIOS-LOOKUPS LK.0's harness, its first part): every outside ask's one door, `Sent::sent`, intercepted. While a test's
+/// stand-ins are set, each ask of a source `name_of` knows is counted as it arrives (its source, method, host and path) and answered
+/// by them (none: refused, 599), never sent; a source may be held until the test lets it answer. The LAN clients are not counted.
+/// One test's stand-ins at a time in a process (`set` waits for the last to go).
+#[cfg(any(test, feature = "test-support"))]
+pub mod stand_ins {
+    use std::sync::{Arc, Mutex};
+
+    /// One ask, as the stand-ins saw it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Asked {
+        pub source: &'static str,
+        pub method: String,
+        pub host: String,
+        pub path: String,
+        pub query: String,
+    }
+
+    /// What answers an ask: its status and body (JSON or a page), or none (refused).
+    pub type Answer = Arc<dyn Fn(&Asked) -> Option<(u16, String)> + Send + Sync>;
+
+    struct Set {
+        answer: Answer,
+        asked: Vec<Asked>,
+        held: Vec<&'static str>,
+    }
+
+    static SET: Mutex<Option<Set>> = Mutex::new(None);
+    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static LET_GO: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+    fn set() -> std::sync::MutexGuard<'static, Option<Set>> {
+        SET.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The stand-ins of one test, until dropped.
+    pub struct StandIns {
+        _one: tokio::sync::MutexGuard<'static, ()>,
+    }
+
+    impl StandIns {
+        /// Set: every ask of a known source answered by `answer`.
+        pub async fn set(answer: Answer) -> StandIns {
+            let one = ONE.lock().await;
+            *set() = Some(Set { answer, asked: Vec::new(), held: Vec::new() });
+            StandIns { _one: one }
+        }
+
+        /// Every ask so far, in the order they came.
+        pub fn asked(&self) -> Vec<Asked> {
+            set().as_ref().map(|s| s.asked.clone()).unwrap_or_default()
+        }
+
+        /// How many asks of `source` so far.
+        pub fn count(&self, source: &str) -> usize {
+            self.asked().iter().filter(|a| a.source == source).count()
+        }
+
+        /// The asks counted so far forgotten.
+        pub fn clear(&self) {
+            if let Some(s) = set().as_mut() {
+                s.asked.clear();
+            }
+        }
+
+        /// `source`'s answers held (its asks counted as they come, answered once let go).
+        pub fn hold(&self, source: &'static str) {
+            if let Some(s) = set().as_mut() {
+                s.held.push(source);
+            }
+        }
+
+        /// Every held source answers.
+        pub fn let_go(&self) {
+            if let Some(s) = set().as_mut() {
+                s.held.clear();
+            }
+            LET_GO.notify_waiters();
+        }
+    }
+
+    impl Drop for StandIns {
+        fn drop(&mut self) {
+            *set() = None;
+            LET_GO.notify_waiters();
+        }
+    }
+
+    /// The stand-ins' answer to `req`, an ask of `source`, where they are set: counted now, answered once its source is let go.
+    pub(super) async fn answer(req: &reqwest::Request, source: &'static str) -> Option<reqwest::Response> {
+        let url = req.url();
+        // A test's own fake server on this machine (an address with its port) is that test's, never the stand-ins'.
+        if url.port().is_some() {
+            return None;
+        }
+        let asked = Asked {
+            source,
+            method: req.method().to_string(),
+            host: url.host_str().unwrap_or_default().to_string(),
+            path: url.path().to_string(),
+            query: url.query().unwrap_or_default().to_string(),
+        };
+        let answer = {
+            let mut s = set();
+            let s = s.as_mut()?;
+            s.asked.push(asked.clone());
+            s.answer.clone()
+        };
+        loop {
+            let let_go = LET_GO.notified();
+            match set().as_ref() {
+                Some(s) if s.held.contains(&source) => {}
+                _ => break,
+            }
+            let_go.await;
+        }
+        let (status, body) = answer(&asked).unwrap_or((599, "no stand-in".into()));
+        let r = axum::http::Response::builder().status(status).header("content-type", if body.starts_with('<') { "text/html" } else { "application/json" }).body(body).ok()?;
+        Some(reqwest::Response::from(r))
     }
 }
 
@@ -527,6 +656,34 @@ mod tests {
         assert!(read_image(ask("/page").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("not an image"));
         assert!(read_image(ask("/big").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("cut there"));
         assert_eq!(read_image(ask("/small").await.unwrap(), 100_000).await.unwrap().len(), 1_000);
+    }
+
+    #[tokio::test]
+    async fn the_stand_ins_answer_and_count_every_outside_ask() {
+        let stand_ins = stand_ins::StandIns::set(std::sync::Arc::new(|a: &stand_ins::Asked| (a.source == "musicbrainz").then(|| (200, "{\"id\":\"r1\"}".to_string())))).await;
+        let c = client(Purpose::Metadata).build().unwrap();
+        let answer = c.get("https://musicbrainz.org/ws/2/release/r1?fmt=json").sent().await.unwrap();
+        assert_eq!(answer.status(), 200);
+        assert_eq!(answer.text().await.unwrap(), "{\"id\":\"r1\"}", "answered by the stand-in, never sent");
+        let refused = c.get("https://api.discogs.com/releases/1").sent().await.unwrap();
+        assert_eq!(refused.status().as_u16(), 599, "no stand-in: refused");
+        let asked = stand_ins.asked();
+        assert_eq!(asked.iter().map(|a| (a.source, a.path.as_str())).collect::<Vec<_>>(), [("musicbrainz", "/ws/2/release/r1"), ("discogs", "/releases/1")]);
+        assert_eq!(asked[0].query, "fmt=json");
+        // A held source's ask is counted as it comes and answered once let go.
+        stand_ins.clear();
+        stand_ins.hold("musicbrainz");
+        let held = crate::run::spawn(async move { client(Purpose::Metadata).build().unwrap().get("https://musicbrainz.org/ws/2/x").sent().await.map(|r| r.status().as_u16()) });
+        for _ in 0..100 {
+            if stand_ins.count("musicbrainz") == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(stand_ins.count("musicbrainz"), 1, "counted as it came");
+        assert!(!held.is_finished(), "held");
+        stand_ins.let_go();
+        assert_eq!(held.await.unwrap().unwrap(), 200);
     }
 
     #[tokio::test]
