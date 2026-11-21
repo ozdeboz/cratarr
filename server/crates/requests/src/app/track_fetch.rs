@@ -136,19 +136,86 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
         .map(|m| m.release))
 }
 
-/// The album's release, each track with the file that holds it: the one kept by its open's job where there is one (LK.B2), else read
-/// now (the bulk queue's add, which an open's job does not yet precede).
+/// The album's release, each track with the file that holds it, as its job kept it (LK.B2, LOOKUPS LK.0b: MusicBrainz is asked
+/// only inside the release's job, never by a handler). None kept: its job begun (or the one running joined) and the asker told the
+/// release isn't read yet; the page opens it and follows its task, as Replace does.
 pub async fn release(album: &str) -> Result<ReleaseView> {
     let s = served()?;
     if let Some(view) = kept_release(&s, album).await? {
         return Ok(view);
     }
-    let a = album.to_string();
-    let (id, files) = crate::run::spawn_blocking(move || -> Result<_> { Ok((release_id_of(&s, &a)?, super::renumber_base::tracks_of(&a)?.0)) }).await??;
-    let id = id.context("This album has no MusicBrainz release yet")?;
-    let mut view = release_of(&read_release(id).await?);
-    place(&mut view, &files);
-    Ok(view)
+    begin_release(&s, album).await?;
+    bail!(cratarr_domain::words::RELEASE_NOT_READ)
+}
+
+/// The album's release for the work that runs behind the pages (the bulk queue's searches): kept, else its job begun or joined and
+/// waited for (bounded), then as it kept it. The read itself is the job's.
+pub async fn release_read(album: &str) -> Result<ReleaseView> {
+    let s = served()?;
+    if let Some(view) = kept_release(&s, album).await? {
+        return Ok(view);
+    }
+    begin_release(&s, album).await?;
+    for _ in 0..(RELEASE_WAIT_SECS * 5) {
+        if let Some(view) = kept_release(&s, album).await? {
+            return Ok(view);
+        }
+        if !crate::runner::runner().rows().iter().any(|r| r.kind == RELEASE_KIND) && kept_releases().get(album).is_none() {
+            // Its job ended without keeping it: its error is its task's.
+            let failed = crate::runner::runner().follow(RELEASE_KIND, album, "").and_then(|t| t.error);
+            bail!(failed.unwrap_or_else(|| cratarr_domain::words::RELEASE_NOT_READ.to_string()));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    bail!(cratarr_domain::words::RELEASE_NOT_READ)
+}
+
+/// How long the work behind the pages waits for a release's job.
+const RELEASE_WAIT_SECS: u64 = 600;
+
+/// `then` with the album's release once its job has kept it (the bulk queue's add, LK.0b: answered at once, its tracks queued when
+/// the read ends): kept already, at once. The read is the job's; the wait behind it asks nothing.
+pub async fn when_read(album: &str, then: impl FnOnce(ReleaseView) + Send + 'static) -> Result<()> {
+    let s = served()?;
+    if let Some(view) = kept_release(&s, album).await? {
+        then(view);
+        return Ok(());
+    }
+    begin_release(&s, album).await?;
+    let album = album.to_string();
+    crate::run::spawn(async move {
+        match release_read(&album).await {
+            Ok(view) => then(view),
+            Err(e) => tracing::info!(target: "track_fetch", album = %album, "its release not read: {e:#}"),
+        }
+    });
+    Ok(())
+}
+
+/// The album's release read by its job, Cratarr's own and keyed by the album (LK.B2's), begun where none runs; MusicBrainz switched
+/// off refuses it in F1's words, asking nothing.
+async fn begin_release(served: &Arc<crate::serve::Serve>, album: &str) -> Result<()> {
+    if !super::switches::is_on(super::switches::MUSICBRAINZ) {
+        return Err(super::references::SwitchedOff("MusicBrainz").into());
+    }
+    let (s, a) = (served.clone(), album.to_string());
+    let id = crate::run::spawn_blocking(move || release_id_of(&s, &a)).await??.context("This album has no MusicBrainz release yet")?;
+    match crate::runner::runner().begin_keyed(RELEASE_KIND, album, None) {
+        Ok(handle) => {
+            let key = album.to_string();
+            crate::runner::jobs::run(Arc::new(handle), move |_| async move {
+                let view = release_of(&read_release(id).await?);
+                let tracks = view.tracks.len();
+                kept_releases().insert(key, (crate::app::moment::now_secs(), view));
+                Ok(serde_json::json!({ "tracks": tracks }))
+            })
+            .map_err(anyhow::Error::msg)?;
+            Ok(())
+        }
+        // One read of this album runs already: joined, not doubled.
+        Err(Ok(_)) => Ok(()),
+        Err(Err(words)) => bail!(words),
+    }
 }
 
 /// A release read for a Replace, Cratarr's own job on the runner (SCENARIOS-LOOKUPS LK.B2): begun by an administrator's open,
@@ -189,28 +256,9 @@ pub async fn open_release(served: &Arc<crate::serve::Serve>, album: &str, accoun
     if let Some(view) = kept_release(served, album).await? {
         return Ok(ReleaseOpened::Kept(view));
     }
-    let runner = crate::runner::runner();
-    if !super::switches::is_on(super::switches::MUSICBRAINZ) {
-        return Err(super::references::SwitchedOff("MusicBrainz").into());
-    }
-    let (s, a) = (served.clone(), album.to_string());
-    let id = crate::run::spawn_blocking(move || release_id_of(&s, &a)).await??.context("This album has no MusicBrainz release yet")?;
-    match runner.begin_keyed(RELEASE_KIND, album, None) {
-        Ok(handle) => {
-            let key = album.to_string();
-            crate::runner::jobs::run(Arc::new(handle), move |_| async move {
-                let view = release_of(&read_release(id).await?);
-                let tracks = view.tracks.len();
-                kept_releases().insert(key, (crate::app::moment::now_secs(), view));
-                Ok(serde_json::json!({ "tracks": tracks }))
-            })
-            .map_err(anyhow::Error::msg)?;
-        }
-        // One read of this album runs already (another administrator's open): followed, not doubled.
-        Err(Ok(_)) => {}
-        Err(Err(words)) => bail!(words),
-    }
-    runner.follow(RELEASE_KIND, album, account).map(ReleaseOpened::Reading).context("The task went missing.")
+    // Begun, or one running joined (another administrator's open): followed, not doubled.
+    begin_release(served, album).await?;
+    crate::runner::runner().follow(RELEASE_KIND, album, account).map(ReleaseOpened::Reading).context("The task went missing.")
 }
 
 /// A release as MusicBrainz gives it, with its recordings and their credits: on MusicBrainz's turn, at its web service (a test's
@@ -352,17 +400,26 @@ fn track_of(view: ReleaseView, recording: &str, replacing: bool) -> Result<Relea
     Ok(track)
 }
 
-/// What a search or a file is for: the album's track of `recording`.
+/// What a search or a file is for: the album's track of `recording`, on its release as kept (a handler's: none kept, refused while
+/// its job reads it).
 async fn want(album: &str, recording: &str, replace: Option<String>) -> Result<Wanted> {
     let track = track_of(release(album).await?, recording, replace.is_some())?;
     Ok(Wanted { album: album.to_string(), track, replace })
 }
 
-/// Starts a search for the album's track of `recording`; its id.
+/// Starts a search for the album's track of `recording`; its id. Its release is the one kept (LK.0b: the handler asks MusicBrainz
+/// nothing).
 pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Result<String> {
     let wanted = want(album, recording, replace).await?;
     let (slskd, _) = slskd().await?;
     Ok(searching(wanted, slskd))
+}
+
+/// [`search`] for the work behind the pages (the bulk queue's worker): its release kept, else read by its job and waited for.
+pub async fn search_reading(album: &str, recording: &str) -> Result<String> {
+    let track = track_of(release_read(album).await?, recording, false)?;
+    let (slskd, _) = slskd().await?;
+    Ok(searching(Wanted { album: album.to_string(), track, replace: None }, slskd))
 }
 
 /// Tests: a search for the album's `track` started through this slskd, as [`search`] starts one (its release and slskd as the test

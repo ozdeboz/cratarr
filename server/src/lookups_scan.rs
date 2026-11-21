@@ -516,10 +516,14 @@ fn scan(file: &str, first_waiting: &[&str], writes: bool) {
         failed.push(format!("{r}: in {file}, not registered"));
     }
     for l in &all {
-        if let State::Waiting(_) = l.state
-            && !first_waiting.contains(&l.route.as_str())
-        {
-            failed.push(format!("{}: waiting, but not in the first waiting set", l.route));
+        if let State::Waiting(run) = &l.state {
+            // The list only shrinks: a waiting route is one of the first set, and names the run that takes its asks off.
+            if !first_waiting.contains(&l.route.as_str()) {
+                failed.push(format!("{}: waiting, but not in the first waiting set", l.route));
+            }
+            if run.is_empty() {
+                failed.push(format!("{} {}: waiting, but names no run that takes it off", l.route, l.path));
+            }
         }
     }
     let base = base().join(if writes { "writes" } else { "gets" });

@@ -581,13 +581,28 @@ pub async fn add_albums<H: IncomingHost>(app: &std::sync::Arc<H>, albums: &[Stri
     add_albums_on(app.clone(), albums).await
 }
 
-/// `add_albums`, on its host.
+/// `add_albums`, on its host. Each album's release as its job kept it (LOOKUPS LK.0b: the add asks MusicBrainz nothing itself): its
+/// missing tracks queued at once where kept, else once its job has read it (begun now, or the one running joined).
 async fn add_albums_on(app: std::sync::Arc<dyn IncomingHost>, albums: &[String]) -> Result<View> {
     let _ = APP.set(app);
-    let own = crate::source::cratarr::KIND.id;
+    let asked_by = crate::serve::who::current().map(|w| w.user);
     for album in albums {
-        let release = super::track_fetch::release(album).await?;
-        let asked_by = crate::serve::who::current().map(|w| w.user);
+        let (a, by) = (album.clone(), asked_by.clone());
+        super::track_fetch::when_read(album, move |release| {
+            enqueue(&a, &release, by);
+            run();
+        })
+        .await?;
+    }
+    run();
+    Ok(view())
+}
+
+/// An album's missing tracks (those of its release no file holds) queued, each once.
+fn enqueue(album: &str, release: &super::track_fetch::ReleaseView, asked_by: Option<String>) {
+    let own = crate::source::cratarr::KIND.id;
+    let album = album.to_string();
+    {
         queue(|q| {
             for t in release.tracks.iter().filter(|t| t.have.is_none()) {
                 let there = q.items.iter().any(|i| i.album.id == *album && i.recording == t.recording && !i.state.finished());
@@ -619,8 +634,6 @@ async fn add_albums_on(app: std::sync::Arc<dyn IncomingHost>, albums: &[String])
             }
         });
     }
-    run();
-    Ok(view())
 }
 
 /// These found items approved (with the candidate given, else the one preselected); the queue as it is now.
@@ -685,7 +698,7 @@ struct Live;
 
 impl Intake for Live {
     fn search(&self, album: String, recording: String) -> impl Future<Output = Result<String>> + Send {
-        async move { super::track_fetch::search(&album, &recording, None).await }
+        async move { super::track_fetch::search_reading(&album, &recording).await }
     }
 
     fn fetch(&self, search: String, candidate: usize) -> impl Future<Output = Result<String>> + Send {
