@@ -6,4 +6,8 @@ import type { Section } from "./Section";
  * A place it goes, drawn in a section like an action but asking the server nothing (Siren's links): Go to, View, Share, Web
  * search. `href` is the page's address (shared/addresses.json) or an outside one.
  */
-export type LinkView = { name: string, title: string, icon: string, group: EntryGroup, section: Section, href: string, };
+export type LinkView = { name: string, title: string, icon: string, group: EntryGroup, section: Section, href: string, 
+/**
+ * Whether it works with Cratarr away (RS17): a navigation and the web searches do.
+ */
+away: boolean, };

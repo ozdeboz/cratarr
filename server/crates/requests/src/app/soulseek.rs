@@ -1693,16 +1693,13 @@ enum Listing {
     Ready(super::references::Judging),
     /// No list to judge by: why, in few words.
     None(String),
-    /// A source out of reach: nothing is known of the record yet, so it waits, as with slskd away: why, and how long (a round;
-    /// a day for Bandcamp's bot check, R23).
+    /// A source out of reach: nothing is known of the record yet, so it waits, as with slskd away: why, and how long (a round; a
+    /// source's pause until its end). Its Bandcamp list not kept yet waits a round: the job reads no Bandcamp page (0109).
     Later(String, i64),
 }
 
 /// How long an item with no record yet waits for the round to give it one.
 const RECORD_AGAIN: i64 = 60;
-
-/// How long an item waits after Bandcamp answered with its bot check (R23, N3): at most once a day, nothing done to get past it.
-const CHECKED_AGAIN_SECS: i64 = 86_400;
 
 /// A record's counting list, read through `read` (`references::tracklist`, kept there once read), else what not reading it comes to
 /// (`not_listed`). None is read while background reading is paused (Y7): the item waits a round, never Stuck.
@@ -1728,12 +1725,12 @@ where
     not_listed(&e, now())
 }
 
-/// A record's list not read, by its failure's class at `now` (TN.1, TN.13): no list to judge by, Stuck; Bandcamp's bot check, a day
-/// (R23); a source paused (MusicBrainz's 503), held to its deadline, no try counted; away or not understood, a round. Pure.
+/// A record's list not read, by its failure's class at `now` (TN.1, TN.13): no list to judge by, Stuck; a source paused (MusicBrainz's
+/// 503), held to its deadline, no try counted; away, not understood, or a Bandcamp list not kept (0109: the job reads no Bandcamp page,
+/// so it never meets the bot check and waits no day for it, KM13), a round. Pure.
 fn not_listed(e: &anyhow::Error, now: i64) -> Listing {
     match super::turn::class_at(e, now) {
         Failure::Stuck => Listing::None(format!("{e:#}")),
-        _ if crate::bandcamp::not_read(e) => Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS),
         Failure::Paused { until } => Listing::Later(format!("{e:#}"), (until - now).max(1)),
         _ => Listing::Later(format!("{e:#}"), ROUND_AT_LEAST),
     }
@@ -1743,8 +1740,34 @@ fn not_listed(e: &anyhow::Error, now: i64) -> Listing {
 async fn search(id: &str) {
     let Some(served) = crate::serve::instance() else { return };
     let ready = async { super::track_fetch::slskd_ready().await.map(|(s, _)| s) };
-    search_in(id, served.catalogue(), super::references::read_reference_kept(Some(served.clone())), ready).await;
+    search_in(id, served.catalogue(), list_reader(), ready).await;
 }
+
+/// The reader Soulseek's search reads a record's list with (`references::tracklist`'s), through the References door (CU15). It reads
+/// no Bandcamp page (THE Bandcamp rule, 0109 clause 1: no job reads Bandcamp on its own; KM13): a Bandcamp list counts only once
+/// kept, when someone's open of the record read it (`NotKept` meanwhile).
+pub(crate) fn list_reader() -> impl Fn(crate::catalogue::records::Ref) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<super::references::Read>>> + Send>> + Send + Sync + Clone + 'static {
+    let read = super::references_door::read_through(super::references_door::door());
+    move |r: crate::catalogue::records::Ref| {
+        if r.source == "bandcamp" {
+            return Box::pin(std::future::ready(Err(NotKept.into())));
+        }
+        read(r)
+    }
+}
+
+/// A Bandcamp list Soulseek's search did not read (0109): not kept yet. The item waits a round (`not_listed`), never Stuck, never a
+/// day: nothing of it is anyone's.
+#[derive(Debug)]
+pub struct NotKept;
+
+impl std::fmt::Display for NotKept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Bandcamp's list comes when someone opens the record")
+    }
+}
+
+impl std::error::Error for NotKept {}
 
 /// [`search`], its list read through `read`, slskd as `ready` gives it (the tests' stand in).
 pub async fn search_in<R, F>(id: &str, cat: &Arc<crate::catalogue::Catalogue>, read: R, ready: impl std::future::Future<Output = Result<Slskd>>)
@@ -5290,18 +5313,6 @@ pub mod tests {
         assert_eq!(again.items[0].record.record, 42, "written back with it");
     }
 
-    /// R23 (N3): Bandcamp's bot check is Bandcamp out of reach: the item waits, and is tried again a day later at the soonest,
-    /// nothing done to get past the check; it is not Stuck for good.
-    #[tokio::test]
-    async fn bandcamps_bot_check_is_tried_again_later() {
-        let (cat, items, d) = fx01("bot-check");
-        let checked = |_| std::future::ready(Err(anyhow::Error::from(crate::bandcamp::NotRead)));
-        assert_eq!(listing(of_request(&items, 11), &cat, checked).await, Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS));
-        assert!(CHECKED_AGAIN_SECS >= 86_400);
-        drop(cat);
-        std::fs::remove_dir_all(&d).ok();
-    }
-
     /// F2.11 (kind 6): a record merged into another (0.17's fold) takes its Soulseek item along: the next round names the record its
     /// request reads now, one item still.
     #[test]
@@ -5433,6 +5444,46 @@ pub mod tests {
                 assert!((now_it.due - (t + 86_400)).abs() <= 5, "a day on: {}", now_it.due - t);
             }
         }
+    }
+
+    /// THE Bandcamp rule (0109, clause 1: no job reads Bandcamp on its own; request jobs use only facts already kept) and KM13's
+    /// Bandcamp half: Soulseek's search, a job, reads no Bandcamp page. A record whose only reference is a Bandcamp page with no list
+    /// kept waits (Waiting, a round on, never Stuck, never a day for a bot check), nothing asked of Bandcamp; one whose Bandcamp list
+    /// is kept (someone's open of the record read it) is judged by it, nothing asked either. Never a Bandcamp page read by the job.
+    #[tokio::test]
+    async fn soulseeks_search_reads_no_bandcamp_page() {
+        use crate::app::references_door::StandIn;
+        use crate::catalogue::records::Ref;
+        let _state = crate::app::references::TestState::set().await;
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
+        let reference = |title: &str, page: &str| {
+            let record = cat.record_for_tests(title, 0);
+            assert!(cat.set_reference(&crate::serve::ids::record(record), &Ref::new("bandcamp", "album", page), "link").unwrap());
+            record
+        };
+        let only = reference("Tide Tables", "https://glassharbour.bandcamp.com/album/tide-tables");
+        let opened = reference("Low Tide", "https://glassharbour.bandcamp.com/album/low-tide");
+        let list: Vec<Track> = [("Slack Water", 200_000), ("Neap", 180_000)].into_iter().zip(1..).map(|((title, ms), n)| Track { disc: 1, position: n, title: title.into(), length_ms: Some(ms), recording: None }).collect();
+        cat.set_reference_tracks(opened, "bandcamp", &list).unwrap();
+        let door = StandIn::new().install();
+        let t = now();
+        let mut seen = Vec::new();
+        for (id, record) in [("ss-bc-only", only), ("ss-bc-kept", opened)] {
+            let it = Item { record: Record { record, ..found_twice(id).record }, state: State::Waiting, due: 0, folders: Vec::new(), tracks: Vec::new(), untimed: Vec::new(), ..found_twice(id) };
+            kept(|q| q.items.push(it.clone()));
+            let goes = read_its_list(id, &it, &cat, list_reader()).await;
+            seen.push((goes, item(id).unwrap()));
+            kept(|q| q.items.retain(|i| i.id != id));
+        }
+        let (only_goes, only_now) = &seen[0];
+        assert!(!only_goes, "no list kept: it waits");
+        assert_eq!(only_now.state, State::Waiting, "Waiting, never Stuck: {:?}", only_now.why);
+        assert!(only_now.due <= t + ROUND_AT_LEAST + 5, "a round on, never a day: {}", only_now.due - t);
+        let (kept_goes, kept_now) = &seen[1];
+        assert!(kept_goes, "judged by the list kept");
+        assert_eq!(kept_now.tracks, list);
+        assert!(door.asked().is_empty(), "nothing asked of Bandcamp: {:?}", door.asked());
+        assert!(door.violations().is_empty(), "{:?}", door.violations());
     }
 
     /// A1.4.2: 0.16.3's queue with items Stuck on "503 Service Temporarily Unavailable" and on "No list to judge by", due long since:
@@ -5654,13 +5705,17 @@ pub mod tests {
         let (cat, items, d) = fx01("bandcamp-list");
         let it = of_request(&items, 11);
         assert_eq!((it.record.artist.as_str(), it.record.album.as_str(), it.state), ("Tape Club", "After Hours", State::Waiting), "taken, though it has no release group");
-        let Listing::Ready(lists) = listing(it, &cat, bandcamp_list).await else { panic!("no list") };
-        let (source, tracks) = lists.timed.expect("Bandcamp's list has lengths");
-        assert_eq!((source.as_str(), tracks.len()), ("bandcamp", 2));
-        assert!(tracks.iter().all(|t| t.recording.is_none()), "no recording: AcoustID's check skipped at the gate");
+        // Changed by design (SCENARIOS-VR01 VR8; THE Bandcamp rule, AMENDMENTS 2026-11-21 02:03): the label's page, found by its
+        // names, is a guess, whose list is never read for the record, and no Soulseek job reads a Bandcamp page: Bandcamp asked
+        // nothing, and with every reference a guess it waits a round for one to be confirmed, never Stuck.
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let reader = |r| {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            bandcamp_list(r)
+        };
+        assert_eq!(listing(it, &cat, reader).await, Listing::Later("Waits for a reference to be confirmed".into(), ROUND_AT_LEAST));
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0, "Bandcamp asked nothing");
         assert_eq!(ladder(&it.record)[0], "Tape Club After Hours 2020");
-        let answers = [answer("bc", true, vec![file(r"Tape Club\After Hours\01 Night Ferry.flac", 241), file(r"Tape Club\After Hours\02 Last Lights.flac", 198)])];
-        assert_eq!(folders_of(&answers, &tracks, &[]).len(), 1, "judged by Bandcamp's list");
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
     }

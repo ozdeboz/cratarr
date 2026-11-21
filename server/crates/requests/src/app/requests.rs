@@ -1700,7 +1700,7 @@ fn held_for(cat: &crate::catalogue::Catalogue, r: &Request, kinds: &[(i64, crate
 /// held only in another's own music). Whole as the holding has it (`holding::whole`). Pure.
 fn copy_folder(copies: &crate::catalogue::holding::Copies, holding: Holding, kind: impl Fn(i64) -> crate::settings::LibraryKind, own: &[i64]) -> Option<i64> {
     use crate::settings::LibraryKind;
-    let whole = |c: &&cratarr_domain::holding::CopyFacts| cratarr_domain::holding::whole(c, copies.shortest);
+    let whole = |c: &&cratarr_domain::holding::CopyFacts| cratarr_domain::holding::whole_of(c, copies.kept());
     let first = |pick: &dyn Fn(i64) -> bool| copies.copies.iter().filter(whole).find(|c| pick(c.folder)).map(|c| c.folder);
     match holding {
         Holding::Done => first(&|folder| own.contains(&folder)).or_else(|| first(&|folder| kind(folder) == LibraryKind::Main)),
@@ -1913,13 +1913,14 @@ pub enum Holding {
 /// the one reader gives them (`Catalogue::copies_held`), every library counted (a request never follows a viewer's switch, HD7).
 /// Had is done; retired or not had, none. Pure.
 pub fn held(copies: &crate::catalogue::holding::Copies, asker: &str) -> Holding {
-    use cratarr_domain::holding::{Holding as Held, On, holding};
-    match holding(&copies.copies, copies.shortest, asker, &On::all()) {
+    use cratarr_domain::holding::{Holding as Held, On, holding_of};
+    match holding_of(&copies.copies, copies.kept(), asker, &On::all()) {
         Held::Had => Holding::Done,
         Held::Elsewhere => Holding::Elsewhere,
         Held::Arrived => Holding::Arrived,
         Held::Partly { has, of } => Holding::Partly { has: u32::from(has), of: u32::from(of) },
-        Held::NotHad | Held::Retired { .. } => Holding::None,
+        // Only guesses kept (VR12 rule 6): not known whole, never done or delivered; its words and fetchers are DC2's.
+        Held::NotHad | Held::Retired { .. } | Held::Unknown => Holding::None,
     }
 }
 

@@ -267,6 +267,8 @@ fn missing_items(list: &[crate::app::discover::Missing], w: &[String], marks: Op
                 kind: "missing",
                 album: None,
                 album_id: None,
+                album_type: None,
+                album_secondary: Vec::new(),
                 duration_secs: None,
                 subject: format!("album:{}/{}", crate::source::cratarr::KIND.id, m.record),
                 known: vec![format!("Missing from {}", m.artist)],
@@ -310,6 +312,8 @@ fn excluded_items(
                 kind: "excluded",
                 album: None,
                 album_id: None,
+                album_type: None,
+                album_secondary: Vec::new(),
                 duration_secs: None,
                 subject: format!("excluded:{}", x.key),
                 title: x.album.clone(),
@@ -332,6 +336,8 @@ fn excluded_items(
             kind: "excluded",
             album: None,
             album_id: None,
+            album_type: None,
+            album_secondary: Vec::new(),
             duration_secs: None,
             subject: format!("excluded-artist:{}", a.key),
             title: a.artist.clone(),
@@ -353,6 +359,8 @@ fn excluded_items(
             kind: "excluded",
             album: None,
             album_id: None,
+            album_type: None,
+            album_secondary: Vec::new(),
             duration_secs: None,
             subject: format!("excluded-everywhere:{}", a.key),
             title: a.name.clone(),
@@ -382,6 +390,8 @@ fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: O
         kind,
         album: None,
         album_id: None,
+        album_type: None,
+        album_secondary: Vec::new(),
         duration_secs: None,
         subject: format!("{kind}:{id}"),
         title: title.to_string(),
@@ -467,6 +477,8 @@ fn by_composer(c: &super::classical::Index, w: &[String], have: &std::collection
                 kind: "album",
                 album: None,
                 album_id: None,
+                album_type: None,
+                album_secondary: Vec::new(),
                 duration_secs: None,
                 subject: format!("album:cratarr/{id}"),
                 title: r.title.clone(),
@@ -524,6 +536,8 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
                 kind: "work",
                 album: None,
                 album_id: None,
+                album_type: None,
+                album_secondary: Vec::new(),
                 duration_secs: None,
                 subject: format!("work:{}", x.mbid),
                 title: x.title.clone(),
@@ -759,6 +773,8 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                 kind: "album",
                 album: None,
                 album_id: None,
+                album_type: None,
+                album_secondary: Vec::new(),
                 duration_secs: None,
                 subject: format!("album:cratarr/{}", a.id),
                 title: a.name.clone(),
@@ -801,6 +817,8 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                     kind: "artist",
                     album: None,
                     album_id: None,
+                    album_type: None,
+                    album_secondary: Vec::new(),
                     duration_secs: None,
                     subject: format!("artist:cratarr/{}", a.name),
                     title: a.name.clone(),
@@ -818,6 +836,9 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                 })
                 .collect(),
         );
+        // GOTO.S1, S6: each track its record's type, as the Library list serves it, one read for the answer.
+        let track_albums: Vec<String> = found.tracks.iter().map(|t| t.album_id.clone()).collect();
+        let types = crate::serve::instance().map(|s| s.record_types(&track_albums)).unwrap_or_default();
         let n = found.tracks.len();
         groups.insert(
             "track",
@@ -831,6 +852,8 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                     kind: "track",
                     album: (!t.album.is_empty()).then(|| t.album.clone()),
                     album_id: Some(t.album_id.clone()),
+                    album_type: types.get(&t.album_id).and_then(|k| k.0.clone()),
+                    album_secondary: types.get(&t.album_id).map(|k| k.1.clone()).unwrap_or_default(),
                     duration_secs: Some(t.duration),
                     subject: format!("album:cratarr/{}", t.album_id),
                     title: t.title.clone(),
@@ -861,6 +884,8 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                     kind: "genre",
                     album: None,
                     album_id: None,
+                    album_type: None,
+                    album_secondary: Vec::new(),
                     duration_secs: None,
                     subject: format!("crate:{}{g}", crate::crates::GENRE),
                     title: g.clone(),
@@ -906,6 +931,8 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                                 kind,
                                 album: None,
                                 album_id: None,
+                                album_type: None,
+                                album_secondary: Vec::new(),
                                 duration_secs: None,
                                 subject: format!("crate:{kind}:{word}"),
                                 title: word.clone(),
@@ -953,6 +980,8 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                 kind: "playlist",
                 album: None,
                 album_id: None,
+                album_type: None,
+                album_secondary: Vec::new(),
                 duration_secs: None,
                 subject: format!("playlist:{}", p.id),
                 sub: match p.count {
@@ -992,7 +1021,7 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
             } else {
                 continue;
             };
-            found.push(Item { editions: None, number: None, kind: "crate", album: None, album_id: None, duration_secs: None, subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
+            found.push(Item { editions: None, number: None, kind: "crate", album: None, album_id: None, album_type: None, album_secondary: Vec::new(), duration_secs: None, subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);

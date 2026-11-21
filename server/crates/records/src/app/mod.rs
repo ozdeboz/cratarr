@@ -12,6 +12,7 @@ pub mod beyond;
 pub mod labels;
 pub mod around_records;
 pub mod references;
+pub mod references_door;
 pub mod discogs_facts;
 pub mod related;
 pub mod originals;

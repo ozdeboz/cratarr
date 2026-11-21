@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
 use anyhow::Result;
 
-use crate::app::playing::{RecordPage, page_at};
+use crate::app::playing::{RecordPage, open_at};
 use crate::app::references::tests::{list, reader, wanted};
 use crate::app::references::{Read, ReadMore, Said, SwitchedOff, TestState, page_read_of, page_read_settled, source_name, tracklist};
 use crate::app::switches::{BACKGROUND, BANDCAMP, DISCOGS, MUSICBRAINZ, set_for_tests};
@@ -27,7 +27,7 @@ where
     R: Fn(Ref) -> F + Send + Sync + 'static,
     F: std::future::Future<Output = Result<Option<Read>>> + Send + 'static,
 {
-    match page_at(cat, record, now, read).await.unwrap() {
+    match open_at(cat, record, now, read).await.unwrap() {
         Some(RecordPage::NotHad(v)) => *v,
         _ => panic!("al-{record} is no page of a record not had"),
     }
@@ -377,12 +377,12 @@ async fn with_musicbrainz_off_a_pages_read_counts_bandcamp_and_keeps_it() {
     let shown = vec!["Lamplight".to_string(), "Morning".to_string()];
     let v = opened(&cat, record, t + 1, read()).await;
     assert_eq!((titles(&v), v.more.looking), (shown.clone(), false), "Bandcamp's rows");
-    assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("bandcamp"), "Bandcamp counts");
+    assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "VR10, changed by design: Bandcamp's list kept, nothing counted");
     set_for_tests(MUSICBRAINZ, true);
     let v = opened(&cat, record, t + 2, read()).await;
     assert_eq!((titles(&v), v.more.looking), (shown, false), "nothing new read");
     assert_eq!(*asked.lock().unwrap(), ["bandcamp:album"]);
-    assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("bandcamp"), "its count stays");
+    assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "VR10, changed by design: still nothing counted");
 }
 
 /// F1.11, RT01: a kept list let go of after thirty days unopened is read again at the next open, and shown.
@@ -687,11 +687,11 @@ async fn the_busy_source_counts_once_it_answers() {
         assert_eq!(asked.lock().unwrap()[2..], ["musicbrainz:release"], "{case}: MusicBrainz once more, Discogs not again");
         let after = opened(&cat, record, t + 1000, read.clone()).await;
         if then == GATED {
-            assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"), "(b): its list counts");
+            assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "(b) VR1, changed by design: its list kept, nothing counted");
             assert_eq!((titles(&after), marked(&after)), (vec!["Lamplight".to_string(), "Morning".to_string()], vec!["musicbrainz"]), "(b): MusicBrainz's rows");
             assert!(kept_sources(&cat, record).iter().any(|s| s == "discogs"), "(b): Discogs' list still kept");
         } else {
-            assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("discogs"), "(c): the next list counts");
+            assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "(c) VR1, changed by design: the lists kept, nothing counted");
             opened(&cat, record, t + 2000, read.clone()).await;
             page_read_settled(&cat, record).await;
             assert_eq!(asked.lock().unwrap().iter().filter(|a| a.starts_with("musicbrainz")).count(), 2, "(c): no further MusicBrainz reads");
@@ -761,7 +761,7 @@ async fn a_busy_source_passed_over_meets_merges_switches_and_arrivals() {
     set_for_tests(MUSICBRAINZ, true);
     assert!(opened(&cat, c, t + 60, read()).await.more.looking, "(b) read at once");
     page_read_settled(&cat, c).await;
-    assert_eq!(cat.record(c).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"), "(b) counted");
+    assert_eq!(cat.record(c).unwrap().unwrap().counting, None, "(b) VR1, changed by design: read, not counted");
     // (c)
     let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
     let d = wanted(&cat, "Two Rooms", &[("musicbrainz", "release", "r15")]);
@@ -773,7 +773,7 @@ async fn a_busy_source_passed_over_meets_merges_switches_and_arrivals() {
     gate.add_permits(8);
     page_read_settled(&cat, d).await;
     assert_eq!(cat.record(d).unwrap().unwrap().counting, None, "(c) a had record counted nothing by a page's read");
-    assert!(!matches!(page_at(&cat, d, t + 1, read.clone()).await.unwrap(), Some(RecordPage::NotHad(_))), "(c) had: no page of a record not had");
+    assert!(!matches!(open_at(&cat, d, t + 1, read.clone()).await.unwrap(), Some(RecordPage::NotHad(_))), "(c) had: no page of a record not had");
     assert_eq!(asked.lock().unwrap().len(), 1, "(c) no page read after");
 }
 
@@ -796,5 +796,109 @@ async fn soulseek_waits_for_a_busy_source_though_the_page_shows_the_next() {
     mode.store(ANSWERS, SeqCst);
     let judged = tracklist(&cat, record, read).await.unwrap().unwrap();
     assert_eq!(judged.timed.map(|(s, _)| s).as_deref(), Some("musicbrainz"));
-    assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"));
+    assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "VR10, changed by design: nothing counted");
+}
+
+/// RV12 (the owner's "built once"; ENT.14's record half, its test name unchanged): the record's read runs at its open, as a job on
+/// the runner, never on its GET. "Answered", a row not had by MusicBrainz group `mb:rg-ans` and Discogs master `9364`; its release
+/// credits Kite Theory (`mb:kite`, held by nobody) and Glass Harbour (`mb:gh`, held by `ar-363`); `al-364` holds the master by
+/// another path. (c) GETs before the open ask nothing, make, credit and merge nothing, and say the read is under way; (a) the open
+/// begins the read as a job (`record:read`); (b) the job does what F18.2's read did: Kite Theory made and credited, Glass Harbour
+/// credited, the records merged by the shared master; a GET after makes nothing more. Red first: the GET began the read
+/// (`page_at` → `read_soon_with`), which made, credited and merged.
+#[tokio::test]
+async fn the_record_read_runs_at_its_open_not_its_get() {
+    let _state = crate::app::references::TestState::set().await;
+    let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+    let glass = cat.artist_for("Glass Harbour").unwrap();
+    assert!(cat.set_reference(&ids::artist(glass), &Ref::new("musicbrainz", "artist", "mb:gh"), "link").unwrap());
+    let answered = wanted(&cat, "Answered", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000365")]);
+    let other = wanted(&cat, "Answered", &[("discogs", "master", "9364")]);
+    let asked = Arc::new(AtomicUsize::new(0));
+    // The read waits at a gate, so the job is seen running before it answers.
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let read = {
+        let (asked, gate) = (asked.clone(), gate.clone());
+        move |_: Ref| {
+            let (asked, gate) = (asked.clone(), gate.clone());
+            async move {
+                let _open = gate.acquire().await.unwrap();
+                asked.fetch_add(1, SeqCst);
+                let artists = vec![(Ref::new("musicbrainz", "artist", "mb:kite"), "Kite Theory".into()), (Ref::new("musicbrainz", "artist", "mb:gh"), "Glass Harbour".into())];
+                Ok::<_, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None, ReadMore { also: vec![Ref::new("discogs", "master", "9364")], artists, ..ReadMore::default() })))
+            }
+        }
+    };
+    let t = crate::app::moment::now_secs();
+    let gets = |cat: &Arc<Catalogue>, before: bool| {
+        let cat = cat.clone();
+        async move {
+            for _ in 0..2 {
+                let Some(RecordPage::NotHad(v)) = crate::app::playing::page_at(&cat, answered, t).await.unwrap() else { panic!("a page") };
+                assert!(!before || v.more.looking, "before the job, the page says its read is under way, as the loader does");
+            }
+        }
+    };
+    gets(&cat, true).await;
+    assert_eq!(asked.load(SeqCst), 0, "(c) a GET asks nothing");
+    assert!(cat.artist_of("Kite Theory").unwrap().is_none() && cat.record_artists(answered).unwrap().is_empty(), "(c) no artist made or credited by a GET");
+    assert_eq!(cat.record(other).unwrap().unwrap().id, other, "(c) no record merged by a GET");
+    // (a) the open begins the read as a job on the runner, keyed by the record; (b) it reads, credits and merges as F18.2's did.
+    opened(&cat, answered, t, read).await;
+    let running = crate::runner::runner().begin_keyed(crate::app::references::READ_KIND, &ids::record(answered), None);
+    assert!(matches!(running, Err(Ok(_))), "(a) the record's read runs as a job");
+    gate.add_permits(16);
+    page_read_settled(&cat, answered).await;
+    assert!(asked.load(SeqCst) >= 1, "(b) read");
+    let kite = cat.artist_of("Kite Theory").unwrap().expect("(b) made by mb:kite");
+    let into = cat.record(answered).unwrap().unwrap().id;
+    let credited = cat.record_artists(into).unwrap();
+    assert!(credited.contains(&kite) && credited.contains(&glass), "(b) Kite Theory and Glass Harbour credited: {credited:?}");
+    assert_eq!(cat.record(other).unwrap().unwrap().id, cat.record(answered).unwrap().unwrap().id, "(b) merged by the shared master");
+    let before = asked.load(SeqCst);
+    gets(&cat, false).await;
+    assert_eq!(asked.load(SeqCst), before, "a GET after asks nothing either");
+}
+
+/// RV12 (d) (DC3 RLB.3 (d)): a record made in 0.17 and never read is due its read on the server's schedule, one a tick, never in
+/// bulk: the due job credits and merges as the open's read does; a second record waits for the next tick; one read now is not due
+/// again until its lists are stale. The schedule is the runner's (`Runner::every`, kind `record:read`). Red first: no schedule
+/// (a record never opened was never read).
+#[tokio::test]
+async fn a_record_never_read_is_read_on_the_schedule() {
+    let _state = crate::app::references::TestState::set().await;
+    let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+    let glass = cat.artist_for("Glass Harbour").unwrap();
+    assert!(cat.set_reference(&ids::artist(glass), &Ref::new("musicbrainz", "artist", "mb:gh"), "link").unwrap());
+    // A Bandcamp page alone: never due (no job reads Bandcamp, decision 0109); read at its next open.
+    let bandcamp_only = wanted(&cat, "Further", &[("bandcamp", "album", "https://grouch.bandcamp.com/album/further")]);
+    let first = wanted(&cat, "Answered", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000375"), ("bandcamp", "album", "https://kitetheory.bandcamp.com/album/answered")]);
+    let second = wanted(&cat, "Two Rooms", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000376")]);
+    let asked = Arc::new(AtomicUsize::new(0));
+    let bandcamp = Arc::new(AtomicUsize::new(0));
+    let read = {
+        let (asked, bandcamp) = (asked.clone(), bandcamp.clone());
+        move |r: Ref| {
+            if r.source == "bandcamp" {
+                bandcamp.fetch_add(1, SeqCst);
+            }
+            asked.fetch_add(1, SeqCst);
+            let artists = vec![(Ref::new("musicbrainz", "artist", "mb:gh"), "Glass Harbour".into())];
+            std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000))]), None, ReadMore { also: Vec::new(), artists, ..ReadMore::default() }))))
+        }
+    };
+    let t = crate::app::moment::now_secs();
+    let tick = crate::app::references::due_read_tick(&cat, t, read.clone()).await.unwrap();
+    assert_eq!(tick, Some(first), "the oldest due, alone");
+    assert_eq!(asked.load(SeqCst), 1, "one record a tick, never in bulk");
+    assert_eq!(cat.record_artists(first).unwrap(), [glass], "credited as the open's read credits");
+    assert!(cat.record_artists(second).unwrap().is_empty(), "the second waits");
+    assert_eq!(crate::app::references::due_read_tick(&cat, t, read.clone()).await.unwrap(), Some(second), "the next tick, the next");
+    assert_eq!(crate::app::references::due_read_tick(&cat, t + 60, read).await.unwrap(), None, "nothing due until its lists are stale");
+    assert_eq!(bandcamp.load(SeqCst), 0, "the due read asks Bandcamp nothing");
+    assert!(cat.reference_tracks(bandcamp_only).unwrap().is_empty(), "a Bandcamp page alone is never due");
+    assert!(crate::app::references::start_due_reads().is_ok() || crate::runner::runner().schedules().iter().any(|s| s.kind == "record:read"));
+    let scheduled = crate::runner::runner().schedules();
+    assert!(scheduled.iter().any(|s| s.kind == "record:read" && s.period_secs == crate::app::references::DUE_EVERY.as_secs()), "{scheduled:?}");
+    assert!(crate::app::references::start_due_reads().is_err(), "started once");
 }

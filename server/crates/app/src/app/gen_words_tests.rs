@@ -47,9 +47,19 @@ async fn bandcamps_tags_are_kept_from_every_read_of_the_records_own_page() {
     let subject = format!("album:{quay}");
     let want: Vec<(String, String, String, f64)> = ["Paris", "downtempo", "electronic"].iter().map(|w| (subject.clone(), w.to_string(), "tag".to_string(), 1.0)).collect();
     let forget = || c.serve.userdata.set_words(&subject, "bandcamp", &[], true, 1).unwrap();
-    // (1) The references' build.
+    // (1) The References GET keeps nothing (LK.A2, changed by design: GEN.60's keeping under GETs moved into `record:read`); the
+    // record's open does, its job reading its own page by its link.
     crate::app::references::of(&app, &quay).await.unwrap();
-    assert_eq!(bandcamp_rows(&c), want, "the references' build");
+    assert_eq!(bandcamp_rows(&c), [], "LK.A2: the References GET keeps nothing");
+    let record = crate::serve::ids::record_number(&quay).unwrap();
+    crate::app::references::begin_read(c.serve.clone(), record).await;
+    for _ in 0..500 {
+        if !bandcamp_rows(&c).is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(bandcamp_rows(&c), want, "the record's open: its job");
     forget();
     // (1) The list reading, through the reader the record's page and Soulseek read with.
     let read = crate::app::references::read_reference_kept(Some(c.serve.clone()));
@@ -82,6 +92,56 @@ async fn bandcamps_tags_are_kept_from_every_read_of_the_records_own_page() {
     std::fs::remove_dir_all(&d).ok();
 }
 
+/// LK.A2 (GEN.60's words under GETs moved into `record:read`; rows 1 and 25 of INVENTORY-GET-LOOKUPS): a record's own Bandcamp
+/// page's tags are kept by the record's job alone. `al-n`, not had, holds its page by a link: the record page's GET and the
+/// References GET keep nothing; its open answers with the read's task and its job reads the page by its link and keeps its tags
+/// as the record's Bandcamp words. A page no record holds keeps nothing (GEN.60's test). Rows 2 and 3 (the panel's and the
+/// details' GETs) and P2 (describe) wait for DC3, with LK.D1 and LK.P2. Red first: the record page's GET kept them (`page_at`
+/// with `read_reference_kept`), and so did the References' build.
+#[tokio::test(flavor = "multi_thread")]
+async fn bandcamp_words_are_kept_by_the_records_job_only() {
+    // The rows DC3 makes green (LK.D1, LK.P2): their GETs keep GEN.60's words until then.
+    const WAITING: [&str; 3] = ["GET /api/albums/bandcamp/{album} (row 2)", "a track's details' GET (row 3)", "describe (P2)"];
+    let state = crate::app::references::TestState::set().await;
+    let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+    serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+    let cat = serve.catalogue().clone();
+    let record = cat.record_for_tests("Quay Lights", 0);
+    let album = crate::serve::ids::record(record);
+    cat.set_reference(&album, &Ref::new("bandcamp", "album", QUAY), "link").unwrap();
+    crate::bandcamp::Bandcamp::get().keep(page(QUAY, &["electronic", "downtempo"]));
+    let d = crate::retag::fixtures::dir("lk-a2");
+    std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+    let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
+    let saved = crate::settings::Saved { music_folder: Some(d.to_string_lossy().into_owned()), ..Default::default() };
+    let app = App::new(cfg, saved, crate::settings::Origin::Env, Some(serve.clone())).await.unwrap();
+    let subject = format!("album:{album}");
+    let words = || -> Vec<String> {
+        serve.userdata.all_words().unwrap().into_iter().filter(|r| r.1 == "bandcamp" && r.0 == subject).map(|r| r.2).collect()
+    };
+    // (a) Its GETs: the record page's (row 1) and its References (row 25).
+    app.playing.record_view(&album).await.unwrap();
+    crate::app::references::of(&app, &album).await.unwrap();
+    assert!(words().is_empty(), "(a) no GET keeps a word: {:?}", words());
+    // (b) Its open: the task answered at once, the job reading its own page by its link.
+    let task = crate::app::references::begin_read(serve.clone(), record).await;
+    assert_eq!(task, serde_json::json!({ "kind": "record:read", "key": album }));
+    for _ in 0..3000 {
+        if !words().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let mut kept = words();
+    kept.sort();
+    let lists: Vec<String> = cat.lists_kept(record).unwrap().iter().map(|l| format!("{}:{}", l.reference.source, l.tracks.len())).collect();
+    let page = crate::app::references::page_read_now(&cat, record, crate::app::moment::now_secs());
+    assert_eq!(kept, ["downtempo", "electronic"], "(b) kept by the record's job; lists {lists:?}, the page's read {page:?}");
+    assert_eq!(WAITING.len(), 3, "rows 2, 3 and P2 wait for DC3");
+    drop(state);
+    std::fs::remove_dir_all(&d).ok();
+}
+
 /// GEN.60 (4) and its Never, on the code: the harvest asks Bandcamp nothing; the paths that read a record's own page keep its tags
 /// through the one keeper; no candidate's read does. (The panel's and a preview's routes in-process wait for TS item 5's harness.)
 #[test]
@@ -93,14 +153,14 @@ fn only_a_records_own_bandcamp_page_keeps_its_tags() {
         ("records/src/app/references.rs", 2),
         ("api/src/api.rs", 2),
         ("base/src/app/describe.rs", 1),
-        ("playing/src/app/playing.rs", 1),
-        ("requests/src/app/soulseek.rs", 1),
     ] {
         let text = read(file);
         let n = text.matches("words::keep_bandcamp(").count() + text.matches("words::keep_bandcamp_read(").count() + text.matches("references::read_reference_kept(").count();
         assert!(n >= keeps, "{file}: {n} of {keeps} reads keep the record's own page's tags");
     }
-    for file in ["requests/src/app/requests.rs", "records/src/app/discover.rs", "playing/src/app/radio.rs", "playing/src/app/playon.rs", "records/src/app/related.rs"] {
+    // LK.A2 (changed by design): the record page's GET keeps nothing; its open's job does (`references::begin_read`).
+    assert!(!read("playing/src/app/playing.rs").contains("read_reference_kept("), "the record page's GET keeps nothing");
+    for file in ["requests/src/app/requests.rs", "requests/src/app/soulseek.rs", "records/src/app/discover.rs", "playing/src/app/radio.rs", "playing/src/app/playon.rs", "records/src/app/related.rs"] {
         assert!(!read(file).contains("keep_bandcamp"), "{file}: a candidate's or another page's read keeps nothing");
     }
 }

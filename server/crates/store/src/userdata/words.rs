@@ -90,6 +90,23 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// What 0.18's step part `facts` reads (VR42): every album's Discogs answer, "none" too ((subject, at, facts)); every album's
+    /// match (`album_matches`: (album, at, found)); and each request's record whose group it was asked with by its id (`album_key`
+    /// that group, N2).
+    pub fn carry_018(&self) -> Result<(Vec<(String, i64, Option<String>)>, Vec<(String, i64, Option<String>)>, Vec<(i64, String)>)> {
+        let db = self.db();
+        let discogs = db
+            .prepare("SELECT subject, at, facts FROM discogs_facts WHERE subject >= 'album:' AND subject < 'album;'")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let matches = db.prepare("SELECT album, at, found FROM album_matches")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let asked = db
+            .prepare("SELECT record, release_group FROM request WHERE record IS NOT NULL AND release_group IS NOT NULL AND album_key = release_group")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok((discogs, matches, asked))
+    }
+
     /// How many albums Discogs said something of, cheaply: one more may bring the crates a label. Not when: a round
     /// asks old albums again all along, which changes nothing, and reading every file for that is what the stamp is for.
     pub fn discogs_albums_stamp(&self) -> Result<i64> {

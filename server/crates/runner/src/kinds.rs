@@ -24,7 +24,7 @@ const fn k(kind: &'static str, named: &'static str, resumes: bool, peak_mb: u64,
 }
 
 /// Every kind (the peaks: the plan's rough figures, until the rehearsal measures production's).
-pub const KINDS: [Kind; 16] = [
+pub const KINDS: [Kind; 17] = [
     k("import:lastfm", "Reading scrobbles", false, 120, false),
     k("import:listenbrainz", "Reading listens", false, 120, false),
     k("import:file", "Reading the file", false, 120, false),
@@ -40,6 +40,8 @@ pub const KINDS: [Kind; 16] = [
     k("soulseek:place", "Placing", true, 40, false),
     k("discogs:type", "Typing records", true, 40, false),
     k("references:lists", "Reading MusicBrainz lists", true, 40, false),
+    // RV12: a record's read at its open (its sources' lists and what they say besides).
+    k("record:read", "Reading the record", false, 40, false),
     k("decode", "Decoding", false, 500, true),
 ];
 

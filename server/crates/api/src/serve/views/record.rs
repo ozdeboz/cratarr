@@ -254,7 +254,7 @@ mod tests {
         assert!(seen > 20, "{seen} actions");
         let roots = entity(&every_action(), &Seen { viewer: &root, place: &place, off: &[], rev: 1 });
         let delete = roots.actions.iter().find(|a| a.name == "delete_from").expect("root's Delete");
-        assert!(delete.confirm.as_deref().is_some_and(|c| c.starts_with("Delete from")), "{delete:?}");
+        assert!(delete.confirm.as_ref().is_some_and(|c| c[0].starts_with("Delete from")), "{delete:?}");
         assert!(roots.actions.iter().find(|a| a.name == "play").is_some_and(|a| a.confirm.is_none()));
     }
 

@@ -24,13 +24,14 @@ pub struct StateWords {
 
 /// Every state's words (RS2): "In your library", "Not in your library", "Partly there · 7 of 10", "Arrived", "In bob's music",
 /// "Was in MORE until …". Never "In the library", "Here", "Partly here", "Missing albums" or "Records arrived" (A.6).
-pub const STATES: [StateWords; 6] = [
+pub const STATES: [StateWords; 7] = [
     StateWords { is: Is::NotHad, words: "Not in your library" },
     StateWords { is: Is::Partly, words: "Partly there · {has} of {of}" },
     StateWords { is: Is::Arrived, words: "Arrived" },
     StateWords { is: Is::Had, words: "In your library" },
     StateWords { is: Is::Elsewhere, words: "In {owner}'s music" },
     StateWords { is: Is::Retired, words: "Was in {library} until" },
+    StateWords { is: Is::Unknown, words: "Not known whole" },
 ];
 
 fn words_of(is: Is) -> &'static str {
@@ -62,26 +63,76 @@ pub fn shown(holding: &Holding, says: &Says) -> Shown {
             said(Is::Elsewhere, words_of(Is::Elsewhere).replace("{owner}", says.owner.unwrap_or("someone else")), None)
         }
         Holding::Retired { since, from } => said(Is::Retired, words_of(Is::Retired).replace("{library}", &(says.library)(from)), Some(since)),
+        // VR12 rule 6 (C16): only guesses' lists kept; no count until an administrator picks or confirms one.
+        Holding::Unknown => said(Is::Unknown, words_of(Is::Unknown).to_string(), None),
     }
 }
 
 /// An entry of the record's sheet as the table writes it (RS23): its name (what an action or a link is called in the answer),
-/// its title with its blank, its icon, its group (the menu's card, decision 0058).
+/// its title with its blank, its icon, its group (the menu's card, decision 0058), and whether it works with Cratarr away (RS8,
+/// RS17: `away`, the server's mark the device's cached entity carries).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Entry {
     pub name: &'static str,
     pub title: &'static str,
     pub icon: &'static str,
     pub group: Group,
+    pub away: bool,
+}
+
+/// The record's entries that work with Cratarr away (RS17; decision 0085, the page's `WORKS_AWAY` for a record, menuTable.ts): the
+/// large actions that play what the device holds (never Start radio), a navigation (the last copy kept), a heart, a rating and a
+/// playlist's membership (kept on the device and sent later), Remove from this device (the device's own), and the web searches
+/// (the internet, not Cratarr). Every other entry needs Cratarr; one not named here does too.
+pub const WORKS_AWAY: [&str; 13] = [
+    "play",
+    "shuffle",
+    "play_next",
+    "add_to_queue",
+    "view",
+    "go_artist",
+    "go_genre",
+    "favourite",
+    "rating",
+    "add_to_playlist",
+    "remove_from_device",
+    "web_search",
+    "genius_search",
+];
+
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn works_away(name: &str) -> bool {
+    let mut i = 0;
+    while i < WORKS_AWAY.len() {
+        if same(WORKS_AWAY[i], name) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 const fn e(name: &'static str, title: &'static str, icon: &'static str, group: Group) -> Entry {
-    Entry { name, title, icon, group }
+    Entry { name, title, icon, group, away: works_away(name) }
 }
 
 /// The record's entries, by group in the menu's order (the page's `MENUS.album` and `MENUS.bandcamp` rows, their words and icons
 /// as AlbumMenu draws them: the same groups, order and words).
-pub const ENTRIES: [Entry; 33] = [
+pub const ENTRIES: [Entry; 34] = [
     e("play", "Play", "play", Group::Play),
     e("resume", "Resume", "resume", Group::Play),
     e("shuffle", "Shuffle", "shuffle", Group::Play),
@@ -112,6 +163,7 @@ pub const ENTRIES: [Entry; 33] = [
     e("move_to", "Move to {library}", "intoBox", Group::Library),
     e("add_to", "Add to {library}", "plus", Group::Library),
     e("replace_in", "Replace in {library}", "swap", Group::Library),
+    e("use_this", "Use this", "check", Group::Library),
     e("delete", "Delete {type}", "trash", Group::Remove),
     e("delete_from", "Delete from {library}", "trash", Group::Remove),
     e("delete_arrival", "Delete", "trash", Group::Remove),
@@ -192,6 +244,8 @@ mod tests {
         assert_eq!(line(Holding::Arrived, false).words, "Arrived");
         assert_eq!(line(Holding::Elsewhere, false).words, "In bob's music");
         assert_eq!(line(Holding::Retired { since: T, from: 4 }, false), Shown { is: Is::Retired, words: "Was in MORE until".into(), at: Some(T) });
+        // VR12 rule 6: only guesses kept: not known whole, no count, picked or not.
+        assert_eq!(line(Holding::Unknown, true), Shown { is: Is::Unknown, words: "Not known whole".into(), at: None });
         // Never the words A.6 retired, nor a state written twice.
         for s in STATES {
             for never in ["In the library", "Here", "Partly here", "Missing albums", "Records arrived", "Was in Music"] {

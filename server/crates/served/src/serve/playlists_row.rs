@@ -3,6 +3,13 @@
 
 use serde::Serialize;
 
+/// An artist a track credits (NAMES.23): their id for life and one name.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct TrackArtist {
+    pub id: String,
+    pub name: String,
+}
+
 /// One line of a playlist as its view shows it (decision 0023). `entry` is the line as the `.m3u` has it (library-
 /// relative), `file` its file name; the rest is what the catalogue knows, `None` where it does not.
 #[derive(Debug, Default, Serialize, PartialEq)]
@@ -48,6 +55,13 @@ pub struct PlaylistRow {
     /// Its album's id where it is known: an artist's rows, and a playlist's or a crate's on Cratarr's own source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album_id: Option<String>,
+    /// Its picture (OBJ5): its record's, by the one resolver (`ids::record_picture`), where its record is Cratarr's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
+    /// Its artists, each by their id for life and one name (NAMES.23: each its own link in the one track row), where the library
+    /// credits them by id; `artist` is their credit by the one formatter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<TrackArtist>,
     /// How many tracks that album has (the Records view's "3 of 10"), where its id is known on Cratarr's own source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album_tracks: Option<u32>,
