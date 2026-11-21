@@ -1920,6 +1920,45 @@ mod tests {
         assert!(before == after, "nothing written into the files");
     }
 
+    /// CU15.1: the gate asks through the door. A stand-in door expecting the recordings of one print, answering 0.97 for recording
+    /// `rec-r1`; a staged FLAC of a release track `rec-r1` of its length. Soulseek's gate (`gate_track`) and the single fetch's (`gate`)
+    /// each ask the door once, with the file's print, and pass at 0.97; a track with no recording (Discogs' or Bandcamp's list) asks
+    /// nothing (OQ9 (a)); the file deleted before the gate runs is refused as the file's, the door never asked. Never AcoustID asked
+    /// but through the door; never a decode while there is no room (`memwatch::room`).
+    #[tokio::test]
+    async fn the_gate_asks_through_the_door() {
+        use crate::app::references_door::{Asked, StandIn};
+        use crate::app::turn::{Failure, class};
+        let _one = crate::app::switches::TEST_STATE.read().await; // the gate reads background reading's switch, which TN's tests move
+        let d = crate::retag::fixtures::dir("gate-door");
+        let tide = crate::fixtures::gate::TIDE_TABLES;
+        let file = d.join("02 Neap.flac");
+        std::fs::copy(crate::fixtures::gate::gate_cases_once().join(crate::fixtures::gate::CLEAN).join(tide.folder()).join(tide.file(2)), &file).unwrap();
+        let print = crate::acoustid::print(&file).unwrap();
+        let track = track_for(1, 2, "Neap", "Glass Harbour", Some(4_000), "rec-r1");
+        let door = StandIn::new().recordings(vec![crate::acoustid::Found { score: 0.97, recordings: vec![crate::acoustid::Recording { id: "rec-r1".into() }] }]).install();
+        let soulseeks = gate_track(&file, &track).await;
+        let single = gate(&file, &track).await;
+        assert_eq!((soulseeks.unwrap(), single.unwrap()), (0.97, 0.97), "both pass at the door's 0.97");
+        let asked = Asked::Recordings { fingerprint: print.fingerprint.clone(), duration_secs: print.duration_secs };
+        assert_eq!(door.asked(), [asked.clone(), asked.clone()], "once a file, with its print");
+        assert_eq!(gate(&file, &track_for(1, 2, "Neap", "Glass Harbour", Some(4_000), "")).await.unwrap(), 1.0, "no recording: judged by sound and length");
+        assert_eq!(door.asked().len(), 2, "no recording, nothing asked");
+        // No room: nothing decoded, nothing asked, while there is none.
+        crate::memwatch::FULL.set(true);
+        let waited = tokio::time::timeout(std::time::Duration::from_millis(300), gate(&file, &track)).await;
+        crate::memwatch::FULL.set(false);
+        assert!(waited.is_err(), "it waits for room");
+        assert_eq!(door.asked().len(), 2, "no decode while there is no room");
+        // The variant: the staged file deleted before the gate runs.
+        std::fs::remove_file(&file).unwrap();
+        let gone = gate(&file, &track).await.unwrap_err();
+        assert_eq!(class(&gone), Failure::File, "refused as the file's: {gone:#}");
+        assert_eq!(door.asked().len(), 2, "the door never asked");
+        assert!(door.violations().is_empty(), "{:?}", door.violations());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// SK5.5 (OQ-SK5): single-track fetch's gate, which the bulk queue fetches through too (`fetch` → `gate`), keeps refusing a
     /// file for its notes: both add into an album in Music with no review, the bulk queue by itself. Soulseek's rule passes it.
     #[tokio::test]
