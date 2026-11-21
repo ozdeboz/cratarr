@@ -1,7 +1,7 @@
-use cratarr_api::{analysis, api, app, catalogue, config, diagnostics, fixtures, idempotent, mcp, memwatch, run, runner, serve, settings, snapcast, source};
+use cratarr_api::{analysis, api, app, catalogue, config, diagnostics, fixtures, idempotent, journal, mcp, memwatch, run, runner, serve, settings, snapcast, source};
 // What the route sweep's tests (whole_router.rs) name besides.
 #[cfg(test)]
-use cratarr_api::{bandcamp, journal, playlists, search};
+use cratarr_api::{bandcamp, playlists, search};
 
 use std::io::{Read, Write};
 use std::time::Duration;

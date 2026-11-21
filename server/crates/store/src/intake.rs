@@ -137,23 +137,30 @@ impl Journal {
         Ok(out)
     }
 
+    /// `f`'s reads, in one transaction that writes nothing (and that a test's cut never meets: it is no write).
+    fn read<T>(&self, f: impl FnOnce(&Tx) -> Result<T>) -> Result<T> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        f(&Tx(&tx))
+    }
+
     /// A queue's items, in its order, each with its steps; and its next id.
     pub fn intake(&self, kind: &str) -> Result<(u64, Vec<(ItemRow, Vec<StepRow>)>)> {
-        self.write(|tx| tx.intake(kind))
+        self.read(|tx| tx.intake(kind))
     }
 
     /// One item and its steps.
     pub fn intake_item(&self, id: &str) -> Result<Option<(ItemRow, Vec<StepRow>)>> {
-        self.write(|tx| tx.intake_item(id))
+        self.read(|tx| tx.intake_item(id))
     }
 
     /// A source's kept hold.
     pub fn pause(&self, source: &str) -> Result<Option<Pause>> {
-        self.write(|tx| tx.pause(source))
+        self.read(|tx| tx.pause(source))
     }
 
     pub fn pauses(&self) -> Result<Vec<Pause>> {
-        self.write(|tx| tx.pauses())
+        self.read(|tx| tx.pauses())
     }
 
     /// A hold kept where it ends later than the one kept (a hold only grows): whether it was.
@@ -182,7 +189,7 @@ impl Journal {
     }
 
     pub fn jobs(&self) -> Result<Vec<JobRow>> {
-        self.write(|tx| tx.jobs())
+        self.read(|tx| tx.jobs())
     }
 
     /// The jobs that ended before `before` (epoch s) forgotten; those running never. How many.
@@ -192,12 +199,12 @@ impl Journal {
 
     /// A mark (a queue's next id, a step part's report).
     pub fn mark(&self, name: &str) -> Result<Option<String>> {
-        self.write(|tx| tx.mark(name))
+        self.read(|tx| tx.mark(name))
     }
 
     /// A check's count from its rows (DQ1): its files checked, of its files.
     pub fn check_count(&self, item: &str) -> Result<(u32, u32)> {
-        self.write(|tx| tx.check_count(item))
+        self.read(|tx| tx.check_count(item))
     }
 
     /// Tests: every row its connection has changed so far (DS4: a percent writes nothing).
