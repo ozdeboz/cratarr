@@ -43,21 +43,31 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
     let Some(read) = serve.catalogue().record_read(id, &library_of)? else { return Ok(None) };
     let row = &read.row;
     let shortest = read.copies.shortest;
+    // When each copy came, as the library first saw it (the Library list's `added`, which a request's say over an arrival goes by,
+    // R32): the built library's, by its catalogue folder; else the earliest file time.
+    let mut came: HashMap<i64, i64> = HashMap::new();
+    for c in serve.library.copies_of(&crate::serve::ids::record(row.id)).unwrap_or_default() {
+        if let Some(added) = c.added {
+            let first = came.entry(c.folder).or_insert(added);
+            *first = (*first).min(added);
+        }
+    }
     let copies: Vec<CopyOf> = read
         .copies
         .copies
         .iter()
         .map(|facts| {
             let q = read.quality.get(&facts.folder).cloned().unwrap_or_default();
+            let added = came.get(&facts.folder).copied().or(q.added);
             let arrival = matches!(facts.library, Library::Incoming { .. }).then(|| ArrivalFacts {
                 state: Arrival::Waiting,
-                asked_by: around.asked.get(&row.id).filter(|r| r.of_copy(q.added)).map(|r| vec![r.user.clone()]).unwrap_or_default(),
+                asked_by: around.asked.get(&row.id).filter(|r| r.of_copy(added)).map(|r| vec![r.user.clone()]).unwrap_or_default(),
                 by: None,
             });
             CopyOf {
                 facts: facts.clone(),
                 quality: (facts.present > 0).then(|| quality(q.format.as_deref(), q.min_kbps)),
-                added: q.added.unwrap_or(0),
+                added: added.unwrap_or(0),
                 job: around.jobs.get(&facts.folder).copied(),
                 arrival,
             }

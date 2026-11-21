@@ -268,6 +268,8 @@ pub mod said {
     pub const CONVERTING: &str = "Its copy is being converted.";
     pub const NOT_CONVERTING: &str = "Its copy isn't being converted.";
     pub const NOT_A_TARGET: &str = "It can't go there.";
+    /// F34: an Incoming library is filled by its fetcher alone (today's words, move_refused's).
+    pub const INTO_INCOMING: &str = "It can't be copied into Incoming";
     pub const NOTHING_TO_REPLACE: &str = "No copy there to replace.";
     pub const UPLOAD_REPLACES_NOTHING: &str = "An upload replaces nothing.";
     pub const NOT_WAITING: &str = "It isn't waiting to be added.";
@@ -335,7 +337,13 @@ fn unconverted(c: &RecordCopy) -> Result<(), &'static str> {
 
 /// A copy may go into a main library or someone's own music, never into Incoming (F34) nor where it is.
 fn target(c: &RecordCopy, to: &Target) -> Result<(), &'static str> {
-    if to.folder == c.folder || matches!(to.library, Library::Incoming { .. }) { Err(said::NOT_A_TARGET) } else { Ok(()) }
+    if matches!(to.library, Library::Incoming { .. }) {
+        Err(said::INTO_INCOMING)
+    } else if to.folder == c.folder {
+        Err(said::NOT_A_TARGET)
+    } else {
+        Ok(())
+    }
 }
 
 /// A main library's copy to replace: present there, and not being converted.
@@ -403,7 +411,9 @@ fn state(v: &Viewer, a: &Action, r: &Record) -> Result<(), &'static str> {
             let c = copy_at(r, *copy)?;
             unconverted(c)?;
             // Between main libraries only (§5): into own music is a Save, into Incoming never (F34).
-            if matches!(c.library, Library::Main) && matches!(to.library, Library::Main) && to.folder != c.folder {
+            if matches!(to.library, Library::Incoming { .. }) {
+                Err(said::INTO_INCOMING)
+            } else if matches!(c.library, Library::Main) && matches!(to.library, Library::Main) && to.folder != c.folder {
                 Ok(())
             } else {
                 Err(said::NOT_A_TARGET)

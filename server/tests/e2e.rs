@@ -2677,7 +2677,8 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
 
     let (dir, deleting) = ("Salt Meridian/Both Shores (2018)", format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()));
     let kept = as_it_lies(&music.join(dir));
-    assert_eq!(bob.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 409, "not his");
+    // A right missing is a 403 (CN1, CN9: the handler decides first, in the table's words; never a 409 for a right, CN2).
+    assert_eq!(bob.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 403, "not his");
     assert!(as_it_lies(&music.join(dir)) == kept, "the kept files are there");
     bob.ok(reqwest::Method::POST, &deleting, json!({ "from": path(&incoming) })).await;
     assert!(!incoming.join(dir).exists(), "his own request");
