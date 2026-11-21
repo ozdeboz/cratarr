@@ -186,6 +186,8 @@ struct Shape<'a> {
     longest_ms: u64,
     name: &'a str,
     various: bool,
+    /// Each track's title, in order, where the caller has them (VERSIONS: one song in versions); none for another server's album.
+    titles: &'a [&'a str],
 }
 
 /// The whole release of an album found missing tracks (`app::incomplete`, user data `album_complete`): how many tracks
@@ -246,6 +248,9 @@ fn release_type_of(
     }
     let (kind, why) = if let Some(kind) = named(album.name) {
         (kind, "name")
+    } else if album.titles.len() == album.tracks && one_song_in_versions(album.titles) {
+        // VERSIONS: one song in versions, every track's title read (an incomplete record's missing tracks give none, T-VER-1).
+        (if album.duration_ms <= 30 * MINUTE_MS { "single" } else { "ep" }, "versions")
     } else {
         let (kind, why) = if album.tracks >= 7 {
             ("album", "tracks")
@@ -275,6 +280,8 @@ pub fn type_by_rule(album: &mut crate::source::Album) {
         longest_ms: 0,
         name: &album.title,
         various: album.artist.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("Various Artists")),
+        // Another server's album: its titles aren't given, so no type is guessed from them (VER.5).
+        titles: &[],
     };
     let (kind, _, why, secondary) = release_type_of(None, None, &shape);
     album.release.kind = kind;
@@ -287,19 +294,25 @@ pub fn type_by_rule(album: &mut crate::source::Album) {
 /// length where its files' was read (T10). None where the rule cannot say whether it is a single: its answer hangs on a length not
 /// read yet (a short record whose files the walker has not read), or it has no tracks. Else its type as a build reads it, a length
 /// not read as none.
-pub fn type_by_files(name: &str, lengths: &[Option<u64>]) -> Option<String> {
+pub fn type_by_files(name: &str, titles: &[&str], lengths: &[Option<u64>]) -> Option<String> {
     if lengths.is_empty() {
         return None;
     }
     // The rule with each length not read the shortest it could be, and the longest: placed where the two agree it is a single or not.
     let typed = |unread: u64| {
         let ms = || lengths.iter().map(|l| l.unwrap_or(unread));
-        let shape = Shape { tracks: lengths.len(), duration_ms: ms().fold(0, u64::saturating_add), longest_ms: ms().max().unwrap_or(0), name, various: false };
+        let shape = Shape { tracks: lengths.len(), duration_ms: ms().fold(0, u64::saturating_add), longest_ms: ms().max().unwrap_or(0), name, various: false, titles };
         release_type_of(None, None, &shape).0
     };
     let (shortest, longest) = (typed(0), typed(u64::MAX));
     let single = |t: &Option<String>| t.as_deref() == Some("single");
     if single(&shortest) == single(&longest) { shortest } else { None }
+}
+
+/// Whether a record's tracks are one song in versions (VERSIONS, the owner 2026-11-20): at least two tracks; each title's bracketed
+/// parts (round or square) set aside where each holds a version word; the rest one base title, case-folded. Red: not yet.
+pub(crate) fn one_song_in_versions(_titles: &[&str]) -> bool {
+    false
 }
 
 /// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case). The words an artist's own lists leave out of
@@ -318,7 +331,7 @@ mod release_type_tests {
 
     fn shape(name: &str, tracks: usize, minutes: f64, longest: f64) -> Shape<'_> {
         let ms = |m: f64| (m * MINUTE_MS as f64) as u64;
-        Shape { tracks, duration_ms: ms(minutes), longest_ms: ms(longest), name, various: false }
+        Shape { tracks, duration_ms: ms(minutes), longest_ms: ms(longest), name, various: false, titles: &[] }
     }
 
     fn said(kind: &str) -> Kept {
@@ -341,6 +354,116 @@ mod release_type_tests {
         assert_eq!(type_label("compilation"), "Compilation");
     }
 
+    /// A record of these titles, each track as long (minutes in all), as the build's shape has it.
+    fn titled<'a>(name: &'a str, titles: &'a [&'a str], minutes: f64) -> Shape<'a> {
+        let ms = |m: f64| (m * MINUTE_MS as f64) as u64;
+        Shape { tracks: titles.len(), duration_ms: ms(minutes), longest_ms: ms(minutes / titles.len().max(1) as f64), name, various: false, titles }
+    }
+
+    /// N titles, one song in versions.
+    fn versions_of(n: usize) -> Vec<String> {
+        (0..n).map(|i| if i == 0 { "Pier".to_string() } else { format!("Pier (Mix {i})") }).collect()
+    }
+
+    const DEEP: [&str; 4] = ["Deep Harbour (Original Mix)", "Deep Harbour (Misty Bay Mix)", "Deep Harbour (Anz Safe Place Mix)", "Deep Harbour (Anz Defensive Mix)"];
+
+    /// VER.1: one song in versions by its titles alone (the owner, 2026-11-20; T-VER-2, T-VER-5).
+    #[test]
+    fn one_song_in_versions_by_its_titles() {
+        let rows: [(&[&str], bool, &str); 11] = [
+            (&DEEP, true, "(a)"),
+            (&["Deep Harbour", "deep harbour (Radio Edit)", "DEEP HARBOUR (Dub)"], true, "(b) case-folded; no bracket is the base"),
+            (&["Pier (Anz Remix) [Extended]", "Pier (VIP)", "Pier (Instrumental)"], true, "(c) two brackets"),
+            (&["Pier (Live)", "Pier (Rework)", "Pier (Version 2)"], true, "(d)"),
+            (&["Pier (feat. Anz)", "Pier"], false, "(e) feat. is no version part"),
+            (&["Intro", "Pier", "Low Water", "Intro (Reprise)"], false, "(f) Reprise is no version word"),
+            (&["Symphony No. 5 (I. Allegro)", "Symphony No. 5 (II. Andante)", "Symphony No. 5 (III. Scherzo)"], false, "(g) movements"),
+            (&["Pier - Anz Remix", "Pier - Radio Edit"], false, "(h) brackets only (T-VER-2)"),
+            (&["Deep Harbour (Anz Remix)"], false, "(i) one track"),
+            (&["Pier (Remix)", "Low Water (Remix)"], false, "(j) two base titles"),
+            (&["Deep Harbour (Original)", "Deep Harbour (Misty Bay Mix)"], true, "(k) original is a version word (T-VER-5)"),
+        ];
+        for (titles, want, row) in rows {
+            assert_eq!(one_song_in_versions(titles), want, "{row}");
+        }
+        // Never: a version word inside another word.
+        assert!(!one_song_in_versions(&["Pier (Remixed Memories)", "Pier"]), "Remixed is no remix");
+        assert!(!one_song_in_versions(&["Pier (Dubai)", "Pier"]), "Dubai is no dub");
+    }
+
+    /// VER.2: one song in versions is a single up to 30 minutes (30:00 included, T-VER-3), an EP over, before the track count and
+    /// the length; its `why` "versions" (T-VER-4). (e) and (g), a service's said type beside it, wait on the owner's word.
+    #[test]
+    fn one_song_in_versions_is_a_single_up_to_30_minutes() {
+        assert_eq!(typed(None, titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)), ("single".into(), Some("versions")), "(a) Deep Harbour, 16:44");
+        let (seven, five, four) = (versions_of(7), versions_of(5), versions_of(4));
+        let seven: Vec<&str> = seven.iter().map(String::as_str).collect();
+        let five: Vec<&str> = five.iter().map(String::as_str).collect();
+        let four: Vec<&str> = four.iter().map(String::as_str).collect();
+        assert_eq!(typed(None, titled("Pier", &seven, 28.0)), ("single".into(), Some("versions")), "(b) 7 versions, 28:00");
+        assert_eq!(typed(None, titled("Pier", &five, 40.0)), ("ep".into(), Some("versions")), "(c) 5 versions, 40:00");
+        assert_eq!(typed(None, titled("Pier", &seven, 40.0)), ("ep".into(), Some("versions")), "(d) 7 versions, 40:00");
+        assert_eq!(typed(None, titled("Pier", &four, 30.0)), ("single".into(), Some("versions")), "(f) 30:00 included");
+        assert_eq!(typed(None, titled("Pier", &four, 30.0 + 1.0 / 60.0)), ("ep".into(), Some("versions")), "(f) 30:01");
+        // (e), (g): no service's type goes in for a record you have (the owner, 2026-11-21 17:28, "Files only").
+        let (six, twin) = (versions_of(6), ["A", "B", "C", "D", "E", "F"]);
+        let six: Vec<&str> = six.iter().map(String::as_str).collect();
+        assert_eq!(typed(Some(&said("single")), titled("Kime Ne", &six, 56.0)), ("ep".into(), Some("versions")), "(e) Kime Ne: EP by versions, over 30 min");
+        assert_eq!(typed(Some(&said("single")), titled("Kime Ne", &twin, 56.0)), ("album".into(), Some("length")), "(e) its twin: album by length");
+        assert_eq!(typed(Some(&said("ep")), titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)), ("single".into(), Some("versions")), "(g) MB's EP is its version, not the answer");
+    }
+
+    /// VER.3 (a guard): the title first; an incomplete record not read as one song from the titles of only some of its tracks
+    /// (T-VER-1); a Broadcast said stays; a type set by hand wins at the build, after the rule.
+    #[test]
+    fn the_versions_rule_comes_after_the_title_and_incomplete() {
+        assert_eq!(typed(None, titled("Deep Harbour EP", &DEEP, 16.0 + 44.0 / 60.0)), ("ep".into(), Some("name")), "(a) the title wins");
+        let whole = Whole { tracks: 4, duration_ms: Some(1_004_000), longest_ms: Some(260_000) };
+        assert_eq!(typed(None, titled("Deep Harbour", &DEEP[..2], 8.0).whole(Some(&whole))), ("ep".into(), Some("tracks")), "(b) incomplete: the whole release");
+        // (c) The hand's type replaces the rule's at the build, after `release_type_of`.
+        let src = include_str!("library.rs").replace("\r\n", "\n");
+        let at = src.find("release_type_of(release.and_then(").unwrap();
+        assert!(src[at..at + 400].contains("if let Some(k) = set.and_then(|o| o.kind.clone())"), "the hand after the rule");
+    }
+
+    /// VER.3 (d), revised 17:29 (the owner, "Files only"): a service's type never decides a record you have: a said Broadcast or
+    /// Other is that service's version, the rule types the files; a Broadcast set by hand stays (the build's `set`, after the rule).
+    #[test]
+    fn a_service_type_never_decides_a_record_you_have() {
+        assert_eq!(typed(Some(&said("broadcast")), titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)), ("single".into(), Some("versions")), "(d) a said Broadcast");
+        assert_eq!(typed(Some(&said("broadcast")), shape("Essential Mix", 1, 120.0, 120.0)), ("album".into(), Some("length")), "a said Broadcast, by its files");
+        assert_eq!(typed(Some(&said("other")), shape("Odd", 12, 60.0, 6.0)), ("album".into(), Some("tracks")), "a said Other, by its files");
+        let src = include_str!("library.rs").replace("\r\n", "\n");
+        let at = src.find("release_type_of(&shape)").expect("the build types by the files alone");
+        assert!(src[at..at + 400].contains("if let Some(k) = set.and_then(|o| o.kind.clone())"), "a Broadcast set by hand stays");
+    }
+
+    /// VER.4 (guards and pins): what is not one song keeps its type; no `why` "versions".
+    #[test]
+    fn what_is_not_one_song_keeps_its_type() {
+        assert_eq!(typed(None, titled("Four", &["A", "B", "C", "D"], 18.0)), ("ep".into(), Some("tracks")), "(a)");
+        let symphony = ["Symphony No. 5 (I. Allegro)", "Symphony No. 5 (II. Andante)", "Symphony No. 5 (III. Scherzo)"];
+        assert_eq!(typed(None, titled("Symphony No. 5", &symphony, 38.0)), ("ep".into(), Some("length")), "(b)");
+        let nine = ["Intro", "B", "C", "D", "E", "F", "G", "H", "Intro (Reprise)"];
+        assert_eq!(typed(None, titled("Nine", &nine, 46.0)), ("album".into(), Some("tracks")), "(c)");
+        assert_eq!(typed(None, titled("Deep Harbour", &["Deep Harbour (Extended Mix)"], 9.0)), ("single".into(), Some("tracks")), "(d)");
+        assert_eq!(typed(None, titled("Intro", &["Intro", "Intro (Reprise)"], 5.0)), ("single".into(), Some("tracks")), "(e)");
+    }
+
+    /// VER.5 (kind 6), the pure half: the had rule before a build (`type_by_files`) is given the tracks' titles beside their
+    /// lengths, so it and the build type Deep Harbour alike; another server's album, whose titles aren't given, by count and length.
+    #[test]
+    fn the_had_rule_and_the_build_type_versions_alike() {
+        let lengths = [Some(251_000), Some(251_000), Some(251_000), Some(251_000)];
+        assert_eq!(type_by_files("Deep Harbour", &DEEP, &lengths).as_deref(), Some("single"), "the had rule, before a build");
+        assert_eq!(typed(None, titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)).0, "single", "the build");
+        // The build gives the rule its songs' titles; another server's album none.
+        let src = include_str!("library.rs").replace("\r\n", "\n");
+        assert!(src.contains("let titles: Vec<&str> = songs.iter().map(|s| s.title.as_str()).collect();"), "the build's titles");
+        let at = src.find("pub fn type_by_rule(").unwrap();
+        assert!(src[at..at + 900].contains("titles: &[],"), "another server's album: no titles given");
+    }
+
     /// The owner's verdicts on the Library's Singles and EPs (2026-10-31).
     #[test]
     fn the_owner_s_rule_types_by_tracks_and_length_on_top_of_what_is_said() {
@@ -350,18 +473,22 @@ mod release_type_tests {
         assert_eq!(typed(Some(&single), shape("Take California", 4, 18.0, 6.0)), ("ep".into(), Some("tracks")));
         assert_eq!(typed(Some(&single), shape("Let's Get Down EP", 2, 9.0, 5.0)), ("ep".into(), Some("name")));
         assert_eq!(typed(Some(&single), shape("Melbourne Bolero", 2, 14.0, 10.0)), ("ep".into(), Some("length")), "a track of 10 minutes");
-        // One song in versions stays an EP, however long.
-        assert_eq!(typed(Some(&single), shape("Kime Ne", 6, 56.6, 12.0)), ("ep".into(), Some("one song")));
-        assert_eq!(typed(Some(&single), shape("Kime Ne", 8, 56.6, 12.0)), ("ep".into(), Some("one song")));
-        // Short ones stay singles, as said.
-        assert_eq!(typed(Some(&single), shape("Nautiluss", 2, 11.0, 6.0)), ("single".into(), None));
+        // One song in versions stays an EP, however long: by its titles now (VERSIONS; the coordinator, 2026-11-21, keeping the
+        // owner's verdict with files only), no longer by the Single MusicBrainz says.
+        let (kime6, kime8) = (versions_of(6), versions_of(8));
+        let kime6: Vec<&str> = kime6.iter().map(String::as_str).collect();
+        let kime8: Vec<&str> = kime8.iter().map(String::as_str).collect();
+        assert_eq!(typed(Some(&single), titled("Kime Ne", &kime6, 56.6)), ("ep".into(), Some("versions")));
+        assert_eq!(typed(Some(&single), titled("Kime Ne", &kime8, 56.6)), ("ep".into(), Some("versions")));
+        // Short ones stay singles, now by the rule's own why.
+        assert_eq!(typed(Some(&single), shape("Nautiluss", 2, 11.0, 6.0)), ("single".into(), Some("tracks")));
         // EPs that are albums: seven tracks or more, however short, or over 45 minutes.
         assert_eq!(typed(Some(&ep), shape("Plantation", 10, 63.0, 8.0)), ("album".into(), Some("tracks")));
         assert_eq!(typed(Some(&ep), shape("Just Piano", 8, 20.0, 3.0)), ("album".into(), Some("tracks")));
         assert_eq!(typed(Some(&ep), shape("Flowery Rave Tales", 6, 47.1, 9.0)), ("album".into(), Some("length")));
         // The owner's longest EPs stay EPs.
-        assert_eq!(typed(Some(&ep), shape("Afro Damba", 6, 43.6, 9.0)), ("ep".into(), None));
-        assert_eq!(typed(Some(&ep), shape("Awake Into Life", 4, 42.4, 12.0)), ("ep".into(), None));
+        assert_eq!(typed(Some(&ep), shape("Afro Damba", 6, 43.6, 9.0)), ("ep".into(), Some("tracks")));
+        assert_eq!(typed(Some(&ep), shape("Awake Into Life", 4, 42.4, 12.0)), ("ep".into(), Some("tracks")));
         // An EP of a few short tracks is a single.
         assert_eq!(typed(Some(&ep), shape("Islets In Pink Polypropylene", 2, 8.0, 4.5)), ("single".into(), Some("tracks")));
         // The name wins over the length both ways.
@@ -374,10 +501,10 @@ mod release_type_tests {
     fn an_album_found_missing_tracks_is_typed_as_its_whole_release() {
         let whole = |tracks, minutes: f64, longest: f64| Whole { tracks, duration_ms: Some((minutes * MINUTE_MS as f64) as u64), longest_ms: Some((longest * MINUTE_MS as f64) as u64) };
         // Two of an eleven-track album: an album, not a single.
-        assert_eq!(typed(Some(&said("album")), shape("Västertorp", 2, 9.0, 5.0).whole(Some(&whole(11, 50.0, 6.0)))), ("album".into(), None));
+        assert_eq!(typed(Some(&said("album")), shape("Västertorp", 2, 9.0, 5.0).whole(Some(&whole(11, 50.0, 6.0)))), ("album".into(), Some("tracks")));
         assert_eq!(typed(None, shape("Escape Reality", 2, 9.0, 5.0).whole(Some(&whole(5, 24.0, 6.0)))), ("ep".into(), Some("tracks")));
         // The name still wins.
-        assert_eq!(typed(Some(&said("ep")), shape("Outsider Music EP", 1, 7.0, 7.0).whole(Some(&whole(9, 40.0, 7.0)))), ("ep".into(), None));
+        assert_eq!(typed(Some(&said("ep")), shape("Outsider Music EP", 1, 7.0, 7.0).whole(Some(&whole(9, 40.0, 7.0)))), ("ep".into(), Some("name")));
         // Lengths not known: its tracks count, the library's length at least.
         let counted = Whole { tracks: 8, duration_ms: None, longest_ms: None };
         assert_eq!(typed(None, shape("Odd", 3, 12.0, 4.0).whole(Some(&counted))), ("album".into(), Some("tracks")));
@@ -418,21 +545,20 @@ mod release_type_tests {
     }
 
     #[test]
-    fn broadcast_and_other_stay_as_said() {
-        assert_eq!(typed(Some(&said("broadcast")), shape("Essential Mix", 1, 120.0, 120.0)), ("broadcast".into(), None));
-        assert_eq!(typed(Some(&said("other")), shape("Odd", 12, 60.0, 6.0)), ("other".into(), None));
-    }
-
-    #[test]
     fn where_nothing_is_said_the_same_rule_and_other_stays() {
         assert_eq!(release_type_of(None, None, &shape("Odd", 5, 22.0, 6.0)), (Some("ep".into()), None, Some("tracks"), Vec::new()));
         assert_eq!(release_type_of(None, None, &shape("Odd", 2, 7.0, 4.0)), (Some("single".into()), None, Some("tracks"), Vec::new()));
+        // Changed by design (the owner, 2026-11-21 17:28, "Files only"): a service's type decides nothing of a record you have, and
+        // names no `from`; its secondaries are a union with the rule's "compilation", none ranked (the coordinator's reading).
         let dc = said("ep");
-        assert_eq!(release_type_of(None, Some(&dc), &shape("Odd", 4, 20.0, 6.0)), (Some("ep".into()), Some("discogs"), None, Vec::new()));
+        assert_eq!(release_type_of(None, Some(&dc), &shape("Odd", 4, 20.0, 6.0)), (Some("ep".into()), None, Some("tracks"), Vec::new()));
         let mb = (Some("album".to_string()), vec!["live".to_string()]);
-        assert_eq!(release_type_of(Some(&mb), Some(&dc), &shape("Odd", 12, 50.0, 6.0)), (Some("album".into()), Some("musicbrainz"), None, vec!["live".into()]));
+        assert_eq!(release_type_of(Some(&mb), Some(&dc), &shape("Odd", 12, 50.0, 6.0)), (Some("album".into()), None, Some("tracks"), vec!["live".into()]));
         let broadcast = said("other");
-        assert_eq!(release_type_of(Some(&broadcast), None, &shape("Radio Show", 1, 120.0, 120.0)).0.as_deref(), Some("other"));
+        assert_eq!(release_type_of(Some(&broadcast), None, &shape("Radio Show", 1, 120.0, 120.0)).0.as_deref(), Some("album"), "by its files, over 45 minutes");
+        // MusicBrainz and Discogs giving different secondaries: both, in the order first heard.
+        let dc_soundtrack = (Some("album".to_string()), vec!["soundtrack".to_string()]);
+        assert_eq!(release_type_of(Some(&mb), Some(&dc_soundtrack), &shape("Odd", 12, 50.0, 6.0)).3, vec!["live".to_string(), "soundtrack".to_string()], "a union, none ranked");
     }
 
     #[test]
@@ -2013,12 +2139,14 @@ fn write_albums(
         let cover = super::art::album_print(&Path::new(root).join(dir), first_track.as_deref()).map(|p| format!("{album_id}_{p}"));
         let duration_ms = songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>();
         let whole = facts.incomplete.get(album_id);
+        let titles: Vec<&str> = songs.iter().map(|s| s.title.as_str()).collect();
         let shape = Shape {
             tracks: songs.len(),
             duration_ms,
             longest_ms: songs.iter().filter_map(|s| s.row.duration_ms).max().unwrap_or(0),
             name: &first.album,
             various: first.album_artist.eq_ignore_ascii_case("Various Artists"),
+            titles: &titles,
         }
         .whole(whole);
         let (mut kind, mut type_from, mut type_why, mut secondary) =
