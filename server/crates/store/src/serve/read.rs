@@ -1257,15 +1257,17 @@ impl Library {
     }
 
     /// The albums MusicBrainz said no type of: none said, or Discogs' (0.9.6: asked of Discogs; 0.10: Discogs' own asked
-    /// again where an older rule found them): (id, MusicBrainz release, artist, name, tracks, length in ms).
+    /// again where an older rule found them), and none typed by hand: (id, MusicBrainz release, artist, name, tracks, length in
+    /// ms). By the facts kept (`release_types`), since the files alone type a record you have (the owner, 2026-11-21, "Files
+    /// only") and `type_from` names no service any more: the same albums as before, so Discogs is asked no more than it was.
     pub fn albums_to_type(&self) -> Result<Vec<(String, String, String, String, usize, u64)>> {
         let db = self.db();
         let mut st = db.prepare(
             "SELECT id, coalesce(mbid, ''), artist, name, song_count, duration_ms FROM albums
-             WHERE type_from IS NULL OR type_from = 'discogs' ORDER BY n",
+             WHERE type_from IS NULL OR type_from <> 'set' ORDER BY n",
         )?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)?.max(0) as usize, r.get::<_, i64>(5)?.max(0) as u64)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(rows.collect::<rusqlite::Result<Vec<(String, String, String, String, usize, u64)>>>()?.into_iter().filter(|a| !self.musicbrainz_typed(&a.1)).collect())
     }
 
     /// Each song's album's release types as the axes show them ("EP", "Live"), primary first (0.9.6); songs of albums of

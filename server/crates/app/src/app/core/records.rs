@@ -153,7 +153,8 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         // The release type rule over the picked list's titles and lengths (VR39, M10): the one rule the build types an album by.
         picked_kind: read.pick.as_ref().and_then(|p| read.lists.iter().find(|l| &l.reference == p)).and_then(|l| {
             let lengths: Vec<Option<u64>> = l.tracks.iter().map(|t| t.length_ms.and_then(|ms| u64::try_from(ms).ok())).collect();
-            crate::serve::library::type_by_files(&row.title, &lengths)
+            let titles: Vec<&str> = l.tracks.iter().map(|t| t.title.as_str()).collect();
+            crate::serve::library::type_by_files(&row.title, &titles, &lengths)
         }),
         plays,
         // The preview's album as the page's Bandcamp album view asks it: its `bc.` id (PAGE3-REPORT), never the page's address.

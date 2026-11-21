@@ -1667,7 +1667,10 @@ fn classes_of(db: &Connection, records: &[i64], had: &std::collections::HashSet<
         .map(|(id, kind, typed, title)| {
             let class = match (had.contains(&id), typed) {
                 (true, Some(t)) => Class::built(&t),
-                (true, None) => lengths.get(&id).and_then(|l| crate::serve::library::type_by_files(&title, l)).map_or(Class::Unknown, |t| Class::built(&t)),
+                (true, None) => lengths
+                    .get(&id)
+                    .and_then(|(titles, l)| crate::serve::library::type_by_files(&title, &titles.iter().map(String::as_str).collect::<Vec<_>>(), l))
+                    .map_or(Class::Unknown, |t| Class::built(&t)),
                 (false, _) => Class::said(kind.as_deref()),
             };
             (id, class)
@@ -1738,22 +1741,26 @@ fn held_by_names(counted: &[Counted], r: i64, asker: Class) -> Option<i64> {
 
 /// The live tracks of these records where the record is live and had (each track as `live_had_of` has one hold its record), each
 /// its length as its files read it (none not read yet), by record, in one query.
-fn lengths_of(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Option<u64>>>> {
-    let mut out: std::collections::HashMap<i64, Vec<Option<u64>>> = std::collections::HashMap::new();
+fn lengths_of(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap<i64, (Vec<String>, Vec<Option<u64>>)>> {
+    let mut out: std::collections::HashMap<i64, (Vec<String>, Vec<Option<u64>>)> = std::collections::HashMap::new();
     if records.is_empty() {
         return Ok(out);
     }
     let sql = format!(
-        "SELECT t.record, (SELECT max(f.duration_ms) FROM files f WHERE f.track = t.id AND f.trashed IS NULL AND f.duration_ms > 0)
+        "SELECT t.record, (SELECT max(f.duration_ms) FROM files f WHERE f.track = t.id AND f.trashed IS NULL AND f.duration_ms > 0),
+                COALESCE((SELECT g.value FROM tags g JOIN files f ON f.folder = g.folder AND f.rel = g.rel
+                          WHERE f.track = t.id AND f.trashed IS NULL AND g.name = 'title' ORDER BY g.n LIMIT 1), '')
          FROM tracks t JOIN records r ON r.id = t.record
          WHERE t.record IN ({}) AND r.merged_into IS NULL AND r.retired_at IS NULL AND t.retired_at IS NULL
            AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))",
         id_list(records)
     );
     let mut st = db.prepare(&sql)?;
-    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)))? {
-        let (record, ms) = row?;
-        out.entry(record).or_default().push(ms.map(|m| m.max(0) as u64));
+    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, String>(2)?)))? {
+        let (record, ms, title) = row?;
+        let e = out.entry(record).or_default();
+        e.0.push(title);
+        e.1.push(ms.map(|m| m.max(0) as u64));
     }
     Ok(out)
 }
@@ -5406,6 +5413,35 @@ mod tests {
         assert_eq!(read[&bandcamp].holder, Some(owned), "B, of no kind, either class's (RF1)");
     }
 
+    /// VER.5 (kind 6, RF1, T10): an owned record no build typed yet is classed by the release type rule over its files' titles
+    /// beside their lengths, so it and the build agree. Deep Harbour, four versions of one song in 16:44, is a single, not an EP.
+    #[test]
+    fn the_had_rule_reads_one_song_in_versions_from_the_files_titles() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = untyped(&cat, "Deep Harbour", &[Some(251_000); 4]);
+        let titles = ["Deep Harbour (Original Mix)", "Deep Harbour (Misty Bay Mix)", "Deep Harbour (Anz Safe Place Mix)", "Deep Harbour (Anz Defensive Mix)"];
+        {
+            let db = cat.db();
+            let files: Vec<(i64, String)> = db
+                .prepare("SELECT f.folder, f.rel FROM files f JOIN tracks t ON t.id = f.track WHERE t.record = ?1 ORDER BY t.number")
+                .unwrap()
+                .query_map([owned], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert_eq!(files.len(), 4);
+            for ((folder, rel), title) in files.iter().zip(titles) {
+                db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, 0, 'TITLE', 'title', ?3)", params![folder, rel, title]).unwrap();
+            }
+        }
+        // The same four tracks with no titles read: an EP by the 4–6 rule, as before VERSIONS.
+        let untitled = untyped(&cat, "Deep Harbour", &[Some(251_000); 4]);
+        let db = cat.db();
+        let had = live_had_of(&db, &[owned, untitled]).unwrap();
+        let classes = classes_of(&db, &[owned, untitled], &had).unwrap();
+        assert_eq!((classes[&owned], classes[&untitled]), (Class::Single, Class::Ep), "a single by its files' titles; without them an EP");
+    }
+
     /// T10.3: the rule's edges, by the rule itself (`library::type_by_files`, on `release_type_of`), never a second classifier. An
     /// untagged owned record of five tracks and 20 minutes is an EP; of two and 16 minutes, an EP; named "... EP" with two short
     /// tracks, an EP: none a single, so beside an album and a single of its name each counts once and holds the album. Two tracks
@@ -5438,7 +5474,7 @@ mod tests {
         let library = include_str!("../serve/library.rs").replace("\r\n", "\n");
         let at = library.find("pub fn type_by_files(").unwrap();
         let rule = &library[at..at + library[at..].find("\n}\n").unwrap()];
-        assert!(rule.contains("release_type_of(None, None, &shape)"), "{rule}");
+        assert!(rule.contains("release_type_of(&shape)"), "{rule}");
     }
 
     /// T10.4, the census's 156 (production's shape): a had album, untagged and of ten tracks, shadowed by the record of its name that

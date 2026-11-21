@@ -1404,7 +1404,7 @@ mod tests {
         serve.refresh().unwrap();
         assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "the type set by hand, kept on the record");
         assert_eq!(holders(), (Some(owned), None), "set to Single: the single had, the album set apart");
-        assert_eq!(library::type_by_files("Album", &[Some(200_000); 8]).as_deref(), Some("album"), "its files say an album still: the hand wins");
+        assert_eq!(library::type_by_files("Album", &[], &[Some(200_000); 8]).as_deref(), Some("album"), "its files say an album still: the hand wins");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
