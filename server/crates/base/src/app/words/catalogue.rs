@@ -43,6 +43,7 @@ fn named(s: Source) -> &'static str {
         Source::Musicbrainz => "MusicBrainz",
         Source::Discogs => "Discogs",
         Source::Lastfm => "Last.fm",
+        Source::Bandcamp => "Bandcamp",
     }
 }
 
@@ -279,5 +280,31 @@ mod tests {
         assert_eq!(sources_of(Kind::Mood), &[Source::Hand, Source::Audiomuse]);
         assert!(sources_of(Kind::Genre).contains(&Source::Files) && !sources_of(Kind::Genre).contains(&Source::Audiomuse));
         assert!(kind_name("colour").is_err());
+    }
+
+    /// GEN.59 (OQ-GEN-25): Bandcamp among the Catalogue sheet's sources of Genre, Style and Tag, never Mood; switched off for a
+    /// kind there, its words leave that kind, and come back when it is on.
+    #[test]
+    fn bandcamp_is_a_source_switchable_per_kind() {
+        use super::super::store::{Library, RecordIn, Said, TrackIn, record};
+        for k in [Kind::Genre, Kind::Style, Kind::Tag] {
+            assert!(sources_of(k).contains(&Source::Bandcamp), "{}", k.name());
+        }
+        assert!(!sources_of(Kind::Mood).contains(&Source::Bandcamp));
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let on = |kind: &str| super::row(&serve, kind).unwrap().sources.iter().find(|s| s.id == "bandcamp").map(|s| (s.name, s.on));
+        let switch = |kind: &str, on: bool| set_kind(&serve, kind, None, Some(&HashMap::from([("bandcamp".to_string(), on)])));
+        assert_eq!(on("tag"), Some(("Bandcamp", true)));
+        switch("tag", false).unwrap();
+        assert_eq!((on("tag"), on("genre"), on("style")), (Some(("Bandcamp", false)), Some(("Bandcamp", true)), Some(("Bandcamp", true))), "off for tags alone");
+        assert!(switch("mood", true).is_err(), "Bandcamp says no mood");
+        let r = RecordIn { id: "r".into(), tracks: vec![TrackIn::default()], said: vec![Said { source: Source::Bandcamp, word: "Paris".into(), raw_kind: "tag".into(), weight: 1.0 }], ..RecordIn::default() };
+        let tags = |serve: &crate::serve::Serve| {
+            let lib = Library::of(std::slice::from_ref(&r), &HashMap::new()).with_off(off(serve));
+            record(&lib, &r).kinds.iter().filter(|k| k.kind == Kind::Tag).flat_map(|k| k.words.iter().map(|w| w.word.clone())).collect::<Vec<_>>()
+        };
+        assert!(tags(&serve).is_empty(), "off: its words leave the kind");
+        switch("tag", true).unwrap();
+        assert_eq!((on("tag"), tags(&serve)), (Some(("Bandcamp", true)), vec!["Paris".to_string()]), "on again: back");
     }
 }

@@ -185,6 +185,16 @@ pub fn fake_media_at(stream: &str) {
     FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).push(stream.to_string());
 }
 
+/// Tests: every page the client went to read on Bandcamp, in order (a test's fake pages are `keep`'s, read without a request).
+#[cfg(any(test, feature = "test-support"))]
+static PAGES_ASKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Tests: the pages the client went to read on Bandcamp so far.
+#[cfg(any(test, feature = "test-support"))]
+pub fn pages_asked_for_tests() -> Vec<String> {
+    PAGES_ASKED.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
 /// Reads Bandcamp: one client, the album pages kept a few minutes.
 pub struct Bandcamp {
     http: reqwest::Client,
@@ -225,6 +235,8 @@ impl Bandcamp {
     }
 
     async fn text(&self, url: &str) -> Result<String> {
+        #[cfg(any(test, feature = "test-support"))]
+        PAGES_ASKED.lock().unwrap_or_else(|p| p.into_inner()).push(url.to_string());
         let resp = self.send(self.http.get(url)).await?;
         let (status, headers) = (resp.status(), resp.headers().clone());
         let body = String::from_utf8_lossy(&crate::app::reach::read_capped(resp, PAGE_MOST).await?).into_owned();

@@ -2039,6 +2039,7 @@ impl Catalogue {
                     }
                 }
                 let (mut energy, mut danceability, mut moods, mut styles, mut sound, mut clap_moods, mut muse_key) = (None, None, Vec::new(), Vec::new(), None, None, None);
+                let mut heard: Vec<(String, f32)> = Vec::new();
                 if let Some((e, style, clap, embedding, k)) = file_track.and_then(|t| muse.remove(&t)) {
                     muse_key = k;
                     // Its "sounds like" (decision 0054), of unit length: what a Sounds like condition compares. Made so
@@ -2053,9 +2054,12 @@ impl Catalogue {
                     energy = e.map(|e| (e * 100.0).round());
                     danceability = d.map(|d| (d * 100.0).round());
                     styles = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect();
+                    heard = styles.iter().map(|n| (n.clone(), 0.0)).collect();
                 }
-                // The files' STYLE and MOOD words apart from AudioMuse's: the words' store weighs them (decision 0097).
-                let file_words = (!file_styles.is_empty() || !file_moods.is_empty()).then(|| Box::new((file_styles, file_moods)));
+                // The files' STYLE and MOOD words apart from AudioMuse's, and AudioMuse's with their scores: the words' store
+                // sorts and weighs them (decision 0097).
+                let read_words = (!file_styles.is_empty() || !file_moods.is_empty() || !heard.is_empty())
+                    .then(|| Box::new(crate::crates::ReadWords { style: file_styles, mood: file_moods, heard }));
                 let (credits, credit_names) = crate::app::excluded_artists::credited(&artists.iter().chain(&listed).collect::<Vec<_>>());
                 let (lines, in_folders) = file_track.and_then(|t| lent.remove(&t)).unwrap_or_else(|| (Vec::new(), vec![place.0]));
                 Some(crate::crates::Facts {
@@ -2086,7 +2090,7 @@ impl Catalogue {
                     tags: file_tags,
                     album: None,
                     labels: tag_labels.remove(&place).unwrap_or_default(),
-                    file_words,
+                    read_words,
                 })
             })
             .collect())
@@ -7917,8 +7921,8 @@ mod tests {
         // (genres, styles, moods, grouping) as each file's library reads them, before the sort.
         let fields = |track: i64| {
             let f = of(track);
-            let (styles, moods) = f.file_words.as_deref().cloned().unwrap_or_default();
-            (f.genres.clone(), styles, moods, f.tags.clone())
+            let read = f.read_words.as_deref().cloned().unwrap_or_default();
+            (f.genres.clone(), read.style, read.mood, f.tags.clone())
         };
         let (music_words, archive_words) = (fields(51), fields(52));
         assert_eq!(
@@ -7943,6 +7947,20 @@ mod tests {
         let archive_slash = Encoding { genre_separators: s(&[";", "/"]), ..Encoding::default() };
         cat.set_folder_rules(FolderRules::new(Rules::default(), BTreeMap::from([(0, Encoding::default()), (1, archive_slash)])));
         assert_eq!(cat.crate_facts().unwrap().iter().find(|f| f.track == Some(52)).unwrap().genres, ["Electronic", "Deep House"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// GEN.26: AudioMuse's top five styles of a track, each with its score, lower-cased as `weighted` reads them; the sixth not
+    /// kept, no score dropped.
+    #[test]
+    fn audiomuses_top_five_keep_their_scores() {
+        let (root, cat) = one_track_twice();
+        let line = "electronic:0.608,chillout:0.561,ambient:0.540,downtempo:0.512,House:0.497,jazz:0.301";
+        cat.db().execute("INSERT INTO audiomuse (track, style) VALUES (77, ?1)", [line]).unwrap();
+        let facts = cat.crate_facts().unwrap();
+        let heard: Vec<(String, i32)> = facts[0].read_words.as_deref().map(|r| r.heard.iter().map(|(n, s)| (n.clone(), (s * 1000.0).round() as i32)).collect()).unwrap_or_default();
+        let want = [("electronic", 608), ("chillout", 561), ("ambient", 540), ("downtempo", 512), ("house", 497)];
+        assert_eq!(heard, want.map(|(n, s)| (n.to_string(), s)));
         std::fs::remove_dir_all(&root).ok();
     }
 

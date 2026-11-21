@@ -316,6 +316,14 @@ fn words_fields_have_one_splitter_given_its_rule() {
     let of = |file: &str| code.iter().find(|(f, _)| f == file).unwrap_or_else(|| panic!("{file}")).1.clone();
     // A words field's words: the one split, by the library's encoding.
     assert!(of("store/src/catalogue/normalise.rs").contains("cratarr_rules::genres::split(value, &self.genre_separators, &self.genre_keep)"));
+    // The services' stored words (GEN.4): the one split, by each service's shipped rule, as the store reads them; a typed word
+    // (GEN.25): the one split with no separators, the owner's exceptions alone.
+    let store = of("base/src/app/words/store.rs");
+    assert!(store.contains("genres::split(&s.word, &genres::rules::separators(s.source.rule()), &[])"), "the services' words");
+    assert!(store.contains("genres::split(w, &genres::rules::separators(genres::rules::TYPED), &[])"), "a typed word");
+    for (source, rule) in [("Discogs", "DISCOGS"), ("Musicbrainz", "MUSICBRAINZ"), ("Lastfm", "LASTFM"), ("Bandcamp", "BANDCAMP"), ("Audiomuse", "AUDIOMUSE")] {
+        assert!(store.contains(&format!("Source::{source} => genres::rules::{rule},")), "{source}'s rule");
+    }
     // Each reader of a file's tags takes the folder rules and picks by the row's folder.
     for (file, takes) in [
         ("store/src/catalogue/mod.rs", "fn read_crate_facts(db: &Connection, folders: &InUse, rules: &FolderRules,"),

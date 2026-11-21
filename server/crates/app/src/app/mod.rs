@@ -35,6 +35,9 @@ pub mod import_files;
 mod every_copy;
 #[cfg(test)]
 mod file_words_tests;
+// GEN's tests on the whole app (lane C's run 2): Bandcamp's tags from a record's own page.
+#[cfg(test)]
+mod gen_words_tests;
 pub mod runtime;
 mod app_search;
 mod app_requests;
