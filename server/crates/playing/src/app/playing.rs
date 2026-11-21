@@ -445,7 +445,12 @@ pub(crate) async fn page_at(cat: &Arc<crate::catalogue::Catalogue>, record: i64,
     if let Some(RecordPage::NotHad(view)) = &mut page {
         let end = crate::serve::ids::record_number(&view.id).unwrap_or(record);
         if view.more.looking {
-            said(view, super::references::page_read_now(cat, end, now));
+            // Its read's state; else, where every source it would read is off or held back, why at once (F1.1), nothing asked.
+            let read = match super::references::page_read_now(cat, end, now) {
+                Some(read) => Some(read),
+                None => super::references::page_said_at_once(cat, end, now).await,
+            };
+            said(view, read);
         }
     }
     Ok(page)

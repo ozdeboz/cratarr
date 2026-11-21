@@ -641,6 +641,15 @@ async fn said_unasked(cat: &Arc<Catalogue>, record: i64, now: i64) -> Result<std
     Ok(Err(j.said))
 }
 
+/// What a record not had's page says at once on a GET (F1.1 with RV12): where every source it would read is switched off or Bandcamp
+/// held back, why, nothing asked; else none (its open's job reads it). Asks nothing, keeps nothing.
+pub async fn page_said_at_once(cat: &Arc<Catalogue>, record: i64, now: i64) -> Option<PageList> {
+    match said_unasked(cat, record, now).await {
+        Ok(Err(said)) => Some(PageList::Said(page_words(&said, now))),
+        _ => None,
+    }
+}
+
 /// A record not had's list asked for by its page at `now` where none is kept (C54, F1), its sources read through `read`
 /// (`read_reference` for the server's page): in the background, as `tracklist` reads and keeps (`judge`), so the page lists its rows
 /// when asked again; a page's, so read while background reading is paused (Y7). One read a record at a time, cut at
