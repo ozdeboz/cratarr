@@ -86,6 +86,18 @@ pub fn era_word(word: &str) -> bool {
     matches!(word.trim().to_lowercase().as_str(), "60s" | "70s" | "80s" | "90s" | "00s")
 }
 
+/// The kinds of signal a seed can be known by (SIM rule 3, T-SIM-2), each by its signals: tracks and artists are none.
+const KINDS: [&[Signal]; 7] = [
+    &[Signal::Genres],
+    &[Signal::Styles],
+    &[Signal::Tags],
+    &[Signal::Playlists],
+    &[Signal::Era],
+    &[Signal::Tempo],
+    // AudioMuse's, as one analysis.
+    &[Signal::Sound, Signal::Energy, Signal::Danceability, Signal::Mood],
+];
+
 /// One track as similarity sees it; its words as numbers, each kind its own.
 #[derive(Debug, Clone, Default)]
 pub struct Track {
@@ -363,17 +375,27 @@ impl Profile {
     /// How many kinds of signal it is known by (SIM rule 3, T-SIM-2), of those the weights count (a kind counts where one of its
     /// signals weighs above 0): a word kind through a telling word, the others through any of their signals.
     pub fn kinds(&self, w: &Weights) -> usize {
-        // SIM's red commit: none yet.
-        let _ = (w, self.telling);
-        0
+        KINDS.iter().filter(|kind| kind.iter().any(|&s| w.counts(s) && self.has(s))).count()
     }
 
     /// Known by too little to show anything alike (SIM rule 3, T-SIM-7): fewer than two of the kinds the weights count, or,
     /// where they count one kind alone, not that one.
     pub fn too_little(&self, w: &Weights) -> bool {
-        // SIM's red commit: never yet.
-        let _ = w;
-        false
+        let counted = KINDS.iter().filter(|kind| kind.iter().any(|&s| w.counts(s))).count();
+        self.kinds(w) < counted.min(2)
+    }
+
+    /// Whether it has a signal at all: a word kind through a telling word.
+    fn has(&self, s: Signal) -> bool {
+        match s {
+            Signal::Tracks => false,
+            Signal::Sound => self.sound.is_some(),
+            Signal::Mood => self.numbers[4..].iter().any(Option::is_some),
+            _ => match WORDS.iter().position(|w| *w == s) {
+                Some(k) => self.telling[k],
+                None => NUMBER_SIGNALS.iter().position(|x| *x == s).is_some_and(|k| self.numbers[k].is_some()),
+            },
+        }
     }
 
     /// Its middle year.
@@ -386,7 +408,8 @@ impl Profile {
         &self.counts[1]
     }
 
-    /// How alike a track (at place `i` in `lib`) is to this set.
+    /// How alike a track (at place `i` in `lib`) is to this set: on each signal this set has (SIM rule 2), 0 where the track
+    /// lacks it (rule 1).
     pub fn to_track(&self, lib: &Library, i: usize, t: &Track) -> Signals {
         let mut out = Signals::default();
         if self.n == 0 {
@@ -396,18 +419,21 @@ impl Profile {
             if self.norms[k] == 0.0 {
                 continue;
             }
-            let (mut dot, mut len) = (0.0, 0.0);
+            let (mut dot, mut len, mut told) = (0.0, 0.0, false);
             for w in unique(words) {
                 let x = lib.idf(k, w);
+                let mine = self.weights[k].get(&w).copied().unwrap_or(0.0);
                 len += x * x;
-                dot += x * self.weights[k].get(&w).copied().unwrap_or(0.0);
+                dot += x * mine;
+                told |= mine > 0.0 && lib.telling(k, w);
             }
             out.set(WORDS[k], if len == 0.0 { 0.0 } else { (dot / (len.sqrt() * self.norms[k])).clamp(0.0, 1.0) });
+            out.seen(WORDS[k], len > 0.0, told);
         }
         let theirs = t.numbers();
         self.numbers_against(lib, |k| theirs[k].filter(|x| x.is_finite()).map(|x| Spread { middle: x as f64, spread: 0.0 }), true, &mut out);
-        if let (Some(p), Some(v)) = (&self.sound, lib.sound(i)) {
-            out.set(Signal::Sound, sounds_alike(p, v));
+        if let Some(p) = &self.sound {
+            out.sound(lib.sound(i).map(|v| sounds_alike(p, v)));
         }
         out
     }
@@ -420,16 +446,23 @@ impl Profile {
         }
         let shared = sorted_shared(&self.members, &other.members);
         out.set(Signal::Tracks, shared as f64 / (self.n + other.n - shared) as f64);
+        out.seen(Signal::Tracks, shared > 0, shared > 0);
         for k in 0..WORDS.len() {
-            if self.norms[k] == 0.0 || other.norms[k] == 0.0 {
+            if self.norms[k] == 0.0 {
+                continue;
+            }
+            if other.norms[k] == 0.0 {
+                out.set(WORDS[k], 0.0);
                 continue;
             }
             let dot: f64 = self.weights[k].iter().filter_map(|(w, x)| other.weights[k].get(w).map(|y| x * y)).sum();
             out.set(WORDS[k], (dot / (self.norms[k] * other.norms[k])).clamp(0.0, 1.0));
+            let told = self.weights[k].keys().any(|w| other.weights[k].contains_key(w) && lib.telling(k, *w));
+            out.seen(WORDS[k], true, told);
         }
         self.numbers_against(lib, |k| other.numbers[k], false, &mut out);
-        if let (Some(a), Some(b)) = (&self.sound, &other.sound) {
-            out.set(Signal::Sound, sounds_alike(a, b));
+        if let Some(a) = &self.sound {
+            out.sound(other.sound.as_ref().map(|b| sounds_alike(a, b)));
         }
         out
     }
@@ -437,15 +470,23 @@ impl Profile {
     /// The number signals against another's numbers. A track (`track`) is close anywhere within this set's spread;
     /// a set is close with the same middle and the same spread.
     fn numbers_against(&self, lib: &Library, theirs: impl Fn(usize) -> Option<Spread>, track: bool, out: &mut Signals) {
-        let mut close = [None; NUMBERS];
+        let (mut close, mut had) = ([None; NUMBERS], [false; NUMBERS]);
         for k in 0..NUMBERS {
-            let (Some(a), Some(b)) = (self.numbers[k], theirs(k)) else { continue };
-            let apart = if track { ((a.middle - b.middle).abs() - a.spread).max(0.0) } else { (a.middle - b.middle).abs() + (a.spread - b.spread).abs() };
-            close[k] = Some((1.0 - apart / lib.reach[k]).clamp(0.0, 1.0));
+            // What this set lacks is left out; what the other lacks is not alike (SIM rules 2 and 1).
+            let Some(a) = self.numbers[k] else { continue };
+            close[k] = Some(match theirs(k) {
+                Some(b) => {
+                    had[k] = true;
+                    let apart = if track { ((a.middle - b.middle).abs() - a.spread).max(0.0) } else { (a.middle - b.middle).abs() + (a.spread - b.spread).abs() };
+                    (1.0 - apart / lib.reach[k]).clamp(0.0, 1.0)
+                }
+                None => 0.0,
+            });
         }
         for (k, s) in NUMBER_SIGNALS.into_iter().enumerate() {
             if let Some(x) = close[k] {
                 out.set(s, x);
+                out.seen(s, had[k], false);
             }
         }
         // Their mean, summed as a list of them would be: nothing made for it, as this runs for every track.
@@ -453,6 +494,7 @@ impl Profile {
         let known = moods.clone().count();
         if known > 0 {
             out.set(Signal::Mood, moods.sum::<f64>() / known as f64);
+            out.seen(Signal::Mood, had[4..].iter().any(|h| *h), false);
         }
     }
 }
@@ -554,24 +596,44 @@ impl<'a> Together<'a> {
                 let dot = self.words[k].iter().fold(0.0, |dot, (w, x)| dot + x * weights.get(*w as usize).copied().unwrap_or(0.0));
                 let len = lengths[k];
                 out.set(WORDS[k], if len == 0.0 { 0.0 } else { (dot / (len.sqrt() * p.norms[k])).clamp(0.0, 1.0) });
+                let told = self.words[k].iter().any(|(w, _)| weights.get(*w as usize).is_some_and(|x| *x > 0.0) && lib.telling(k, *w));
+                out.seen(WORDS[k], len > 0.0, told);
             }
             p.numbers_against(lib, |k| theirs[k], true, &mut out);
-            if let (Some(s), Some(v)) = (&p.sound, sound) {
-                out.set(Signal::Sound, if in_lane && summed.is_some() { sound_alike(self.sums[lane - 1]) } else { sounds_alike(s, v) });
+            if let Some(s) = &p.sound {
+                out.sound(sound.map(|v| if in_lane && summed.is_some() { sound_alike(self.sums[lane - 1]) } else { sounds_alike(s, v) }));
             }
             each(at, out);
         }
     }
 }
 
-/// How alike two things are on each signal, 0 to 1; none where it is not known (a track AudioMuse has not heard, a
-/// set without genres).
+/// How alike two things are on each signal, 0 to 1, on each signal the seed has (SIM: 0 where the other lacks it); none where the
+/// seed lacks it (a seed AudioMuse has not heard, a set without genres). With it, the signals the other had too, and those alike
+/// on something telling (a shared track, a shared telling word, a sound more alike than chance).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Signals([Option<f64>; SIGNALS]);
+pub struct Signals([Option<f64>; SIGNALS], u16, u16);
 
 impl Signals {
     fn set(&mut self, s: Signal, x: f64) {
         self.0[s as usize] = Some(x);
+    }
+
+    /// Whether the other had `s` too, and whether they are alike on it by something telling.
+    fn seen(&mut self, s: Signal, had: bool, told: bool) {
+        let bit = 1 << s as u16;
+        if had {
+            self.1 |= bit;
+        }
+        if told {
+            self.2 |= bit;
+        }
+    }
+
+    /// The seed's sound against the other's: none where the other was not heard (0, rule 1); telling above chance.
+    fn sound(&mut self, x: Option<f64>) {
+        self.set(Signal::Sound, x.unwrap_or(0.0));
+        self.seen(Signal::Sound, x.is_some(), x.is_some_and(|x| x > 0.0));
     }
 
     // The tests' own: nothing else uses it (no warning in the server's build).
@@ -580,11 +642,13 @@ impl Signals {
         self.0[s as usize]
     }
 
-    /// All of them, by the weights: the weighed mean of the signals known, 0 when none is.
-    /// Whether anything at all is known of how alike the two are.
+    /// Whether anything is known of how alike the two are: the other has a signal the seed has (between sets, or shares a track).
+    /// Rule 1's zeros never make it so (T-SIM-9).
     pub fn known(&self) -> bool {
-        self.0.iter().any(Option::is_some)
+        self.1 != 0
     }
+
+    /// All of them, by the weights: the weighed mean of the signals known, 0 when none is.
 
     pub fn score(&self, w: &Weights) -> f64 {
         let (mut sum, mut of) = (0.0, 0.0);
@@ -601,21 +665,21 @@ impl Signals {
     /// telling (a shared track, or a shared telling word of any kind, or a sound more alike than chance), whatever the weights
     /// count; else none. Numbers alone never make a shown match.
     pub fn shown(&self, w: &Weights) -> Option<f64> {
-        // SIM's red commit: everything, as today.
-        Some(self.score(w))
+        (self.2 != 0).then(|| self.score(w)).filter(|x| *x >= ALIKE_FLOOR)
     }
 
     /// Whether the other had a signal the seed has: compared on both sides.
     // The tests' own: nothing else uses it (no warning in the server's build).
     #[cfg(test)]
     pub fn had(&self, s: Signal) -> bool {
-        self.0[s as usize].is_some()
+        self.1 & (1 << s as u16) != 0
     }
 
     /// As alike on `s` as its value says, and that telling (the floor's own cases).
     #[cfg(test)]
     fn alike_on(mut self, s: Signal, x: f64) -> Self {
         self.set(s, x);
+        self.seen(s, true, true);
         self
     }
 }

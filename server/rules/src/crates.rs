@@ -1682,7 +1682,12 @@ impl Alike {
             tracks.push(t);
             sounds.push(f.sound.clone());
         }
-        let lib = Library::new(&tracks, sounds);
+        let mut lib = Library::new(&tracks, sounds);
+        // A decade is a number in words, never telling when shared (SIM, T-SIM-6): of the genres, styles and tags.
+        for (k, kind) in [(2, crate::similarity::Signal::Genres), (3, crate::similarity::Signal::Styles), (4, crate::similarity::Signal::Tags)] {
+            let decades: Vec<u32> = names[k].iter().enumerate().filter(|(_, w)| crate::similarity::era_word(w)).map(|(n, _)| n as u32).collect();
+            lib = lib.untold(kind, decades);
+        }
         // By every line: a playlist's entry may name any copy.
         let place: FxHashMap<String, usize> = all.iter().enumerate().flat_map(|(i, f)| f.every_line().map(move |l| (l.to_string(), i))).collect();
         let of_track = all.iter().enumerate().filter_map(|(i, f)| Some((f.track?, i))).collect();
@@ -3102,8 +3107,13 @@ mod tests {
         let others: Vec<&Facts> = files.iter().filter(|f| !f.rel.starts_with("p/")).collect();
         let picked = select(&files, &resolved(&like.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &others, &Weights::EQUAL), &w);
         assert_eq!(picked.len(), 24, "every file of Q, R and T, within its count of 30: {picked:?}");
-        let (last_q, first_r) = (picked.iter().rposition(|r| r.starts_with("q/")), picked.iter().position(|r| r.starts_with("r/")));
-        assert!(last_q < first_r, "R's after Q's: {picked:?}");
+        // Rules 1 and 2 order it: the rank its picks are taken by (`closest_fit`, as `resolved` takes them; `select` keeps the files'
+        // order), every Q above every R.
+        let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
+        let seeds: Vec<String> = (1..=8).map(|j| format!("tr-{j}")).collect();
+        let ranked: Vec<&str> = closest_weighted(&seeds, &[], LikeMode::default(), &alike, &others, &Weights::EQUAL).iter().map(|(f, _)| f.rel.as_str()).collect();
+        let (last_q, first_r) = (ranked.iter().rposition(|r| r.starts_with("q/")), ranked.iter().position(|r| r.starts_with("r/")));
+        assert!(last_q.is_some() && first_r.is_some() && last_q < first_r, "R's after Q's: {ranked:?}");
         assert_eq!(picked.iter().filter(|r| r.starts_with("t/")).count(), 8, "T's, alike on nothing telling and under any floor, still listed");
     }
 

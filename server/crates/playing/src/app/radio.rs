@@ -29,9 +29,9 @@ use super::ToggleError;
 use super::play::Rng;
 use super::playing_host::PlayingHost;
 use super::playon::QueueTrack;
-use crate::similarity::{Signal, Track, Weights, unique};
+use crate::similarity::{Profile, Signal, Track, Weights, unique};
 
-pub use cratarr_rules::radio::{Ask, Index, MAX_COUNT, Mode, RadioBy, Song, choose};
+pub use cratarr_rules::radio::{Ask, Index, MAX_COUNT, Mode, RadioBy, Song, choose, choose_alike};
 pub use super::radio_base::{AutoMode, AutoplayMode, Within};
 
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
@@ -228,7 +228,8 @@ fn mix_elsewhere(index: &Index, req: &Ask, picks: &[usize], elsewhere: &[Elsewhe
         return Vec::new();
     }
     let profile = index.profile(&base);
-    let weights = req.weights();
+    // Like for like (SIM, Q-SIM-5): on what a suggestion can be known by, its artists, genres and year, by the request's weights.
+    let weights = req.weights().only(&[Signal::Artists, Signal::Genres, Signal::Era]);
     let mut places: Vec<(usize, f64)> = picks.iter().enumerate().map(|(p, &i)| (p, index.score(&profile, i, &weights))).collect();
     // No song of the library at this place: no sound to compare (`usize::MAX`).
     let mut theirs: Vec<(usize, f64)> =
@@ -519,24 +520,33 @@ fn closest_playlists(index: &Index, seed: &[usize], own: &str, candidates: Vec<(
     closest_of(index, seed, Some(own), candidates, weights, count)
 }
 
+/// What is shown of lists like a list (SIM): nothing for a seed known by too little; of the others, only those at or above the
+/// floor and alike on something telling, read on the raw score; the closest first, then the count.
 fn closest_of(index: &Index, seed: &[usize], own: Option<&str>, candidates: Vec<(String, Vec<usize>)>, weights: &Weights, count: usize) -> Vec<(String, f64)> {
-    // SIM's red commit: today's, a playlist's own membership among its words.
-    let _ = own;
+    // A playlist's own membership is no signal of it: every one of its tracks is in it (Q-SIM-6).
+    let profile = |set: &[usize], list: Option<&str>| match list.and_then(|id| index.playlist_number(id)) {
+        Some(n) => Profile::of_playlist(&index.like, n, set, |i| &index.songs[i].like),
+        None => index.profile(set),
+    };
     if seed.is_empty() {
         return Vec::new();
     }
-    let p = index.profile(seed);
+    let p = profile(seed, own);
+    if p.too_little(weights) {
+        return Vec::new();
+    }
     let mut out: Vec<(String, f64)> = candidates
         .into_iter()
         .filter(|(_, set)| !set.is_empty())
-        .map(|(id, set)| {
-            let alike = p.to_profile(&index.like, &index.profile(&set)).score(weights);
-            (id, (alike * 1000.0).round() / 10.0)
+        .filter_map(|(id, set)| {
+            let theirs = profile(&set, own.map(|_| id.as_str()));
+            let alike = p.to_profile(&index.like, &theirs).shown(weights)?;
+            Some((id, alike))
         })
         .collect();
     out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     out.truncate(count);
-    out
+    out.into_iter().map(|(id, alike)| (id, (alike * 1000.0).round() / 10.0)).collect()
 }
 
 fn listener_weights() -> Weights {
@@ -550,8 +560,10 @@ pub async fn similar_albums(album: &str, count: usize) -> Result<Vec<(String, f6
     crate::run::spawn_blocking(move || albums_like(&index, &album, &weights, count)).await.map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))
 }
 
-/// `similar_albums`' choice, by the listener's weights.
+/// `similar_albums`' choice, by the listener's weights with `Tracks` out (records share no tracks) and `Artists` in, 0 where
+/// none is shared (the owner, 2026-11-21: a guest, a collaborator, a compilation's artist ranks an album higher).
 fn albums_like(index: &Index, album: &str, weights: &Weights, count: usize) -> Vec<(String, f64)> {
+    let weights = &weights.with(Signal::Tracks, 0.0);
     let seed: Vec<usize> = (0..index.songs.len()).filter(|&i| index.songs[i].album_id == album).collect();
     let own = seed.first().map(|&i| index.songs[i].album_n);
     // An album's own artist: those on every one of its songs (its album artist is among each song's artists). An
@@ -595,13 +607,18 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
     Ok(artists_like(&index, artist, similar_by_of_listener(), &recent, &mut super::play::rng(), count))
 }
 
-/// `similar_artists`' choice, by the listener's Similar by.
+/// `similar_artists`' choice, by the listener's Similar by: the artists of Similar's picks alike enough on something telling (SIM:
+/// radio's Similar score, Artists in), none for an artist known by too little.
 fn artists_like(index: &Index, artist: &str, similar_by: Option<Vec<Signal>>, recent: &HashMap<String, i64>, rng: &mut cratarr_rules::Rng, count: usize) -> Vec<String> {
     let Some(own) = index.artist_ids.iter().position(|x| x == artist).map(|a| a as u32) else { return Vec::new() };
-    let seed: Vec<String> = index.of_item(artist).into_iter().map(|i| index.songs[i].id.clone()).collect();
+    let places = index.of_item(artist);
+    let seed: Vec<String> = places.iter().map(|&i| index.songs[i].id.clone()).collect();
     let req = Ask { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(MAX_COUNT), albums: false, by: RadioBy::Track, skip_favourites: false, similar_by, folders: None };
+    if places.is_empty() || index.profile(&places).too_little(&req.weights()) {
+        return Vec::new();
+    }
     let mut tally: HashMap<u32, u32> = HashMap::new();
-    for i in choose(index, &req, recent, None, rng) {
+    for i in choose_alike(index, &req, recent, rng) {
         for &a in unique(&index.songs[i].like.artists).collect::<Vec<_>>().iter().filter(|&&a| a != own) {
             *tally.entry(a).or_default() += 1;
         }

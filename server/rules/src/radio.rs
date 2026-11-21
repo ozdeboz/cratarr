@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::crates::Facts;
 use crate::ids::track_of;
-use crate::similarity::{Library, Profile, Signal, Track, Weights};
+use crate::similarity::{Library, Profile, Signal, Track, Weights, era_word};
 use crate::{Lane, Rng};
 
 /// How Cratarr chooses, as a player asks: Radio's inserts, or one of Autoplay's modes. Continuous, AlbumMix and
@@ -168,8 +168,27 @@ pub struct Index {
     pub like: Arc<Library>,
 }
 
-/// The catalogue's facts into each song (`Index::with_facts`), and each song's sound, in the songs' order.
-fn take_facts(songs: &mut [Song], facts: &[Facts]) -> Vec<Option<Arc<[f32]>>> {
+/// What `take_facts` made of the facts besides the songs: each song's sound in the songs' order, the genres' names by the
+/// numbers the songs' genres now carry, and the words that tell nothing when shared (the decades).
+struct Taken {
+    sounds: Vec<Option<Arc<[f32]>>>,
+    genres: Vec<String>,
+    untold: Vec<(Signal, u32)>,
+}
+
+impl Taken {
+    /// The songs' library, its decades told so.
+    fn library(self, songs: &[Song]) -> (Library, Vec<String>) {
+        let mut lib = Library::new(songs.iter().map(|s| &s.like), self.sounds);
+        for (kind, w) in self.untold {
+            lib = lib.untold(kind, [w]);
+        }
+        (lib, self.genres)
+    }
+}
+
+/// The catalogue's facts into each song (`Index::with_facts`), and what else came of them (`Taken`).
+fn take_facts(songs: &mut [Song], facts: &[Facts]) -> Taken {
     let by_track: HashMap<i64, &Facts> = facts.iter().filter_map(|f| Some((f.track?, f))).collect();
     let mut names: [HashMap<String, u32>; 5] = Default::default();
     let mut intern = |kind: usize, name: &str| {
@@ -194,7 +213,17 @@ fn take_facts(songs: &mut [Song], facts: &[Facts]) -> Vec<Option<Arc<[f32]>>> {
         }
         sounds.push(f.and_then(|f| f.sound.clone()));
     }
-    sounds
+    // `Facts::like`'s kinds: 2 genres, 3 styles, 4 tags. A decade is a number in words, never telling (SIM, T-SIM-6).
+    let untold = [(2, Signal::Genres), (3, Signal::Styles), (4, Signal::Tags)]
+        .into_iter()
+        .flat_map(|(k, kind)| names[k].iter().filter(|(w, _)| era_word(w)).map(move |(_, &n)| (kind, n)))
+        .collect();
+    // The genres by the numbers the songs carry now, for Bandcamp's suggestions (SIM.22: not the library's reading's).
+    let mut genres = vec![String::new(); names[2].len()];
+    for (name, &n) in &names[2] {
+        genres[n as usize] = name.clone();
+    }
+    Taken { sounds, genres, untold }
 }
 
 impl Index {
@@ -205,9 +234,10 @@ impl Index {
 
     /// `new` and then `with_facts`, its library made once (0.17: a device's first pick made it twice, a fifth of the wait).
     pub fn of_facts(mut songs: Vec<Song>, facts: &[Facts]) -> Self {
-        let sounds = take_facts(&mut songs, facts);
-        let like = Arc::new(Library::new(songs.iter().map(|s| &s.like), sounds));
-        Self::made(songs, like)
+        let (like, genres) = take_facts(&mut songs, facts).library(&songs);
+        let mut index = Self::made(songs, Arc::new(like));
+        index.genre_ids = genres;
+        index
     }
 
     fn made(songs: Vec<Song>, like: Arc<Library>) -> Self {
@@ -225,8 +255,9 @@ impl Index {
     /// household's album tags among them). A song the catalogue has no facts of keeps its year, tempo and album tags and
     /// loses its genres (their numbers are the facts' now).
     pub fn with_facts(mut self, facts: &[Facts]) -> Self {
-        let sounds = take_facts(&mut self.songs, facts);
-        self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
+        let (like, genres) = take_facts(&mut self.songs, facts).library(&self.songs);
+        self.like = Arc::new(like);
+        self.genre_ids = genres;
         self
     }
 
@@ -247,7 +278,7 @@ impl Index {
 
     /// A genre's number, by its name.
     pub fn genre_number(&self, name: &str) -> Option<u32> {
-        let name = name.to_lowercase();
+        let name = name.trim().to_lowercase();
         self.genre_ids.iter().position(|x| *x == name).map(|n| n as u32)
     }
 
@@ -281,13 +312,20 @@ pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: O
 /// Similar's picks for what is shown of them (SIM: Similar artists): as Radio's inserts, only songs alike enough on something
 /// telling (`Signals::shown`), however few.
 pub fn choose_alike(index: &Index, req: &Ask, recent: &HashMap<String, i64>, rng: &mut Rng) -> Vec<usize> {
-    // SIM's red commit: Similar's picks, as today.
-    choose(index, &Ask { mode: Mode::Similar, ..req.clone() }, recent, None, rng)
+    choose_in(index, &Ask { mode: Mode::Similar, ..req.clone() }, recent, None, None, true, rng)
 }
 
 /// `choose`, picking only what `here` holds (a device with Cratarr away: what plays there; the owner, 2026-11-06: what cannot play is
 /// left out, with no notice). What is not here still seeds, and still counts as played.
 pub fn choose_among(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: Option<&[usize]>, here: Option<&HashSet<usize>>, rng: &mut Rng) -> Vec<usize> {
+    choose_in(index, req, recent, within, here, false, rng)
+}
+
+/// `choose_among`, Similar's picks `held` to what may be shown, or not.
+fn choose_in(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: Option<&[usize]>, here: Option<&HashSet<usize>>, held: bool, rng: &mut Rng) -> Vec<usize> {
+    // Radio's inserts hold the floor and something telling (SIM rule 7): by track, and the Similar that fills up Radio by artist
+    // or era. Autoplay never does: it never runs dry. The modes named by a number keep their own picks (T-SIM-16).
+    let held = held || req.mode == Mode::Radio;
     // Radio by artist or era: Autoplay's Artist or Era, seeded by the one track (decision 0036, amended).
     let as_mode = |mode| Ask { mode, by: RadioBy::Track, ..req.clone() };
     let changed = match (req.mode, req.by) {
@@ -367,21 +405,21 @@ pub fn choose_among(index: &Index, req: &Ask, recent: &HashMap<String, i64>, wit
         let from = if narrowed.is_empty() { &pool } else { &narrowed };
         // Whole but for what may not be picked: inside a crate only its tracks, and every hearted one out while favourites
         // are ignored (0036), as an excluded one always was.
-        return album_mix(index, from, &seed, &out, req.mode, &req.weights(), rng).into_iter().filter(|i| allowed.contains(i)).collect();
+        return album_mix(index, from, &seed, &out, req.mode, &req.weights(), held, rng).into_iter().filter(|i| allowed.contains(i)).collect();
     }
-    let picked = by_mode(index, req, &pool, &seed, &allowed, last, count, rng);
+    let picked = by_mode(index, req, &pool, &seed, &allowed, last, count, held, rng);
     // Era and Artist can run dry (no year, artists with nothing more here): Similar fills up the rest.
     if picked.len() < count && matches!(req.mode, Mode::Era | Mode::Artist) {
         let rest: Vec<usize> = pool.iter().copied().filter(|i| !picked.contains(i)).collect();
         let similar = Ask { mode: Mode::Similar, count: Some(count - picked.len()), ..req.clone() };
-        let more = by_mode(index, &similar, &rest, &seed, &allowed, picked.last().copied().or(last), count - picked.len(), rng);
+        let more = by_mode(index, &similar, &rest, &seed, &allowed, picked.last().copied().or(last), count - picked.len(), held, rng);
         return picked.into_iter().chain(more).collect();
     }
     picked
 }
 
 #[allow(clippy::too_many_arguments)]
-fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], allowed: &HashSet<usize>, last: Option<usize>, count: usize, rng: &mut Rng) -> Vec<usize> {
+fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], allowed: &HashSet<usize>, last: Option<usize>, count: usize, held: bool, rng: &mut Rng) -> Vec<usize> {
     let artists_of = |i: usize| index.songs[i].like.artists.clone();
     match req.mode {
         Mode::Similar | Mode::Continuous | Mode::Radio | Mode::Taste => {
@@ -391,15 +429,19 @@ fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], allowed: &H
             let radio = req.mode == Mode::Radio;
             let weights = req.weights();
             // Like the seed, favourites a little closer; Your taste by fit to the taste, where favourites weigh fully
-            // (decision 0094).
-            let close = |i: usize| {
+            // (decision 0094). Held, only what is alike enough on something telling, read before any nudge (SIM rule 7).
+            let close = |i: usize| -> Option<f64> {
                 let s = &index.songs[i];
                 match req.mode {
-                    Mode::Taste => s.taste.unwrap_or(0.0),
-                    _ => index.score(&profile, i, &weights) + if s.favourite { 0.05 } else { 0.0 },
+                    Mode::Taste => Some(s.taste.unwrap_or(0.0)),
+                    _ => {
+                        let signals = profile.to_track(&index.like, i, &s.like);
+                        let alike = if held { signals.shown(&weights)? } else { signals.score(&weights) };
+                        Some(alike + if s.favourite { 0.05 } else { 0.0 })
+                    }
                 }
             };
-            let mut scored: Vec<(usize, f64)> = pool.iter().map(|&i| (i, close(i) + rng.unit() * 0.1)).collect();
+            let mut scored: Vec<(usize, f64)> = pool.iter().filter_map(|&i| Some((i, close(i)? + rng.unit() * 0.1))).collect();
             scored.sort_by(|a, b| b.1.total_cmp(&a.1));
             scored.truncate(TOP.max(count * 3));
             // Weighed sharply by closeness: a clearly closer track is much likelier than many nearly as close ones, the
@@ -507,8 +549,10 @@ fn away(s: &Song) -> f64 {
 }
 
 /// One whole album, the closest to the seed (Random: any; Your taste: the one that fits the taste best) of those with
-/// nothing in the queue and none of the seed's own. `choose` holds its tracks to what may be picked.
-fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>, mode: Mode, weights: &Weights, rng: &mut Rng) -> Vec<usize> {
+/// nothing in the queue and none of the seed's own. `choose` holds its tracks to what may be picked. `held` (Radio's inserts):
+/// only an album with tracks alike enough on something telling, by those.
+#[allow(clippy::too_many_arguments)]
+fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>, mode: Mode, weights: &Weights, held: bool, rng: &mut Rng) -> Vec<usize> {
     let profile = index.profile(seed);
     let banned: HashSet<u32> = out.iter().map(|&i| index.songs[i].album_n).collect();
     // In the albums' order, for the draws below: a map's own order differs from run to run, and one seed gives one answer.
@@ -518,12 +562,16 @@ fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>
         if banned.contains(&s.album_n) {
             continue;
         }
-        let e = sums.entry(s.album_n).or_default();
         let close = match mode {
             Mode::Random => rng.unit(),
             Mode::Taste => s.taste.unwrap_or(0.0),
+            _ if held => match profile.to_track(&index.like, i, &s.like).shown(weights) {
+                Some(x) => x,
+                None => continue,
+            },
             _ => index.score(&profile, i, weights),
         };
+        let e = sums.entry(s.album_n).or_default();
         // Like what the listener skips: weighed down (decision 0094).
         e.0 += close * away(s);
         e.1 += 1;
@@ -1261,16 +1309,16 @@ mod tests {
         for id in ["U1", "X0", "e"] {
             assert_eq!(score(id), 0.0, "{id}");
         }
+        // (a), revised 2026-11-21 (the coordinator, twice): at least four of the five alike on something telling (s, H1–H3, K) in
+        // every draw; the fifth, near the draw's floor (SHARP and the 0.001 floor, which SIM doesn't change), may be unheard.
         let kin = ["s", "H1", "H2", "H3", "K"];
-        let mut all_kin = 0;
         for n in 0..40 {
             let picked = ids(&index, &choose(&index, &after("w", Mode::Similar, 5, &[0, 2]), &HashMap::new(), None, &mut Rng::seeded(n)));
             assert_eq!(picked.len(), 5, "{picked:?}");
-            all_kin += usize::from(picked.iter().all(|p| kin.contains(&p.as_str())));
+            assert!(picked.iter().filter(|p| kin.contains(&p.as_str())).count() >= 4, "draw {n}: four of the five alike at least: {picked:?}");
             let by_year = choose(&index, &after("e", Mode::Similar, 5, &[0, 2]), &HashMap::new(), None, &mut Rng::seeded(n));
             assert_eq!(by_year.len(), 5, "e, by its year alone");
         }
-        assert!(all_kin >= 35, "{all_kin} of 40");
     }
 
     /// SIM.15: Radio's inserts are only tracks alike enough on something telling: fewer, or none; nothing lifts a track over.
