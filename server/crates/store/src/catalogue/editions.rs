@@ -21,6 +21,8 @@ struct Facts {
     groups: BTreeSet<String>,
     tracks: usize,
     main: bool,
+    /// The records it is linked to as an edition by evidence stored at a join (WM.12's placement: `edition_links`).
+    linked: BTreeSet<i64>,
 }
 
 fn id_list(ids: &[i64]) -> String {
@@ -43,6 +45,9 @@ fn paired_most(a: &[TrackFacts], b: &[TrackFacts]) -> bool {
 fn groups_of(facts: &[Facts], mut tracks_of: impl FnMut(i64) -> Result<Vec<TrackFacts>>) -> Result<Vec<Vec<i64>>> {
     let mut lists: HashMap<i64, Vec<TrackFacts>> = HashMap::new();
     let mut edition = |a: &Facts, b: &Facts| -> Result<bool> {
+        if a.linked.contains(&b.id) || b.linked.contains(&a.id) {
+            return Ok(true);
+        }
         if !a.groups.is_empty() && !b.groups.is_empty() {
             return Ok(!a.groups.is_disjoint(&b.groups));
         }
@@ -61,7 +66,8 @@ fn groups_of(facts: &[Facts], mut tracks_of: impl FnMut(i64) -> Result<Vec<Track
     for (i, f) in facts.iter().enumerate() {
         let mut joined = None;
         for (g, members) in groups.iter().enumerate() {
-            if members.iter().any(|&m| !facts[m].groups.is_empty() && !f.groups.is_empty() && facts[m].groups.is_disjoint(&f.groups)) {
+            let linked = members.iter().any(|&m| facts[m].linked.contains(&f.id) || f.linked.contains(&facts[m].id));
+            if !linked && members.iter().any(|&m| !facts[m].groups.is_empty() && !f.groups.is_empty() && facts[m].groups.is_disjoint(&f.groups)) {
                 continue;
             }
             let mut one = false;
@@ -103,6 +109,16 @@ fn facts_in(db: &Connection, records: &[i64], mains: &[i64]) -> Result<Vec<Facts
     for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
         let (id, title) = row?;
         by_id.insert(id, Facts { id, key: title_key(&title), ..Facts::default() });
+    }
+    let mut st = db.prepare(&format!("SELECT record, of FROM edition_links WHERE record IN ({list}) OR of IN ({list})"))?;
+    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
+        let (record, of) = row?;
+        if let Some(f) = by_id.get_mut(&record) {
+            f.linked.insert(of);
+        }
+        if let Some(f) = by_id.get_mut(&of) {
+            f.linked.insert(record);
+        }
     }
     let mut st = db.prepare(&format!("SELECT record, artist FROM record_artists WHERE record IN ({list})"))?;
     for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {

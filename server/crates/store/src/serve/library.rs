@@ -672,7 +672,11 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
     let raw_named: Vec<&str> = raw_artists.iter().map(String::as_str).collect();
     let raw_credit = Some(cratarr_rules::names::credit_text(&raw_named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
     let raw_album_artist = row.first("albumartist").map(str::to_string).or(raw_credit).unwrap_or_else(|| UNKNOWN_ARTIST.into());
-    let group = ids::album(row, &raw_album_artist, folder);
+    // A copy Cratarr placed is gathered by its placing folder, never by its tags (COU.17, T-COU-16).
+    let group = match &row.placed {
+        Some(dir) => format!("placed:{folder}:{dir}"),
+        None => ids::album(row, &raw_album_artist, folder),
+    };
     let album_base = ids::album(row, &raw_album_artist, 0);
     let genres = rules.values(folder, "genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
     Song {

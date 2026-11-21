@@ -337,3 +337,391 @@ fn the_raw_tag_stays_and_the_facts_follow_the_rule() {
     let title: String = lib.db().query_row("SELECT title FROM songs", [], |r| r.get(0)).unwrap();
     assert_eq!(title, "Drome");
 }
+
+impl Folders {
+    /// These files' lengths, as a read gives them.
+    fn lengths(&self, folder: i64, files: &[(&str, i64)]) {
+        for (rel, ms) in files {
+            self.cat.db().execute("UPDATE files SET duration_ms = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, ms]).unwrap();
+        }
+    }
+
+    fn records(&self) -> i64 {
+        self.cat.db().query_row("SELECT count(*) FROM records", [], |r| r.get(0)).unwrap()
+    }
+}
+
+const MUMIA_DIR: &str = "soulseek/Polo & Pan/Mumia (2023) 2";
+
+/// Mumia `al-3211` in MUSIC (folder 0): T1-T4 tagged, its list kept (`G135`, "asked"). The record.
+fn mumia_in_music(f: &Folders) -> i64 {
+    let files: Vec<(String, Vec<(&str, String)>)> = MUMIA
+        .iter()
+        .zip(1..)
+        .map(|((title, _), n)| (format!("Polo & Pan/Mumia/0{n} {title}.mp3"), vec![("album", "Mumia".to_string()), ("albumartist", "Polo & Pan".to_string()), ("title", title.to_string()), ("tracknumber", n.to_string())]))
+        .collect();
+    for (rel, tags) in &files {
+        f.add(MUSIC, &[(rel.as_str(), tags.iter().map(|(n, v)| (*n, v.as_str())).collect())]);
+    }
+    f.lengths(MUSIC, &files.iter().zip(MUMIA).map(|((rel, _), (_, ms))| (rel.as_str(), ms)).collect::<Vec<_>>());
+    f.pass();
+    let r = f.record_of(MUSIC, &files[0].0).unwrap();
+    keep(&f.cat, r, "R3211", &list(&MUMIA));
+    r
+}
+
+/// `ss-140`'s folder in folder 1 (IN2 here), as the real case has it, or every tag stripped: `b.mp3` T1, `c.mp3` "T2 www.", `a.mp3`
+/// T3, and the fourth untitled, named by the site, each within a second of its track.
+fn electronicfresh(f: &Folders, stripped: bool) -> Vec<String> {
+    let files = [("b.mp3", Some("T1")), ("c.mp3", Some("T2 www.")), ("a.mp3", Some("T3")), ("T4 - www.electronicfresh.com.mp3", None)];
+    let rels: Vec<String> = files.iter().map(|(name, _)| format!("{MUMIA_DIR}/{name}")).collect();
+    for (rel, (_, title)) in rels.iter().zip(files) {
+        let mut tags = vec![("album", STAMP), ("artist", "Red Axes, Polo & Pan")];
+        tags.extend(title.map(|t| ("title", t)));
+        f.add(1, &[(rel.as_str(), if stripped { Vec::new() } else { tags })]);
+    }
+    f.lengths(1, &rels.iter().zip(MUMIA).map(|(rel, (_, ms))| (rel.as_str(), ms + 600)).collect::<Vec<_>>());
+    rels
+}
+
+/// WM.10 (a), live (T-WM-3): the real case. Mumia's MUSIC copy holds T1-T4; `ss-140`'s placement names `al-3211`; the pass reads the
+/// stamped folder: one record, two copies, each IN2 file the track it pairs with (the fourth by its name's title), titled "Mumia";
+/// and the same verdict with every tag stripped from the IN2 files. Red first: two records, the second titled by the site (the
+/// expectation counted only for a record with no track: `open`).
+#[test]
+fn a_second_copy_joins_its_items_record() {
+    for stripped in [false, true] {
+        let f = Folders::new(if stripped { "wm10-stripped" } else { "wm10" });
+        let r = mumia_in_music(&f);
+        f.cat.expect_record(1, MUMIA_DIR, r).unwrap();
+        let before = f.records();
+        let rels = electronicfresh(&f, stripped);
+        f.pass();
+        for (rel, n) in rels.iter().zip(1..) {
+            let music = format!("Polo & Pan/Mumia/0{n} T{n}.mp3");
+            assert_eq!(f.cat.track_of(1, rel), f.cat.track_of(MUSIC, &music), "stripped {stripped}: {rel} is T{n}");
+        }
+        assert_eq!(f.record_of(1, &rels[0]), Some(r));
+        assert_eq!(f.records(), before, "no record made of it");
+        assert_eq!(f.cat.record(r).unwrap().unwrap().title, "Mumia");
+        let c = f.cat.copies_of(&[r], &library).unwrap().remove(&r).unwrap();
+        assert_eq!(c.copies.iter().map(|c| (c.folder, c.paired)).collect::<Vec<_>>(), [(MUSIC, 4), (1, 4)], "stripped {stripped}");
+    }
+}
+
+/// WM.8 (f): the placement names `al-3211`; the IN2 files' MUSICBRAINZ_ALBUMID names `R156`, `al-156`'s reference (not had), whose
+/// list pairs with none of them. The pass puts the copy on `al-3211`. Red first: `open` refused the expectation (al-3211 holds tracks),
+/// and the files' release joined the copy to `al-156`.
+#[test]
+fn provenance_outweighs_the_files_release() {
+    let f = Folders::new("wm8f");
+    let r = mumia_in_music(&f);
+    let r156 = "00000000-0000-4000-8000-000000000156";
+    let remixes = record(&f.cat, "Mumia Remixes", "Polo & Pan");
+    f.cat.db()
+        .execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, 'musicbrainz', 'release', ?2, 1, 'asked')", params![ids::record(remixes), r156])
+        .unwrap();
+    f.cat.keep_list(remixes, &Reference::new("musicbrainz", "release", r156), &list(&[("Remix 1", 300_000), ("Remix 2", 310_000)]), 1).unwrap();
+    f.cat.place_copy(1, MUMIA_DIR, r).unwrap();
+    let rels = electronicfresh(&f, false);
+    for rel in &rels {
+        let mut tags: Vec<(String, String)> = f.cat.db().prepare("SELECT name, value FROM tags WHERE folder = 1 AND rel = ?1 ORDER BY n").unwrap().query_map([rel], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        tags.push(("musicbrainz_albumid".into(), r156.into()));
+        f.cat.tag_for_tests(1, rel, &tags.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect::<Vec<_>>());
+    }
+    f.pass();
+    assert_eq!(f.record_of(1, &rels[0]), Some(r), "the placement's record");
+    assert!(!f.cat.db().prepare("SELECT 1 FROM tracks WHERE record = ?1").unwrap().exists([remixes]).unwrap(), "never al-156");
+}
+
+/// WM.11 (OQ-WM-2 (a)): Tidewater keeps W1-W10 and MUSIC holds W1-W7; Y2's second item placed W1-W10 in IN2, ALBUM the site, files
+/// `01 W1.mp3` … : one record, its second copy, each file the track it pairs with, MUSIC's W1-W7 its own. Red first: a record made by
+/// the tags, "www.mp3site.ru".
+#[test]
+fn an_arrival_completes_a_record_partly_there() {
+    let f = Folders::new("wm11");
+    let tide: Vec<(String, i64)> = (1..=10).map(|n| (format!("W{n}"), 150_000 + n * 9_000)).collect();
+    let music: Vec<String> = (1..=7).map(|n| format!("Kite Theory/Tidewater/{n:02} W{n}.flac")).collect();
+    for (rel, n) in music.iter().zip(1..) {
+        f.add(MUSIC, &[(rel.as_str(), vec![("album", "Tidewater"), ("albumartist", "Kite Theory"), ("title", tide[n - 1].0.as_str()), ("tracknumber", n.to_string().as_str())])]);
+    }
+    f.lengths(MUSIC, &music.iter().zip(&tide).map(|(rel, (_, ms))| (rel.as_str(), *ms)).collect::<Vec<_>>());
+    f.pass();
+    let r = f.record_of(MUSIC, &music[0]).unwrap();
+    keep(&f.cat, r, "R151", &list(&tide.iter().map(|(t, ms)| (t.as_str(), *ms)).collect::<Vec<_>>()));
+    let dir = "soulseek/Kite Theory/Tidewater";
+    f.cat.place_copy(1, dir, r).unwrap();
+    let before = f.records();
+    let arrived: Vec<String> = (1..=10).map(|n| format!("{dir}/{n:02} W{n}.mp3")).collect();
+    for rel in &arrived {
+        f.add(1, &[(rel.as_str(), vec![("album", "www.mp3site.ru"), ("artist", "Kite Theory")])]);
+    }
+    f.lengths(1, &arrived.iter().zip(&tide).map(|(rel, (_, ms))| (rel.as_str(), ms + 300)).collect::<Vec<_>>());
+    f.pass();
+    assert_eq!(f.records(), before, "no record, no edition made of it");
+    for (n, rel) in arrived.iter().enumerate() {
+        assert_eq!(f.record_of(1, rel), Some(r), "{rel}");
+        if n < 7 {
+            assert_eq!(f.cat.track_of(1, rel), f.cat.track_of(MUSIC, &music[n]), "{rel}: MUSIC's track");
+        }
+    }
+    let c = f.cat.copies_of(&[r], &library).unwrap().remove(&r).unwrap();
+    assert_eq!(c.copies.iter().map(|c| (c.folder, c.paired)).collect::<Vec<_>>(), [(MUSIC, 7), (1, 10)]);
+    assert_eq!(f.cat.record(r).unwrap().unwrap().title, "Tidewater");
+}
+
+/// WM.12 (H6, VR36, OQ-WM-3 (a)): Long Pier keeps MusicBrainz's ten and Discogs' twelve, both timed; Lidarr's ten became its copy
+/// first; then `ss-152`'s twelve, placed for it, every ALBUM the site: another record, linked to Long Pier as its edition by the
+/// placement, named "Long Pier" by Kite Theory by the rule, with no list of its own; the second pass, the item and the week gone,
+/// changes nothing. Red first: a record titled by the site, and no card (editions need a group or a title key).
+#[test]
+fn a_differing_arrival_is_an_edition_by_its_item() {
+    let f = Folders::new("wm12");
+    let pier: Vec<(String, i64)> = (1..=12).map(|n| (format!("P{n}"), 150_000 + n * 9_000)).collect();
+    let r = record(&f.cat, "Long Pier", "Kite Theory");
+    let refs = |n: usize| pier[..n].iter().map(|(t, ms)| (t.as_str(), *ms)).collect::<Vec<_>>();
+    keep(&f.cat, r, "R152", &list(&refs(10)));
+    f.cat.db().execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, 'discogs', 'release', 'D152', 1, 'asked')", [ids::record(r)]).unwrap();
+    f.cat.keep_list(r, &Reference::new("discogs", "release", "D152"), &list(&refs(12)), 1).unwrap();
+    // Lidarr's ten, expected for it.
+    f.cat.expect_record(MUSIC, "Kite Theory/Long Pier", r).unwrap();
+    let lidarr: Vec<String> = (1..=10).map(|n| format!("Kite Theory/Long Pier/{n:02} P{n}.flac")).collect();
+    for (rel, n) in lidarr.iter().zip(1..) {
+        f.add(MUSIC, &[(rel.as_str(), vec![("album", "Long Pier"), ("albumartist", "Kite Theory"), ("title", pier[n - 1].0.as_str()), ("tracknumber", n.to_string().as_str())])]);
+    }
+    f.lengths(MUSIC, &lidarr.iter().zip(&pier).map(|(rel, (_, ms))| (rel.as_str(), *ms)).collect::<Vec<_>>());
+    f.pass();
+    assert_eq!(f.record_of(MUSIC, &lidarr[0]), Some(r));
+    let dir = "soulseek/Kite Theory/Long Pier";
+    f.cat.place_copy(1, dir, r).unwrap();
+    let arrived: Vec<String> = (1..=12).map(|n| format!("{dir}/{n:02} P{n}.flac")).collect();
+    for rel in &arrived {
+        f.add(1, &[(rel.as_str(), vec![("album", STAMP), ("artist", "Kite Theory")])]);
+    }
+    f.lengths(1, &arrived.iter().zip(&pier).map(|(rel, (_, ms))| (rel.as_str(), ms + 300)).collect::<Vec<_>>());
+    f.pass();
+    let edition = f.record_of(1, &arrived[0]).expect("a record");
+    assert_ne!(edition, r, "never one record of the ten and the twelve");
+    assert!(arrived.iter().all(|rel| f.record_of(1, rel) == Some(edition)));
+    let row = f.cat.record(edition).unwrap().unwrap();
+    assert_eq!((row.title.as_str(), row.artist.as_str()), ("Long Pier", "Kite Theory"), "named by the record it was fetched for");
+    let link: (i64, String) = f.cat.db().query_row("SELECT of, how FROM edition_links WHERE record = ?1", [edition], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(link, (r, "placement".to_string()));
+    assert!(f.cat.reference_tracks(edition).unwrap().is_empty(), "Long Pier's lists stay its own");
+    assert_eq!(f.cat.reference_tracks(r).unwrap().len(), 2);
+    // The item cleared, the week passed: the expectation gone, the second pass changes nothing.
+    f.cat.db().execute("DELETE FROM expected", []).unwrap();
+    f.pass();
+    assert_eq!((f.record_of(1, &arrived[0]), f.record_of(MUSIC, &lidarr[0])), (Some(edition), Some(r)));
+    assert_eq!(f.cat.db().query_row("SELECT count(*) FROM edition_links", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    // One card: the two are editions of one album.
+    let groups = f.cat.edition_groups(&[r, edition], &[MUSIC], &[]).unwrap();
+    assert_eq!(groups, [vec![r, edition]], "one card, two versions");
+}
+
+/// WM.13 (T-WM-3): the placement row alone (no expectation, the item gone) is the evidence, at the first read a fortnight later and
+/// at every pass after; a placement whose folder holds none of its files decides nothing for them. Red first: the expectation let go
+/// after its week, and nothing else kept the placing.
+#[test]
+fn provenance_outlives_the_expectation_and_the_item() {
+    let f = Folders::new("wm13");
+    let r = mumia_in_music(&f);
+    f.cat.place_copy(1, MUMIA_DIR, r).unwrap();
+    let rels = electronicfresh(&f, false);
+    f.pass();
+    assert_eq!(f.record_of(1, &rels[0]), Some(r), "(a), (b): the row alone");
+    f.pass();
+    assert_eq!(f.record_of(1, &rels[3]), Some(r), "(c) a later pass");
+    // (d) the files moved outside Cratarr into another IN2 folder: the placement names a folder that holds none of them.
+    let g = Folders::new("wm13d");
+    let r = mumia_in_music(&g);
+    g.cat.place_copy(1, "soulseek/Polo & Pan/Elsewhere", r).unwrap();
+    let rels = electronicfresh(&g, false);
+    g.pass();
+    assert_ne!(g.record_of(1, &rels[0]), Some(r), "(d) the next evidence decides");
+}
+
+/// WM.9 (a), (b): `al-150`, not had, its list kept; `ss-150` placed its folder, ALBUM "Harbour Lights [www.flacsite.net]": the copy is
+/// `al-150`'s, titled "Harbour Lights"; merged into `al-149` before the pass, it is `al-149`'s. Red first: the title read with the
+/// stamp. The join is a pin (C50).
+#[test]
+fn an_arrival_joins_its_items_record_and_drops_the_stamp() {
+    for merged in [false, true] {
+        let f = Folders::new(if merged { "wm9b" } else { "wm9a" });
+        let lights: Vec<(String, i64)> = (1..=8).map(|n| (format!("H{n}"), 170_000 + n * 6_000)).collect();
+        let r = record(&f.cat, "Harbour Lights", "Glass Harbour");
+        keep(&f.cat, r, "R150", &list(&lights.iter().map(|(t, ms)| (t.as_str(), *ms)).collect::<Vec<_>>()));
+        let dir = "soulseek/Glass Harbour/Harbour Lights";
+        f.cat.expect_record(1, dir, r).unwrap();
+        let into = record(&f.cat, "Harbour Lights", "Glass Harbour");
+        if merged {
+            f.cat.merge_records(r, into).unwrap();
+        }
+        let rels: Vec<String> = (1..=8).map(|n| format!("{dir}/{n:02} H{n}.flac")).collect();
+        for (rel, (title, _)) in rels.iter().zip(&lights) {
+            f.add(1, &[(rel.as_str(), vec![("album", "Harbour Lights [www.flacsite.net]"), ("albumartist", "Glass Harbour"), ("title", title)])]);
+        }
+        f.lengths(1, &rels.iter().zip(&lights).map(|(rel, (_, ms))| (rel.as_str(), *ms)).collect::<Vec<_>>());
+        f.pass();
+        let owner = if merged { into } else { r };
+        assert_eq!(f.record_of(1, &rels[0]), Some(owner), "merged {merged}");
+        assert_eq!(f.cat.record(owner).unwrap().unwrap().title, "Harbour Lights", "the stamp cut");
+    }
+}
+
+/// Shore Notes `al-154`'s six, N1-N6 (lengths), as files of `dir`, ARTIST "Glass Harbour", every ALBUM `album`.
+fn shore_notes(f: &Folders, folder: i64, dir: &str, album: Option<&str>) -> Vec<String> {
+    let rels: Vec<String> = (1..=6).map(|n| format!("{dir}/{n:02} N{n}.flac")).collect();
+    for (rel, n) in rels.iter().zip(1..) {
+        let mut tags = vec![("artist", "Glass Harbour"), ("title", ["N1", "N2", "N3", "N4", "N5", "N6"][n - 1])];
+        tags.extend(album.map(|a| ("album", a)));
+        f.add(folder, &[(rel.as_str(), tags)]);
+    }
+    f.lengths(folder, &rels.iter().zip(1..).map(|(rel, n)| (rel.as_str(), 180_000 + n * 7_000)).collect::<Vec<_>>());
+    rels
+}
+
+fn shore_list() -> Vec<RefTrack> {
+    let names: Vec<(String, i64)> = (1..=6).map(|n| (format!("N{n}"), 180_000 + n * 7_000)).collect();
+    list(&names.iter().map(|(t, ms)| (t.as_str(), *ms)).collect::<Vec<_>>())
+}
+
+/// WM.15 (T-WM-4): no item, no ids, the album a site's stamp: (a) the copy is `al-154`'s (not had, its list kept) by its artist and
+/// its tracks; one whose album is a real title that differs ("Shore Notes II") never; (b) `al-154` had in MUSIC, a copy dropped into
+/// IN: F11's join reads the stamp as no title and joins by the artist and every track paired. Red first: (a) `wanted_record` needed
+/// the folded title, (b) F11 refused on the title key.
+#[test]
+fn titles_and_lengths_join_a_copy_whose_album_is_a_stamp() {
+    let f = Folders::new("wm15a");
+    let r = record(&f.cat, "Shore Notes", "Glass Harbour");
+    keep(&f.cat, r, "R154", &shore_list());
+    let rels = shore_notes(&f, 1, "Glass Harbour/Shore Notes", Some(STAMP));
+    f.pass();
+    assert_eq!(f.record_of(1, &rels[0]), Some(r), "(a) by its artist and its tracks");
+    let g = Folders::new("wm15a2");
+    let r = record(&g.cat, "Shore Notes", "Glass Harbour");
+    keep(&g.cat, r, "R154", &shore_list());
+    let rels = shore_notes(&g, 1, "Glass Harbour/Shore Notes II", Some("Shore Notes II"));
+    g.pass();
+    assert_ne!(g.record_of(1, &rels[0]), Some(r), "a title that differs speaks (X8)");
+
+    // (b) had in MUSIC, its files naming no release; the stamped copy dropped into IN.
+    let h = Folders::new("wm15b");
+    let music = shore_notes(&h, MUSIC, "Glass Harbour/Shore Notes", Some("Shore Notes"));
+    h.pass();
+    let had = h.record_of(MUSIC, &music[0]).unwrap();
+    let dropped = shore_notes(&h, 1, "Glass Harbour/Shore Notes (IN)", Some(STAMP));
+    h.pass();
+    let arrived = h.record_of(1, &dropped[0]).unwrap();
+    let kinds = [(MUSIC, crate::settings::LibraryKind::Main), (1, crate::settings::LibraryKind::Incoming)];
+    assert_eq!(h.cat.editions_of(&[arrived], &[MUSIC]).unwrap().get(&arrived), Some(&vec![had]), "(b) asked by its artist, its title none");
+    assert_eq!(h.cat.join_copies(arrived, had, &kinds).unwrap(), Some((arrived.max(had), arrived.min(had))), "(b) one record, two copies");
+    assert_eq!(h.record_of(1, &dropped[0]), Some(had));
+}
+
+/// WM.17 (a) with COU.17 (T-COU-16): `ss-158` and `ss-159` placed "Ocean Days" and "Glass Garden" for `al-158` and `al-159`, every file
+/// ALBUM the site (and, (b), none at all), ARTIST "Polo & Pan", no ALBUMARTIST, no DATE: two copies, two records, each gathered by
+/// its placement, no editions of each other; (e) a two-disc arrival under one placing folder is one copy. Red first: IN2's folder in
+/// front of the hash, never the directory: one album of both folders.
+#[test]
+fn placed_arrivals_with_one_stamp_are_two_records_and_no_editions() {
+    for no_album in [false, true] {
+        let f = Folders::new(if no_album { "cou17b" } else { "wm17a" });
+        let days: Vec<(String, i64)> = (1..=8).map(|n| (format!("O{n}"), 160_000 + n * 6_000)).collect();
+        let garden: Vec<(String, i64)> = (1..=9).map(|n| (format!("G{n}"), 210_000 + n * 6_000)).collect();
+        let (ocean, glass) = (record(&f.cat, "Ocean Days", "Polo & Pan"), record(&f.cat, "Glass Garden", "Polo & Pan"));
+        keep(&f.cat, ocean, "R158", &list(&days.iter().map(|(t, ms)| (t.as_str(), *ms)).collect::<Vec<_>>()));
+        keep(&f.cat, glass, "R159", &list(&garden.iter().map(|(t, ms)| (t.as_str(), *ms)).collect::<Vec<_>>()));
+        let mut firsts = Vec::new();
+        for (record, dir, tracks) in [(ocean, "soulseek/Polo & Pan/Ocean Days", &days), (glass, "soulseek/Polo & Pan/Glass Garden", &garden)] {
+            f.cat.place_copy(1, dir, record).unwrap();
+            let rels: Vec<String> = tracks.iter().enumerate().map(|(i, (t, _))| format!("{dir}/{:02} {t}.mp3", i + 1)).collect();
+            for (rel, (title, _)) in rels.iter().zip(tracks.iter()) {
+                let mut tags = vec![("artist", "Polo & Pan"), ("title", title.as_str())];
+                if !no_album {
+                    tags.push(("album", STAMP));
+                }
+                f.add(1, &[(rel.as_str(), tags)]);
+            }
+            f.lengths(1, &rels.iter().zip(tracks.iter()).map(|(rel, (_, ms))| (rel.as_str(), *ms)).collect::<Vec<_>>());
+            firsts.push((record, rels));
+        }
+        assert_eq!(f.albums().iter().filter(|a| a.folder == 1).count(), 2, "each gathered by its placement");
+        f.pass();
+        for (record, rels) in &firsts {
+            assert!(rels.iter().all(|rel| f.record_of(1, rel) == Some(*record)), "no_album {no_album}: each its own record");
+        }
+        assert!(f.cat.edition_groups(&[ocean, glass], &[], &[]).unwrap().is_empty(), "no editions of each other");
+    }
+    // (e) two discs under one placing folder: one copy.
+    let f = Folders::new("cou17e");
+    let r = record(&f.cat, "Long Water", "Glass Harbour");
+    let dir = "soulseek/Glass Harbour/Long Water";
+    f.cat.place_copy(1, dir, r).unwrap();
+    f.add(1, &[(format!("{dir}/CD1/01 Intro.flac").as_str(), vec![("album", "Long Water"), ("discnumber", "1"), ("title", "Intro")]), (format!("{dir}/CD2/01 Tide.flac").as_str(), vec![("album", "Long Water (Disc 2)"), ("discnumber", "2"), ("title", "Tide")])]);
+    assert_eq!(f.albums().iter().filter(|a| a.folder == 1).count(), 1, "(e) one copy across its disc folders");
+}
+
+/// WM.17 (b), (c), guards: the hand stands. A copy whose tracks a record holds (as a hand's split or join left them) stays that
+/// record's though a placement names another: provenance judges only an album no record holds.
+#[test]
+fn a_stamp_never_joins_and_the_hand_stands() {
+    let f = Folders::new("wm17bc");
+    let r = mumia_in_music(&f);
+    let rels = electronicfresh(&f, false);
+    f.pass();
+    let kept = f.record_of(1, &rels[0]).expect("a record of its own, as the hand left it");
+    assert_ne!(kept, r);
+    f.cat.place_copy(1, MUMIA_DIR, r).unwrap();
+    f.pass();
+    assert_eq!(f.record_of(1, &rels[0]), Some(kept), "provenance never over the hand");
+}
+
+/// WM.23's identity half (with WM.25 (e)): "Deep Water" `al-157` in MUSIC, its list kept, track 3 missing and track 2 worse. A fetched
+/// file placed for it (its placement said before it appears, the file untouched): (a) tagged for a promo by another spelling, (b) no
+/// tags at all ("a1b2c3.flac"), (d) as (a) with the copy in folder 1: the record's track 3, by its placement, its copy whole; (c) a
+/// better copy for track 2: track 2's id. Red first: (b) nothing pairs an untitled file, and no placement exists.
+#[test]
+fn a_fetched_track_joins_its_record_untouched() {
+    let deep = [("Breakwater", 200_000), ("Sea Wall", 230_000), ("Night Pier", 260_000), ("Harbour Bell", 290_000)];
+    for (case, folder, placed, tags) in [
+        ("a", MUSIC, "03 Night Pier.flac", vec![("album", "Deep Water (Promo)"), ("artist", "Glas Harbour")]),
+        ("b", MUSIC, "a1b2c3.flac", Vec::new()),
+        ("d", 1, "03 Night Pier.flac", vec![("album", "Deep Water (Promo)"), ("artist", "Glas Harbour")]),
+    ] {
+        let f = Folders::new(&format!("wm23{case}"));
+        let dir = "Glass Harbour/Deep Water";
+        let rels: Vec<(String, usize)> = [1usize, 2, 4].iter().map(|n| (format!("{dir}/0{n} {}.flac", deep[n - 1].0), *n)).collect();
+        for (rel, n) in &rels {
+            f.add(folder, &[(rel.as_str(), vec![("album", "Deep Water"), ("albumartist", "Glass Harbour"), ("title", deep[n - 1].0), ("tracknumber", n.to_string().as_str())])]);
+        }
+        f.lengths(folder, &rels.iter().map(|(rel, n)| (rel.as_str(), deep[n - 1].1)).collect::<Vec<_>>());
+        f.pass();
+        let r = f.record_of(folder, &rels[0].0).unwrap();
+        keep(&f.cat, r, "R157", &list(&deep));
+        let rel = format!("{dir}/{placed}");
+        f.cat.place_file(folder, &rel, r, None, (1, 3)).unwrap();
+        f.add(folder, &[(rel.as_str(), tags.clone())]);
+        f.lengths(folder, &[(rel.as_str(), 260_400)]);
+        f.pass();
+        assert_eq!(f.record_of(folder, &rel), Some(r), "({case}) its record by its fetch");
+        let c = f.cat.copies_of(&[r], &library).unwrap().remove(&r).unwrap();
+        assert_eq!(c.copies.iter().map(|c| (c.folder, c.paired)).collect::<Vec<_>>(), [(folder, 4)], "({case}) track 3, its copy whole");
+        assert_eq!(f.cat.record(r).unwrap().unwrap().artist, "Glass Harbour", "({case}) the credit as it was, never the file's spelling");
+    }
+    // (c) a better copy for track 2: its placement names track 2, so the file takes its id.
+    let f = Folders::new("wm23c");
+    let dir = "Glass Harbour/Deep Water";
+    for (n, (title, _)) in deep.iter().enumerate() {
+        let rel = format!("{dir}/0{} {title}.mp3", n + 1);
+        f.add(MUSIC, &[(rel.as_str(), vec![("album", "Deep Water"), ("albumartist", "Glass Harbour"), ("title", title), ("tracknumber", (n + 1).to_string().as_str())])]);
+    }
+    f.pass();
+    let old = format!("{dir}/02 Sea Wall.mp3");
+    let (r, two) = (f.record_of(MUSIC, &old).unwrap(), f.cat.track_of(MUSIC, &old).unwrap());
+    let better = format!("{dir}/02 Sea Wall.flac");
+    f.cat.place_file(MUSIC, &better, r, Some(two), (1, 2)).unwrap();
+    std::fs::remove_file(f.roots[0].join(&old)).unwrap();
+    f.add(MUSIC, &[(better.as_str(), vec![("album", "Another Release"), ("title", "Sea Wall (Remastered)")])]);
+    assert_eq!(f.cat.track_of(MUSIC, &better), Some(two), "(c) track 2's id: plays and hearts stay on it");
+}
