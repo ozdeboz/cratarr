@@ -9,6 +9,8 @@
 //!   0.17 read it as an empty queue and replaced it at its next write).
 //! - **`pauses`**: the holds 0.17 kept in the user data's server choices (`<source>:held_until`) onto `source_pauses`, each cut to its
 //!   source's cap, a past one dropped (DM5); the choices cleared after the rows' commit, at the next start where a stop came between.
+//! - **`floor`** (PL4 (c)): an install upgrading from 0.17 with no floor saved keeps 0.17's 200 GB, saved, so the new default (a tenth
+//!   of the smallest disk the floor reads) changes no floor at the upgrade.
 //! - **Each part once, safe to repeat** (DM2): one transaction whose last write is its mark (`step_018:<part>` in the journal's
 //!   `intake_marks`, holding the part's report), so a part cut off wrote nothing and runs whole at the next start; what comes after
 //!   its commit (the rename, the choices cleared, the migration report) is done again at every start until it is. The counts go into
@@ -28,9 +30,11 @@ use crate::userdata::UserData;
 /// The parts' marks, and their parts of the migration report.
 pub const QUEUES: &str = "step_018:queues";
 pub const PAUSES: &str = "step_018:pauses";
+pub const FLOOR: &str = "step_018:floor";
 /// The migration report's parts, as `/api/admin/migration` lists them.
 pub const QUEUES_PART: &str = "bulk queue";
 pub const PAUSES_PART: &str = "sources' holds";
+pub const FLOOR_PART: &str = "space floor";
 
 /// 0.17's bulk queue, its name once moved, and what one that cannot be read is set aside as (before its time).
 pub const FILE: &str = "track-intake.json";
@@ -38,12 +42,14 @@ pub const KEPT: &str = "track-intake.json.017";
 pub const UNREADABLE: &str = "track-intake.json.unreadable-";
 
 /// The step at a start, before the turns take up their holds (`turn::keep_all`): its parts each done before, or now. `data`: the
-/// data folder (none: nothing kept in files). A part that fails stops the start, naming itself.
-pub fn run(journal: &Journal, data: Option<&Path>, ud: &UserData, now: i64) -> Result<()> {
+/// data folder (none: nothing kept in files); `upgrading`: an install coming from 0.17 (its settings file from before 0.18). A part
+/// that fails stops the start, naming itself.
+pub fn run(journal: &Journal, data: Option<&Path>, ud: &UserData, now: i64, upgrading: bool) -> Result<()> {
     if let Some(d) = data {
         queues(journal, d, ud, now, &|| Ok(())).context("0.18's step, part queues")?;
     }
     pauses(journal, ud, now, &|| Ok(())).context("0.18's step, part pauses")?;
+    floor(journal, ud, upgrading).context("0.18's step, part floor")?;
     Ok(())
 }
 
@@ -212,6 +218,32 @@ pub fn queues_set_aside(dir: &Path) -> Vec<(String, Option<i64>)> {
 /// The part `pauses` (DM5): each source's hold 0.17 kept in the user data moved into `source_pauses`, cut to its cap from `now`, a
 /// past or empty one dropped; then the choices cleared (after the rows' commit, so a stop between clears them at the next start).
 /// `after`: heard once the rows and mark are committed, before the choices are cleared (what the tests cut it by). Blocking.
+/// PL4 (c): an install upgrading from 0.17 (`upgrading`: its settings file from before 0.18) with no floor saved keeps 0.17's 200 GB,
+/// saved, so the new default (a tenth of the smallest disk the floor reads) changes no floor at the upgrade; a floor saved before
+/// stays. Once (its mark), safe to repeat: the floor is saved before the mark, and a floor found saved at a repeat is kept. The
+/// report says what was saved and the margin's new rule.
+pub fn floor(journal: &Journal, ud: &UserData, upgrading: bool) -> Result<()> {
+    use super::room::{FLOOR as KEPT_017, GB, saved_floor, set_floor};
+    if journal.mark(FLOOR)?.is_some() {
+        return Ok(());
+    }
+    let saved = saved_floor(ud);
+    let keeps = upgrading && saved.is_none();
+    if keeps {
+        set_floor(ud, KEPT_017)?;
+    }
+    let report = serde_json::json!({
+        "saved_gb": keeps.then_some(KEPT_017 / GB),
+        "kept_gb": saved.map(|s| s as f64 / GB as f64),
+        "said": "0.17's floor of 200 GB kept, saved; a saved floor under 100 GB now clears 10% above it, not 10 GB",
+    });
+    journal.write(|tx| tx.set_mark(FLOOR, &report.to_string()))?;
+    if upgrading {
+        ud.set_migration_part(FLOOR_PART, &report)?;
+    }
+    Ok(())
+}
+
 pub fn pauses(journal: &Journal, ud: &UserData, now: i64, after: &dyn Fn() -> Result<()>) -> Result<()> {
     let choices: Vec<(&str, String)> = super::turn::KEPT.iter().map(|s| (*s, super::turn::held_choice(s))).collect();
     if journal.mark(PAUSES)?.is_none() {
@@ -278,6 +310,33 @@ mod tests {
 
     fn state(i: &Item) -> String {
         serde_json::to_value(i.state).unwrap().as_str().unwrap().to_string()
+    }
+
+    /// PL4 (c): an install upgrading from 0.17 with no floor saved keeps 0.17's 200 GB, saved by the step, its report saying so (and that a
+    /// saved floor under 100 GB now clears 10% above it); once, safe to repeat. A new install saves none (its floor is a tenth of its
+    /// disk), and a floor saved before stays. Never an upgrading install's floor changed by the new default.
+    #[test]
+    fn the_upgrade_keeps_0_17s_floor() {
+        use crate::app::room::{FLOOR as DEFAULT_017, GB, saved_floor, set_floor};
+        let d = data_017("pl4");
+        let (j, ud) = (opened(&d), UserData::open(None).unwrap());
+        floor(&j, &ud, true).unwrap();
+        assert_eq!(saved_floor(&ud), Some(200 * GB), "0.17's floor saved");
+        assert_eq!(DEFAULT_017, 200 * GB);
+        let report = ud.migration_report().unwrap().remove(FLOOR_PART).map(|(_, r)| r).expect("its report");
+        assert_eq!(report["saved_gb"], 200, "{report}");
+        assert!(report["said"].as_str().is_some_and(|s| s.contains("10%")), "{report}");
+        set_floor(&ud, 80 * GB).unwrap();
+        floor(&j, &ud, true).unwrap();
+        assert_eq!(saved_floor(&ud), Some(80 * GB), "once: an administrator's floor since stays");
+        let (j2, fresh) = (Arc::new(Journal::open(None).unwrap()), UserData::open(None).unwrap());
+        floor(&j2, &fresh, false).unwrap();
+        assert_eq!(saved_floor(&fresh), None, "a new install saves none");
+        let (j3, kept) = (Arc::new(Journal::open(None).unwrap()), UserData::open(None).unwrap());
+        set_floor(&kept, 30 * GB).unwrap();
+        floor(&j3, &kept, true).unwrap();
+        assert_eq!(saved_floor(&kept), Some(30 * GB), "a floor saved before stays");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// DM1: every bulk item of a 0.17 queue becomes rows, by the table: each with its id, album, disc, position, title, recording,

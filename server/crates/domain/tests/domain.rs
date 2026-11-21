@@ -246,6 +246,23 @@ fn written(file: &str, table: &impl Serialize) {
     }
 }
 
+/// SD1 for the requests' and Soulseek's words (DOMAIN-CORE C.6): the one wording table, as shared JSON in its written form.
+#[test]
+fn the_request_words_table_is_written_and_current() {
+    #[derive(Serialize)]
+    struct Words {
+        about: &'static str,
+        words: Vec<(&'static str, &'static str)>,
+    }
+    written(
+        "request-states.json",
+        &Words {
+            about: "What a request and a Soulseek item say, by their standing (SCENARIOS-DC2 SD1; DOMAIN-CORE C.5, C.6), written by cratarr-domain's tests: each standing's words with their blanks; a time beside them is the page's to say.",
+            words: cratarr_domain::wording::WORDS.to_vec(),
+        },
+    );
+}
+
 /// RS1: the when-table is data, read whole. The sections' one order, and a row a place: its context, the section right after the
 /// head, its library set, whether View is offered. shared/when.json, for the page's check that each opener sends its `from`.
 /// Red first: no when-table on the server (each sheet's own order, PlaylistView's and AlbumMenu's).

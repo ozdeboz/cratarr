@@ -127,10 +127,10 @@ pub fn rooms_in(cat: &Catalogue, kinds: &[(i64, LibraryKind)], asked: &HashMap<i
 
 // ---- The disk floor (AL03)
 
-/// The floor where an administrator set none (0084).
+/// The most a floor is by default (0084's 200 GB, the owner's NAS), and what an install upgrading from 0.17 keeps as saved (PL4 (c)).
 pub const FLOOR: u64 = 200 * GB;
-/// How far above the floor the disks must be before the server is no longer short (OQ-F3): it changes once per crossing, never
-/// flapping at the floor.
+/// The most the margin is: how far above the floor the disks must be before the server is no longer short (OQ-F3), so it changes
+/// once per crossing, never flapping at the floor. 10% of the floor, at least 1 GB (`margin`).
 pub const MARGIN: u64 = 10 * GB;
 /// The floor an administrator set, in bytes, as the user data's meta keeps it.
 const FLOOR_KEY: &str = "room:floor";
@@ -141,9 +141,13 @@ const SHORT: &str = "short";
 const CLEAR: &str = "clear";
 const UNREADABLE: &str = "unreadable";
 
-/// The free space of the disk a folder is on (OQ-F2): statvfs on the server (`folders::free`); the tests' stand in.
+/// The free space of the disk a folder is on (OQ-F2): statvfs on the server (`folders::free`); the tests' stand in. And the disk's
+/// size (statvfs' total, `folders::size`), which a floor where none is saved is a share of (PL4); none where it can't be read.
 pub trait Disks: Send + Sync {
     fn free(&self, dir: &Path) -> Option<u64>;
+    fn size(&self, _dir: &Path) -> Option<u64> {
+        None
+    }
 }
 
 /// The disks themselves.
@@ -152,6 +156,10 @@ pub struct TheDisks;
 impl Disks for TheDisks {
     fn free(&self, dir: &Path) -> Option<u64> {
         crate::folders::free(dir)
+    }
+
+    fn size(&self, dir: &Path) -> Option<u64> {
+        crate::folders::size(dir)
     }
 }
 
@@ -162,12 +170,29 @@ pub struct Space {
     pub floor: u64,
     pub free: Option<u64>,
     pub short: bool,
+    /// No floor saved: the floor is the default (PL4: "10% of the smallest disk it watches").
+    pub default: bool,
 }
 
-/// The floor in bytes: an administrator's, else `FLOOR`. Blocking.
-pub fn floor(ud: &UserData) -> u64 {
-    ud.meta(FLOOR_KEY).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(FLOOR)
+/// The floor an administrator saved, in bytes, where one is. Blocking.
+pub fn saved_floor(ud: &UserData) -> Option<u64> {
+    ud.meta(FLOOR_KEY).ok().flatten().and_then(|v| v.parse().ok())
 }
+
+/// The floor where none is saved (PL4, the owner 2026-11-21, "A share of the disk"): 10% of the smallest disk the floor reads
+/// (`dirs`), at most `FLOOR`; `FLOOR` where no disk's size can be read. Blocking.
+pub fn default_floor(disks: &dyn Disks, dirs: &[PathBuf]) -> u64 {
+    dirs.iter().filter_map(|d| disks.size(d)).min().map_or(FLOOR, |smallest| (smallest / 10).min(FLOOR))
+}
+
+/// How far above `floor` the disks must be before the server is no longer short (OQ-F3, PL4): 10% of the floor, at least 1 GB and at
+/// most `MARGIN`, so a small disk isn't held three times its floor. Pure.
+pub fn margin(floor: u64) -> u64 {
+    (floor / 10).clamp(GB, MARGIN)
+}
+
+/// What a floor where none is saved is, in the Settings' words (PL4).
+pub const DEFAULT_WHY: &str = "10% of the smallest disk it watches";
 
 /// The floor an administrator sets, in bytes. Blocking.
 pub fn set_floor(ud: &UserData, bytes: u64) -> Result<()> {
@@ -196,14 +221,17 @@ pub fn floor_folders(serve: &Serve) -> Vec<PathBuf> {
 pub fn space(ud: &UserData, disks: &dyn Disks, dirs: &[PathBuf]) -> Space {
     static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = ONE.lock().unwrap_or_else(|p| p.into_inner());
-    let floor = floor(ud);
+    let (floor, default) = match saved_floor(ud) {
+        Some(saved) => (saved, false),
+        None => (default_floor(disks, dirs), true),
+    };
     let was = ud.meta(SHORT_KEY).ok().flatten().unwrap_or_else(|| CLEAR.to_string());
     let free = dirs.iter().filter_map(|d| disks.free(d)).min();
     let now = match free {
         None if dirs.is_empty() => CLEAR,
         None => UNREADABLE,
         Some(f) if f < floor => SHORT,
-        Some(f) if f >= floor.saturating_add(MARGIN) => CLEAR,
+        Some(f) if f >= floor.saturating_add(margin(floor)) => CLEAR,
         Some(_) if was == SHORT => SHORT,
         Some(_) => CLEAR,
     };
@@ -222,7 +250,7 @@ pub fn space(ud: &UserData, disks: &dyn Disks, dirs: &[PathBuf]) -> Space {
             super::soulseek::space_again();
         }
     }
-    Space { floor, free, short: now == SHORT }
+    Space { floor, free, short: now == SHORT, default }
 }
 
 /// Whether the server is short of space now ([`space`]). Blocking.
@@ -324,6 +352,7 @@ pub mod tests {
     #[derive(Default)]
     pub(crate) struct Stand {
         free: std::sync::Mutex<HashMap<PathBuf, Option<u64>>>,
+        size: std::sync::Mutex<HashMap<PathBuf, u64>>,
         asked: std::sync::Mutex<Vec<PathBuf>>,
     }
 
@@ -342,6 +371,12 @@ pub mod tests {
             self.free.lock().unwrap().insert(PathBuf::from(dir), n.map(gb));
         }
 
+        /// A folder's disk's size, in GB (PL4).
+        pub(crate) fn sized(self, dir: &str, n: f64) -> Self {
+            self.size.lock().unwrap().insert(PathBuf::from(dir), gb(n));
+            self
+        }
+
         /// The folders it was asked of, each once.
         pub(crate) fn asked(&self) -> Vec<PathBuf> {
             let mut asked = self.asked.lock().unwrap().clone();
@@ -357,6 +392,37 @@ pub mod tests {
             let known = self.free.lock().unwrap().get(dir).copied();
             known.unwrap_or_else(|| panic!("asked of a disk no user's music lands on: {}", dir.display()))
         }
+
+        fn size(&self, dir: &Path) -> Option<u64> {
+            self.size.lock().unwrap().get(dir).copied()
+        }
+    }
+
+    /// PL4 (the owner, 2026-11-21 13:23, "A share of the disk"): with no floor saved, the floor is 10% of the smallest disk it watches,
+    /// at most 200 GB, and its margin 10% of the floor, at least 1 GB and at most 10 GB: (a) one 500 GB disk under the Incoming folders
+    /// and own music, 50 GB with a 5 GB margin; (b) Incoming on 4 TB and own music on 1 TB, 100 GB with a 10 GB margin; a saved floor
+    /// always wins, and one under 100 GB clears 10% above it, not 10 GB. Never above 200 GB by default.
+    #[test]
+    fn a_new_installs_floor_is_a_tenth_of_its_disk() {
+        let (incoming, own) = (PathBuf::from("/srv/incoming"), PathBuf::from("/srv/own"));
+        let dirs = [incoming.clone(), own.clone()];
+        let one = Stand::of(&[("/srv/incoming", 400.0), ("/srv/own", 400.0)]).sized("/srv/incoming", 500.0).sized("/srv/own", 500.0);
+        assert_eq!((default_floor(&one, &dirs), margin(default_floor(&one, &dirs))), (gb(50.0), gb(5.0)), "(a) a tenth of 500 GB");
+        let two = Stand::of(&[("/srv/incoming", 3000.0), ("/srv/own", 900.0)]).sized("/srv/incoming", 4000.0).sized("/srv/own", 1000.0);
+        assert_eq!((default_floor(&two, &dirs), margin(default_floor(&two, &dirs))), (gb(100.0), gb(10.0)), "(b) a tenth of the smaller disk");
+        let big = Stand::of(&[("/srv/incoming", 9000.0)]).sized("/srv/incoming", 16_000.0);
+        assert_eq!(default_floor(&big, &[incoming.clone()]), FLOOR, "never above 200 GB by default");
+        assert_eq!(margin(gb(30.0)), gb(3.0), "a saved 30 GB floor clears 10% above it");
+        assert_eq!(margin(gb(5.0)), gb(1.0), "at least 1 GB");
+        // The floor the disks are read against: the default, short below it, and an administrator's floor wins.
+        let serve = room_shape();
+        let small = Stand::of(&[("/srv/incoming", 40.0), ("/srv/own", 300.0)]).sized("/srv/incoming", 500.0).sized("/srv/own", 500.0);
+        let read = space(&serve.userdata, &small, &dirs);
+        assert_eq!((read.floor, read.short, read.default), (gb(50.0), true, true), "40 GB free under a 50 GB floor: short");
+        set_floor(&serve.userdata, gb(30.0)).unwrap();
+        let read = space(&serve.userdata, &small, &dirs);
+        assert_eq!((read.floor, read.short, read.default), (gb(30.0), false, false), "a saved floor wins");
+        let _ = own;
     }
 
     /// What counts against each account's room now: the rule's one read, who asked first read now.
@@ -894,7 +960,7 @@ pub mod tests {
         };
         let mut seen = Vec::new();
         let serve = room_shape_in(Some(&data), None);
-        assert_eq!(floor(&serve.userdata), gb(200.0), "none set: 200 GB");
+        assert_eq!((saved_floor(&serve.userdata), default_floor(&stand, &dirs)), (None, gb(200.0)), "none set: 200 GB where no disk's size is read");
         let mut said = floor_said(|| {
             for n in [199.9, 200.1, 199.95, 205.0] {
                 read(&serve, n, &mut seen);

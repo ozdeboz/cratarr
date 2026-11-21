@@ -134,6 +134,7 @@
   import { untilAudible } from './audible.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import RecordMenu, { opensRecord } from './sheet/Record.svelte';
+  import { openerOf } from './sheet/record';
   import RecordProblemSheet from './RecordProblemSheet.svelte';
   import { sheetFor } from './healthTools';
   import { ICON_OF } from './menuTable';
@@ -180,7 +181,7 @@
   import { serverPlaylistOf } from './panel.svelte';
   import { keepsPlace } from './keepsPlace';
   import { whenChanged } from './dataChanged';
-  import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
+  import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panel, panelDepth, TABS, viewedBelow, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
   import { openRadio } from './radioAsk.svelte';
@@ -3225,7 +3226,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   />
 {/if}
 {#if albumMenuOpen && album}
-  {#if opensRecord(album.source)}<RecordMenu id={album.id} from="page" {title} credit={albumHead?.artist ?? null} onresumegone={() => (resumeAt = null)} onclose={() => (albumMenuOpen = false)} />
+  {#if opensRecord(album.source)}<RecordMenu id={album.id} from="page" opener={openerOf(viewedBelow(), pageHere(), pageView.query.trim() !== '')} {title} credit={albumHead?.artist ?? null} onresumegone={() => (resumeAt = null)} onclose={() => (albumMenuOpen = false)} />
   {:else}<AlbumMenu
     source={album.source}
     album={listedHere?.a ?? { id: album.id, title, artist: albumHead?.artist ?? null }}

@@ -7029,7 +7029,11 @@ async fn put_runtime(ctx: Ctx, Json(c): Json<crate::app::runtime::Change>) -> Re
 async fn get_floor(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
     let space = crate::run::spawn_blocking(move || crate::app::room::space_on(&serve, &crate::app::room::TheDisks)).await.map_err(|e| ToggleError::Refused(format!("{e}")))?;
-    Ok(Json(json!({ "gb": space.floor as f64 / crate::app::room::GB as f64, "free": space.free, "short": space.short })))
+    let mut said = json!({ "gb": space.floor as f64 / crate::app::room::GB as f64, "free": space.free, "short": space.short, "default": space.default });
+    if space.default {
+        said["why"] = json!(crate::app::room::DEFAULT_WHY);
+    }
+    Ok(Json(said))
 }
 
 /// The disk floor set by an administrator: GB with decimals, kept in bytes (1 GB = 10^9), and read against the disks at once. Anything

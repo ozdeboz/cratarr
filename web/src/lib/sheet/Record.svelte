@@ -93,7 +93,7 @@
   import ReplaceTrackSheet from '../ReplaceTrackSheet.svelte';
   import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
-  import { deviceItems, headChips, playRow, Runs, sectionsOf, stateLine, versionLines, type Item, type PlaceWord } from './record';
+  import { askAt, deviceItems, headChips, playRow, Runs, sectionsOf, stateLine, versionLines, type Item, type PlaceWord } from './record';
 
   let {
     id,
@@ -152,6 +152,8 @@
   type Ask = 'confirm' | 'move' | 'replace' | 'cover' | 'cover-url';
   let ask = $state<false | Ask>(false);
   let asked = $state<ActionView | null>(null);
+  /** Which of the asked action's yeses is shown (RS25): its server's steps, in order. */
+  let askStep = $state(0);
   let working = $state(false);
   /** The account's resume point here (decision 0030). */
   let resumeAt = $state<{ track: string; position: number } | null>(null);
@@ -236,10 +238,11 @@
       : [],
   );
 
-  /** What a tap on an entry does: the server's action by its name, asked first where it asks a yes. */
+  /** What a tap on an entry does: the server's action by its name, asked first where it asks a yes (each of its steps, RS25). */
   function run(a: ActionView) {
-    if (a.confirm) {
+    if (askAt(a, 0)) {
       asked = a;
+      askStep = 0;
       ask = 'confirm';
       return;
     }
@@ -603,7 +606,7 @@
 {#if missingOpen}
   <ReplaceTrackSheet source={OWN} album={{ id: rid, title }} {onclose} />
 {:else if editOpen}
-  <RecordEdit source={OWN} albums={[listed]} {onclose} />
+  <RecordEdit source={OWN} albums={[listed]} yearVersions={e?.properties.year.value === null ? e.properties.year.versions : []} {onclose} />
 {:else}
   <MenuSheet
     label={title}
@@ -629,9 +632,15 @@
     {:else if ask === 'confirm' && asked}
       {@const a = asked}
       <div class="form">
-        <p class="ask">{a.confirm}{a.group === 'remove' ? ` It stays in the trash for ${trashDays} ${trashDays === 1 ? 'day' : 'days'}.` : ''}</p>
+        <p class="ask">{askAt(a, askStep)}{a.group === 'remove' && askStep === 0 ? ` It stays in the trash for ${trashDays} ${trashDays === 1 ? 'day' : 'days'}.` : ''}</p>
         <div class="actions">
-          <button class:danger={a.group === 'remove'} class="solid" disabled={working} aria-busy={working} onclick={() => void runs.once(`${a.name}:${a.fields?.from ?? ''}`, () => perform(a))}>{a.title}</button>
+          <button
+            class:danger={a.group === 'remove'}
+            class="solid"
+            disabled={working}
+            aria-busy={working}
+            onclick={() => (askAt(a, askStep + 1) ? askStep++ : void runs.once(`${a.name}:${a.fields?.from ?? ''}`, () => perform(a)))}>{a.title}</button
+          >
           <button onclick={onclose}>Cancel</button>
         </div>
       </div>

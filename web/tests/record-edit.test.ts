@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { classicalChoiceOf, classicalOfChoice, editableOf, isSecondary, sharedOf, shownOf, toSend, wordsOfView, yearOf } = await import('../src/lib/recordEdit.ts');
+const { classicalChoiceOf, classicalOfChoice, editableOf, isSecondary, sharedOf, shownOf, toSend, wordsOfView, yearChoices, yearOf } = await import('../src/lib/recordEdit.ts');
 
 const rec = (o: Partial<ReturnType<typeof editableOf>> = {}) => ({ type: 'album', secondary: [], year: 1994, genres: ['Jazz'], classical: false, styles: [], moods: [], tags: [], set: [], ...o });
 
@@ -84,4 +84,25 @@ test("the words' hand layer (decision 0097): styles, moods and tags set and rese
   const r = editableOf({ year: 2001 }, wordsOfView(v));
   assert.equal(r.tags?.[0], 'late night');
   assert.equal(editableOf({ year: 2001 }).moods, null);
+});
+
+
+// VR39, OQ-VR-9 (c): while a record's year has versions and none is chosen, Edit's Year offers each as a choice, by the sources that
+// give it ("2014 · MusicBrainz"); choosing one is the hand's fact. The Head shows no year until then (record-sheet.test.ts).
+test("Edit's Year offers the year's versions while none is chosen", async () => {
+  const versions = [
+    { value: 2014, by: ['musicbrainz', 'bandcamp'] },
+    { value: 2015, by: ['discogs'] },
+  ];
+  assert.deepEqual(yearChoices(versions), [
+    { value: '2014', label: '2014 · MusicBrainz, Bandcamp' },
+    { value: '2015', label: '2015 · Discogs' },
+  ]);
+  assert.deepEqual(yearChoices([]), [], 'no versions, no choice: the year is typed as today');
+  const { readFileSync } = await import('node:fs');
+  const edit = readFileSync(new URL('../src/lib/RecordEdit.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(edit, /<ChoiceList label="Year" options=\{yearChoices\(yearVersions\)\}/, 'the versions as choices, in the existing ChoiceList');
+  assert.match(edit, /onchange=\{\(v\) => \(\(draft\.year = Number\(v\)\), \(step = 'rows'\)\)\}/, "a choice is the hand's year");
+  const sheet = readFileSync(new URL('../src/lib/sheet/Record.svelte', import.meta.url), 'utf8');
+  assert.ok(sheet.includes('yearVersions={e?.properties.year.value === null ? e.properties.year.versions : []}'), 'RS01 passes the versions while none is chosen');
 });
