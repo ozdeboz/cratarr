@@ -9,7 +9,8 @@ import type { LinkView } from '../src/lib/generated/LinkView';
 import type { Section } from '../src/lib/generated/Section';
 import type { Version } from '../src/lib/generated/Version';
 
-const { askAt, deviceItems, headChips, PLACES, playRow, sectionsOf, stateLine, versionLines } = await import('../src/lib/sheet/record.ts');
+const { askAt, deviceItems, headChips, openerOf, PLACES, playRow, sectionsOf, stateLine, versionLines } = await import('../src/lib/sheet/record.ts');
+const { namesRecord } = await import('../src/lib/recordCache.ts');
 const { when } = await import('../src/lib/settings/when.ts');
 type Entity = import('../src/lib/recordCache.ts').RecordEntity;
 
@@ -120,6 +121,54 @@ test('the Library section draws what is sent, in its groups, each entry naming i
   assert.deepEqual(library[1].items[0].action?.confirm, ['Delete from MUSIC?'], 'its confirm with it, asked first');
   assert.deepEqual(parts[1].cards.map((c) => [c.group, c.items.map((i) => i.name)]), [['go', ['view']], ['feel', ['favourite']], ['know', ['web_search']]], 'links beside actions, by group');
   assert.deepEqual(sectionsOf(entity({ sections: ['head', 'play'] })), [], 'an entry the server did not send is never drawn');
+});
+
+// RS1's `page` place counts its opener's libraries: the record's own page sends where it was opened from, derived from the panel
+// stack (the coordinator, 2026-11-21: not threaded through the album panel's 44 openers). What the panel views below the record
+// names it first, else the page it shows over; Home and the rest send none, so the server's Library fallback stays.
+test("the record page's opener: the stack-to-place table", () => {
+  const table: [string | null, string, boolean, string | undefined][] = [
+    ['artist:cratarr/ar-12', 'library', false, 'artist'],
+    ['artist-tracks:cratarr/ar-12', 'discover', false, 'artist'],
+    ['crate:cr-4', 'home', false, 'crate'],
+    ['label:la-5', 'library', false, 'label'],
+    ['server-playlist:jf/123', 'library', false, 'playlist'],
+    ['pl-9', 'library', false, 'playlist'],
+    ['artist:cratarr/ar-12', 'library', true, 'artist'],
+    [null, 'library', true, 'search'],
+    [null, 'library', false, 'library'],
+    [null, 'discover', false, 'discover'],
+    [null, 'crates', false, 'crate'],
+    [null, 'playlists', false, 'playlist'],
+    [null, 'health', false, 'problem'],
+    [null, 'home', false, undefined],
+    [null, 'settings', false, undefined],
+    ['downloads:all', 'downloads', false, undefined],
+  ];
+  for (const [below, page, searching, want] of table) assert.equal(openerOf(below, page, searching), want, `${below} over ${page}${searching ? ', searching' : ''}`);
+  for (const p of table.map((t) => t[3]).filter(Boolean)) assert.ok((PLACES as readonly string[]).includes(p!), `${p} is a when-table place`);
+  // The prefixes are the panel's own.
+  const panel = read('lib/panel.svelte.ts');
+  for (const prefix of ["const ARTIST = 'artist:'", "const ARTIST_TRACKS = 'artist-tracks:'", "const SERVER_PLAYLIST = 'server-playlist:'"]) assert.ok(panel.includes(prefix), prefix);
+  assert.ok(read('lib/crates.svelte.ts').includes("export const CRATE = 'crate:'") && read('lib/labelPage.ts').includes("export const LABEL = 'label:'"));
+  // The record page's ⋮ sends it.
+  assert.match(read('lib/PlaylistView.svelte'), /<RecordMenu id=\{album\.id\} from="page" opener=\{openerOf\(viewedBelow\(\), pageHere\(\), pageView\.query\.trim\(\) !== ''\)\}/);
+});
+
+// VR39, OQ-VR-9 (c): while a not-had record's year has versions and none is chosen, the Head shows no year until a hand picks.
+test('the Head shows no year while the sources differ', () => {
+  const differs = entity({ properties: { ...entity().properties, year: { value: null, by: [], versions: [{ value: 2014, by: ['musicbrainz'] }, { value: 2015, by: ['discogs'] }] } } });
+  assert.deepEqual(headChips(differs), ['Glass Harbour', 'EP'], 'no year, and no version said in the Head');
+});
+
+// LOOKUPS Found 10, RV12: a Confirm or a pasted link answers with the record's read (`task`), whose findings reach the page by
+// `changed` for the record: the References sheet reads them again as they land.
+test('the References sheet reads again when its record changes', () => {
+  assert.ok(namesRecord({ rev: 3, ids: [{ id: 'al-42', op: 'changed' }] }, 'al-42'));
+  assert.ok(!namesRecord({ rev: 3, ids: [{ id: 'al-43', op: 'changed' }] }, 'al-42'));
+  assert.ok(!namesRecord({ rev: 3 }, 'al-42'));
+  const sheet = read('lib/RecordReferences.svelte');
+  assert.match(sheet, /on<Changed>\('changed', \(c\) => namesRecord\(c, album\) && again\+\+\)/);
 });
 
 // RS25 (decision 0034, "Primary should get an extra step in the confirmation"): an action's yeses are the server's steps, asked in
