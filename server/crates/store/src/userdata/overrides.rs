@@ -87,7 +87,7 @@ impl Overrides {
 pub fn check(field: &str, value: &Value) -> std::result::Result<Option<Value>, String> {
     if value.is_null() {
         return match field {
-            "type" | "secondary" | "year" | "genres" | "classical" | "styles" | "moods" | "tags" => Ok(None),
+            "type" | "title" | "secondary" | "year" | "genres" | "classical" | "styles" | "moods" | "tags" => Ok(None),
             _ => Err(format!("{field} cannot be set.")),
         };
     }
@@ -115,6 +115,7 @@ pub fn check(field: &str, value: &Value) -> std::result::Result<Option<Value>, S
             }
         }
         "year" => value.as_u64().filter(|y| (1..=9999).contains(y)).map(|y| Some(Value::from(y))).ok_or_else(|| "A year is a number.".into()),
+        "title" => value.as_str().map(str::trim).filter(|t| !t.is_empty()).map(|t| Some(Value::from(t))).ok_or_else(|| "A title is some words.".into()),
         "genres" => Ok(Some(Value::from(words("genres")?))),
         "styles" => Ok(Some(Value::from(words("styles")?))),
         "moods" => Ok(Some(Value::from(words("moods")?))),

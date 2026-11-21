@@ -502,7 +502,8 @@ impl Library {
     pub fn album(&self, id: &str) -> Result<Option<Album>> {
         let Some(mut album) = self.albums_by_id(&[id.to_string()])?.pop() else { return Ok(None) };
         let db = self.db();
-        let ns = numbers(&db, "SELECT n FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no, rel", &[&id])?;
+        // One order (T-COU-4): a song with no place after those with one, by path.
+        let ns = numbers(&db, "SELECT n FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no IS NULL, track_no, rel", &[&id])?;
         let mut songs = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
         self.song_artists(&db, &mut songs)?;
         album.song = Some(songs);
@@ -578,7 +579,7 @@ impl Library {
             "SELECT s.n FROM songs s JOIN albums a ON a.id = s.album_id
                WHERE s.album_id IN (SELECT album_id FROM album_artists WHERE artist_id = ?1)
                   OR s.id IN (SELECT song_id FROM song_artists WHERE artist_id = ?1)
-               ORDER BY a.year DESC, a.order_name, a.n, coalesce(s.disc_no, 1), s.track_no, s.rel",
+               ORDER BY a.year DESC, a.order_name, a.n, coalesce(s.disc_no, 1), s.track_no IS NULL, s.track_no, s.rel",
             &[&artist_id],
         )?;
         let mut own = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?;
@@ -849,7 +850,7 @@ impl Library {
     pub fn album_tracks(&self, album: &str) -> Result<Vec<(String, i64, String, String, u64, Option<u32>, Option<u32>)>> {
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT id, folder, rel, title, coalesce(duration_ms, 0), disc_no, track_no FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no, rel",
+            "SELECT id, folder, rel, title, coalesce(duration_ms, 0), disc_no, track_no FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no IS NULL, track_no, rel",
         )?;
         let rows = st.query_map([album], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)?.max(0) as u64, r.get::<_, Option<i64>>(5)?.map(|d| d.max(0) as u32), r.get::<_, Option<i64>>(6)?.map(|t| t.max(0) as u32)))
@@ -1308,7 +1309,7 @@ impl Library {
         let mut of: HashMap<String, Vec<Song>> = HashMap::new();
         for chunk in albums.chunks(500) {
             let marks = vec!["?"; chunk.len()].join(", ");
-            let mut st = db.prepare(&format!("SELECT {SONG_COLS} FROM songs s WHERE s.album_id IN ({marks}) ORDER BY coalesce(s.disc_no, 1), s.track_no, s.rel"))?;
+            let mut st = db.prepare(&format!("SELECT {SONG_COLS} FROM songs s WHERE s.album_id IN ({marks}) ORDER BY coalesce(s.disc_no, 1), s.track_no IS NULL, s.track_no, s.rel"))?;
             let mut songs = st.query_map(params_from_iter(chunk.iter()), song_of)?.collect::<rusqlite::Result<Vec<_>>>()?;
             self.song_artists(&db, &mut songs)?;
             for s in songs {

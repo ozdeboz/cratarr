@@ -329,6 +329,9 @@ pub struct AlbumCopy {
     pub old_id: String,
     pub old_base: String,
     pub pid: String,
+    /// Every file of it Cratarr placed, as placed (T-COU-1): it speaks for no one, its record's facts are another copy's or as
+    /// they were.
+    pub silent: bool,
 }
 
 /// What one file of an album says of its record ([`vote_of`]).

@@ -823,7 +823,8 @@ fn files_named(tx: &Connection) -> Result<Vec<(i64, &'static str, String)>> {
 /// listed, as `assign` keeps the record with (CR18). What its files name and credit is the record's: an Incoming copy nobody
 /// has checked does not decide.
 fn first_ranked<'a>(albums: &'a [super::AlbumCopy], records: &[Option<i64>]) -> std::collections::BTreeMap<i64, &'a super::AlbumCopy> {
-    let key = |i: usize, a: &super::AlbumCopy| (a.rank, a.tracks.len(), std::cmp::Reverse(i));
+    // A copy whose every file Cratarr placed, as placed, speaks for no one (T-COU-1): any other first.
+    let key = |i: usize, a: &super::AlbumCopy| (!a.silent, a.rank, a.tracks.len(), std::cmp::Reverse(i));
     let mut first: std::collections::BTreeMap<i64, (usize, &super::AlbumCopy)> = std::collections::BTreeMap::new();
     for (i, (a, record)) in albums.iter().zip(records).enumerate() {
         let Some(record) = record else { continue };
@@ -969,6 +970,10 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
     // The artists a credit went from here (Z10), noted at the end where it was their last.
     let mut uncredited: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for (record, a) in first {
+        // A copy of files Cratarr placed, as placed, alone: no source of its record's credits or labels (T-COU-1, COU.2).
+        if a.silent {
+            continue;
+        }
         // Its names change on a retag only (R28, N11), as its list is let go of (R17): the copy that counts must rank at least as
         // high as the one that named it last (`named_rank`). A build without that copy (its library parked or out of reach, an
         // Incoming copy ranked first meanwhile) leaves them; a retag of it shows, as does a better copy (a Keep into Music).
@@ -1063,10 +1068,6 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
 /// Written where they differ, so a pass over a library as it was writes nothing. How many tracks moved.
 pub(super) fn record_places(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>]) -> Result<usize> {
     use cratarr_domain::facts::{Present, RefTrack, pairs_with};
-    if true {
-        let _ = (tx, albums, records);
-        return Ok(0);
-    }
     let mut moved = 0;
     let mut set = tx.prepare_cached("UPDATE tracks SET disc = ?2, number = ?3 WHERE id = ?1 AND retired_at IS NULL AND (disc IS NOT ?2 OR number IS NOT ?3)")?;
     for (record, a) in first_ranked(albums, records) {

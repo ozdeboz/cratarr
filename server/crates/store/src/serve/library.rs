@@ -608,6 +608,9 @@ struct Song<'a> {
     album_named: bool,
     /// Its ALBUM was a site's stamp alone (WM.16): no vote in its folder's album.
     stamped: bool,
+    /// Whether it speaks for its record (T-COU-1, T-COU-17): a file Cratarr placed, while as placed, has no vote in its folder's
+    /// album and is no source of its record's facts or picture (COU.1, COU.3, T-COU-15).
+    speaks: bool,
     album_artist: String,
     album_artists: Vec<String>,
     /// The album artist as the raw tags give it, settled with the folder's album as `album_artist` is: what the tag hash and the
@@ -674,10 +677,13 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
     let raw_named: Vec<&str> = raw_artists.iter().map(String::as_str).collect();
     let raw_credit = Some(cratarr_rules::names::credit_text(&raw_named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
     let raw_album_artist = row.first("albumartist").map(str::to_string).or(raw_credit).unwrap_or_else(|| UNKNOWN_ARTIST.into());
-    // A copy Cratarr placed is gathered by its placing folder, never by its tags (COU.17, T-COU-16).
-    let group = match &row.placed {
-        Some(dir) => format!("placed:{folder}:{dir}"),
-        None => ids::album(row, &raw_album_artist, folder),
+    // A copy Cratarr placed is gathered by its placing folder, never by its tags (COU.17, T-COU-16); a file it placed into a copy, as
+    // placed, by its folder, never by its tags: its folder's album takes it (`one_album_per_folder`), and alone it is its own (COU.1,
+    // COU.2).
+    let group = match (&row.placed, row.told) {
+        (Some(dir), _) => format!("placed:{folder}:{dir}"),
+        (None, Some(_)) => format!("placed:{folder}:{}", crate::catalogue::dir_of(&row.rel)),
+        (None, None) => ids::album(row, &raw_album_artist, folder),
     };
     let album_base = ids::album(row, &raw_album_artist, 0);
     let genres = rules.values(folder, "genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
@@ -690,6 +696,7 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
         album,
         album_named,
         stamped,
+        speaks: row.told.is_none(),
         album_artist,
         album_artists,
         raw_album_artist,
@@ -1814,7 +1821,9 @@ pub fn artist_number_in_tests(name: &str) -> i64 {
 fn labels_of_album(list: &[&Song]) -> Vec<(String, String)> {
     use cratarr_rules::hygiene::{Field, value};
     let labels = |s: &Song| -> Vec<String> { s.row.all("label").filter_map(|v| value(Field::Label, v)).flat_map(|v| crate::crates::labels_of(&v)).collect() };
-    let Some(s) = list.iter().find(|s| !labels(s).is_empty()) else { return Vec::new() };
+    // T-COU-12: the labels most of its files name, a tie to the first in track order (COU.3: nine to one keep "Harbour Tapes").
+    let Some(most) = majority(list.iter().map(|s| labels(s)).filter(|l| !l.is_empty())) else { return Vec::new() };
+    let Some(s) = list.iter().find(|s| labels(s) == most) else { return Vec::new() };
     let mut names: Vec<String> = Vec::new();
     for l in labels(s) {
         if !names.iter().any(|n| n.eq_ignore_ascii_case(&l)) {
@@ -1846,6 +1855,24 @@ fn track_order(row: &ServedRow) -> (u32, bool, Option<u32>, String) {
     (disc.unwrap_or(1), number.is_none(), number, row.rel.clone())
 }
 
+/// The value most of these name, a tie to the first named (T-COU-12: by majority, a tie to the first in track order).
+fn majority<T: PartialEq + Clone>(values: impl Iterator<Item = T>) -> Option<T> {
+    let mut counted: Vec<(T, usize)> = Vec::new();
+    for v in values {
+        match counted.iter_mut().find(|(c, _)| *c == v) {
+            Some(c) => c.1 += 1,
+            None => counted.push((v, 1)),
+        }
+    }
+    let most = counted.iter().map(|(_, n)| *n).max()?;
+    counted.into_iter().find(|(_, n)| *n == most).map(|(v, _)| v)
+}
+
+/// A file's album artists' MusicBrainz ids, lower case, in its order.
+fn album_artist_ids(row: &ServedRow) -> Vec<String> {
+    row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect()
+}
+
 /// The albums these folders make, each as the catalogue gives it a record: the library's own grouping, so a record is
 /// what a list shows. Pure.
 pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::catalogue::AlbumCopy> {
@@ -1870,24 +1897,28 @@ pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::c
                 let ((ad, an), (bd, bn)) = (place(*a), place(*b));
                 (ad.unwrap_or(1), an.unwrap_or(u32::MAX), &a.row.rel).cmp(&(bd.unwrap_or(1), bn.unwrap_or(u32::MAX), &b.row.rel))
             });
-            let first = list[0];
+            // What its record's facts are read from (T-COU-1, T-COU-12): the files that speak, by majority, a tie to the first in track
+            // order; a file Cratarr placed, as placed, says nothing.
+            let speak: Vec<&Song> = list.iter().copied().filter(|s| s.speaks).collect();
+            let first = speak.first().copied().unwrap_or(list[0]);
             // The file that named the album: one of a folder's that disagrees was settled to it, and its own tags say another.
-            let named = list.iter().copied().find(|s| ids::album(s.row, &s.raw_album_artist, s.folder) == s.group).unwrap_or(first);
+            let named = speak.iter().copied().find(|s| ids::album(s.row, &s.raw_album_artist, s.folder) == s.group).unwrap_or(first);
             crate::catalogue::AlbumCopy {
                 facts: RecordFacts {
-                    release: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_albumid"))),
+                    release: majority(speak.iter().filter_map(|s| s.row.first("musicbrainz_albumid")).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty())),
                     artist: fold(&first.album_artist),
                     // A copy whose files name no album says nothing of its title (WM.5, WM.15: a stamp is no title key).
-                    title: list.iter().find(|s| s.album_named).map(|s| fold(&s.album)).unwrap_or_default(),
+                    title: majority(speak.iter().filter(|s| s.album_named).map(|s| fold(&s.album))).unwrap_or_default(),
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
-                group: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_releasegroupid"))),
+                group: majority(speak.iter().filter_map(|s| s.row.first("musicbrainz_releasegroupid")).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty())),
                 artists: first.album_artists.clone(),
-                artist_ids: first.row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect(),
-                labels: labels_of_album(&list),
-                title: list.iter().find(|s| s.album_named).unwrap_or(&first).album.clone(),
+                // T-COU-3: the credit's ids are the files' by majority, never the first file's alone; a file naming none says nothing.
+                artist_ids: majority(speak.iter().map(|s| album_artist_ids(s.row)).filter(|ids| !ids.is_empty())).unwrap_or_default(),
+                labels: labels_of_album(&speak),
+                title: speak.iter().find(|s| s.album_named).unwrap_or(&first).album.clone(),
                 artist: first.album_artist.clone(),
-                year: list.iter().filter_map(|s| s.row.first("date").and_then(year_of)).max(),
+                year: majority(speak.iter().filter_map(|s| s.row.first("date").and_then(year_of))),
                 tracks: list
                     .iter()
                     .filter_map(|s| {
@@ -1904,6 +1935,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::c
                 old_id: first.group.clone(),
                 old_base: first.album_base.clone(),
                 pid: ids::album_pid(named.row, &named.raw_album_artist),
+                silent: speak.is_empty(),
             }
         })
         .collect();
@@ -2031,8 +2063,10 @@ fn write_albums(
             if !lead.get(&r.track.unwrap_or_default()).is_some_and(|l| std::ptr::eq(l.1, s)) {
                 continue;
             }
-            // A file that names no album shows its record's (WM.3).
-            let album = if s.album_named { s.album.as_str() } else { facts.credits.titles.get(&s.record).map_or(s.album.as_str(), String::as_str) };
+            // A file that names no album shows its record's (WM.3), as a file Cratarr placed, as placed, does (T-COU-1); a title set by
+            // hand wins (COU.13 (d)).
+            let album = if s.album_named && s.speaks { s.album.as_str() } else { facts.credits.titles.get(&s.record).map_or(s.album.as_str(), String::as_str) };
+            let album = facts.overrides.get(&s.album_id).and_then(|o| o.title.as_deref()).unwrap_or(album);
             ins_song.execute(params![
                 id,
                 ids::song_pid(r, &s.raw_album_artist),
@@ -2043,8 +2077,9 @@ fn write_albums(
                 s.artist_credit,
                 album,
                 s.album_artist,
-                r.first("tracknumber").and_then(leading_number),
-                r.first("discnumber").and_then(leading_number),
+                // Its place: its track's in its record (COU.5, T-COU-11), else its own numbers.
+                r.place.map_or_else(|| r.first("tracknumber").and_then(leading_number), |(_, n)| n),
+                r.place.map_or_else(|| r.first("discnumber").and_then(leading_number), |(d, _)| d),
                 r.first("date").and_then(year_of),
                 s.genres.first(),
                 bpm,
@@ -2115,10 +2150,11 @@ fn write_albums(
         let first = songs[0];
         // Its name: the first song's that names one (a copy whose files name none, or only a site's stamp, says nothing: WM.3).
         // None names it: the record's stored title (WM.3, WM.12: "Long Pier" by the rule), never "[Unknown Album]" for a record that has one.
-        let album_name = songs
-            .iter()
-            .find(|s| s.album_named)
-            .map(|s| s.album.as_str())
+        let album_name = facts
+            .overrides
+            .get(album_id)
+            .and_then(|o| o.title.as_deref())
+            .or_else(|| songs.iter().find(|s| s.album_named && s.speaks).map(|s| s.album.as_str()))
             .or_else(|| facts.credits.titles.get(&first.record).map(String::as_str))
             .unwrap_or(first.album.as_str());
         let copies = &records[album_id];
@@ -2128,14 +2164,15 @@ fn write_albums(
         // others see (the owner, 2026-11-07), so a record in a main library goes by that, and one only in people's own music by the
         // first copy added, which alone speaks there.
         let only_own = copies.iter().all(|c| c.copy.kind == Kind::Own);
-        let speaks = |s: &Song| if only_own { s.folder == row.copy.folder } else { kind_in(&facts.kinds, s.folder).0 != Kind::Own };
+        let speaks = |s: &Song| s.speaks && if only_own { s.folder == row.copy.folder } else { kind_in(&facts.kinds, s.folder).0 != Kind::Own };
         let said: Vec<&Song> = songs.iter().copied().filter(|s| speaks(s)).collect();
         let spoken: Vec<&Song> = said.iter().copied().chain(copies.iter().flat_map(|c| c.songs.iter().copied()).filter(|s| speaks(s))).collect();
         let every = || spoken.iter().copied();
-        let release = every().find_map(|s| s.row.first("musicbrainz_albumid"));
-        let mut years: Vec<u32> = said.iter().filter_map(|s| s.row.first("date").and_then(year_of)).collect();
+        // T-COU-12: the release and the year most of the files that speak name, a tie to the first in track order (COU.3).
+        let release = majority(said.iter().filter_map(|s| s.row.first("musicbrainz_albumid"))).or_else(|| majority(every().filter_map(|s| s.row.first("musicbrainz_albumid"))));
+        let mut years: Vec<u32> = majority(said.iter().filter_map(|s| s.row.first("date").and_then(year_of))).into_iter().collect();
         if years.is_empty() {
-            years = every().filter_map(|s| s.row.first("date").and_then(year_of)).collect();
+            years = majority(every().filter_map(|s| s.row.first("date").and_then(year_of))).into_iter().collect();
         }
         // Its original year: its files' original date, else MusicBrainz's for its release (0.9.5); shown as its year
         // where it is earlier than its release's (a reissue's), so every list and order has it.
@@ -2172,7 +2209,7 @@ fn write_albums(
         // The record's one picture resolver (COU.11, FA14): its kept cover where chosen, else its files' (T-COU-22: a cover file, else
         // the picture inside its files that speak, in track order: a file Cratarr placed, as placed, says nothing), else a service's
         // first kept: the stamp every surface and the device's covers feed go by.
-        let mut speaking: Vec<&Song> = row.songs.to_vec();
+        let mut speaking: Vec<&Song> = row.songs.iter().copied().filter(|s| s.speaks).collect();
         speaking.sort_by_key(|s| track_order(s.row));
         let at = Path::new(root).join(dir);
         let files_print = if speaking.is_empty() {
@@ -2238,9 +2275,11 @@ fn write_albums(
         let n = tx.last_insert_rowid();
         ins_fts.execute(params![n, album_name, first.album_artist])?;
         ins_tri.execute(params![n, album_name])?;
+        // T-COU-3: the album artist's MusicBrainz id the files that speak give by majority, never the first file's alone.
+        let first_mbid = majority(said.iter().filter_map(|s| s.row.first("musicbrainz_albumartistid")));
         for (i, name) in first.album_artists.iter().enumerate() {
             let aid = facts.album_artist(first, name)?;
-            let mbid = if i == 0 { first.row.first("musicbrainz_albumartistid") } else { None };
+            let mbid = if i == 0 { first_mbid } else { None };
             ins_aa.execute(params![album_id, aid, name, i as i64, mbid])?;
             credited.insert(aid);
         }
@@ -2408,14 +2447,16 @@ fn one_album_per_folder(songs: &mut [Song]) {
     for &i in &order {
         let s = &songs[i];
         let list = votes.entry(dir(s)).or_default();
-        let real = usize::from(!s.stamped);
+        // A stamp has no vote (WM.16), nor a file Cratarr placed, as placed (COU.1, T-COU-1).
+        let silent = s.stamped || !s.speaks;
+        let real = usize::from(!silent);
         match list.iter_mut().find(|(_, _, id, _)| *id == s.group) {
             Some(v) => {
                 v.0 += real;
                 v.1 += 1;
-                v.3 &= s.stamped;
+                v.3 &= silent;
             }
-            None => list.push((real, 1, s.group.as_str(), s.stamped)),
+            None => list.push((real, 1, s.group.as_str(), silent)),
         }
     }
     let chosen: HashMap<(i64, String), (String, usize)> = votes
