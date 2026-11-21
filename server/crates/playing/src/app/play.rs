@@ -275,7 +275,8 @@ pub async fn by_name<H: PlayingHost>(app: &Arc<H>, said: &str, shuffled: bool, l
 
 /// `by_name`, on its host.
 async fn by_name_with(app: &dyn PlayingHost, said: &str, shuffled: bool, limit: usize, want: Option<&str>) -> Result<super::ByName, ToggleError> {
-    let Some(id) = app.playlists().spoken(said).await? else { return Ok(super::ByName { playlist: None, tracks: Vec::new() }) };
+    let Some(found) = app.playlists().spoken(said).await? else { return Ok(super::ByName::of(None, Vec::new())) };
+    let id = found.id.clone();
     let how = if shuffled { How::Shuffle } else { How::Play };
     let most = limit.clamp(1, super::playlists::PLAY_MAX);
     let tracks = match choose_with(app, want, &Collection::Playlist { id: id.clone() }, how, None, most, None).await {
@@ -283,7 +284,7 @@ async fn by_name_with(app: &dyn PlayingHost, said: &str, shuffled: bool, limit: 
         Err(ToggleError::CannotPlay(_)) => Vec::new(),
         Err(e) => return Err(e),
     };
-    Ok(super::ByName { playlist: Some(id), tracks })
+    Ok(super::ByName::of(Some(found), tracks))
 }
 
 /// A song of Cratarr's own library as players hold it.

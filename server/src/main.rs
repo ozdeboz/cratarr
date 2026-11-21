@@ -52,6 +52,9 @@ mod whole_router;
 // What Home Assistant reads of Cratarr, pinned (HA-CONTRACT-0.18).
 #[cfg(test)]
 mod home_assistant;
+// The one command path through the router (SCENARIOS-GF, GF's core).
+#[cfg(test)]
+mod one_path;
 
 
 /// What the arguments ask (W4): with none, the server; a known flag, its own work; anything else, nothing at all. So a flag

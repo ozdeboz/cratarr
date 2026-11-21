@@ -28,10 +28,30 @@ pub const PLAY_MAX: usize = 100;
 /// A playlist found by a spoken name, as its tracks on a server (decision 0015): the caller plays them itself.
 #[derive(Debug, Serialize)]
 pub struct ByName {
-    /// The playlist it was taken for; `None` when nothing fits what was said.
+    /// The playlist it was taken for (its `pl-` id); `None` when nothing fits what was said.
     pub playlist: Option<String>,
+    /// Its name as shown (HA1: a voice assistant says it, never the id).
+    pub name: Option<String>,
+    /// What a voice says for it: its first spoken name, else its name, whatever words matched (HA1, the owner).
+    pub spoken: Option<String>,
     /// The server's ids of its tracks, in order or shuffled, at most the limit asked for.
     pub tracks: Vec<String>,
+}
+
+/// The playlist a spoken name found: its id, its name, and what a voice says for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub id: String,
+    pub name: String,
+    /// Its first spoken name, else its name.
+    pub spoken: String,
+}
+
+impl ByName {
+    /// The answer for what was found (none: nothing fits), with its tracks.
+    pub fn of(found: Option<Found>, tracks: Vec<String>) -> Self {
+        Self { playlist: found.map(|f| f.id), name: None, spoken: None, tracks }
+    }
 }
 
 /// A playlist's facts for the Playlists page's table (decision 0042): how long, its top genres, how much of it the
@@ -1095,12 +1115,16 @@ impl PlaylistService {
 
     /// The playlist meant by what was said (decision 0015), by its name or one it is spoken as; none when nothing fits.
     /// Its tracks are chosen as for any play (app::play::by_name).
-    pub async fn spoken(&self, said: &str) -> Result<Option<String>, ToggleError> {
+    pub async fn spoken(&self, said: &str) -> Result<Option<Found>, ToggleError> {
         let list = self.view(None).await?;
         let named: Vec<crate::voice::Named> = list.iter().map(|p| crate::voice::Named { name: &p.name, spoken: &p.spoken }).collect();
         // By its name, and back to its id: one's own first, before another's of that name.
         let found = crate::voice::find(crate::voice::spoken_name(said), &named);
-        Ok(found.and_then(|n| list.iter().find(|p| p.name == n)).map(|p| p.id.clone()))
+        Ok(found.and_then(|n| list.iter().find(|p| p.name == n)).map(|p| Found {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            spoken: p.spoken.first().cloned().unwrap_or_else(|| p.name.clone()),
+        }))
     }
 
     /// Set the other names a playlist is spoken as. Blank ones are dropped. Returns the undo token (none when nothing
