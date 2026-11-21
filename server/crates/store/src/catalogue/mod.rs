@@ -10,12 +10,15 @@
 
 mod artists;
 mod editions;
+pub mod facts;
 mod first;
+pub mod holding;
 mod id3;
 pub mod identity;
 mod index_log;
 pub mod labels;
 pub mod normalise;
+pub mod record_log;
 pub mod records;
 pub mod tags;
 pub mod walk;
@@ -1154,6 +1157,8 @@ impl Catalogue {
         }
         move_analysis_shapes(&conn)?;
         index_log::start(&conn).context("starting the library's change log")?;
+        conn.execute_batch(facts::SCHEMA).context("creating the facts with no home")?;
+        record_log::start(&conn).context("starting what the records owe the change log")?;
         let facts_written = Arc::new(AtomicU64::new(0));
         count_facts_writes(&conn, facts_written.clone())?;
         let cat = Self {

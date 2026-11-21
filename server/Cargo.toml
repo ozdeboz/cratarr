@@ -25,6 +25,8 @@ repository = "https://github.com/ozdeboz/cratarr"
 [workspace.dependencies]
 anyhow = "1"
 cratarr-rules = { path = "rules" }
+# The pure domain (DOMAIN-CORE §14): above the rules, below the store.
+cratarr-domain = { path = "crates/domain" }
 axum = "0.8"
 ipnet = "2"
 # Hi-res to CD conversion (decision 0013). Exact pins, minimal features: lossless decoders only.

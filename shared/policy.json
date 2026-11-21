@@ -1,0 +1,320 @@
+{
+  "about": "SCENARIOS-DC1 CN1: the policy table is the spec. Each row's answers are the viewers' in this order.",
+  "viewers": [
+    "root",
+    "key",
+    "alice",
+    "bob",
+    "carol"
+  ],
+  "rows": [
+    {
+      "state": "not had, Bandcamp page P7",
+      "action": "the preview's Play row",
+      "answers": [
+        "yes",
+        "yes",
+        "yes",
+        "yes",
+        "yes"
+      ]
+    },
+    {
+      "state": "not had, Bandcamp page P7",
+      "action": "Want",
+      "answers": [
+        "yes",
+        "no: right",
+        "yes",
+        "yes",
+        "no: right"
+      ]
+    },
+    {
+      "state": "not had, Bandcamp page P7",
+      "action": "Favourite, Rating, Download…, Sync, Delete, Edit",
+      "answers": [
+        "no: state",
+        "no",
+        "no: state",
+        "no: state",
+        "no: state"
+      ]
+    },
+    {
+      "state": "not had, Bandcamp page P7",
+      "action": "Share, Web search, Go to, View",
+      "answers": [
+        "yes",
+        "yes",
+        "yes",
+        "yes",
+        "yes"
+      ]
+    },
+    {
+      "state": "not had, alice's request open",
+      "action": "Requested",
+      "answers": [
+        "—",
+        "—",
+        "yes",
+        "—",
+        "—"
+      ]
+    },
+    {
+      "state": "not had, alice's request open",
+      "action": "Want",
+      "answers": [
+        "yes",
+        "no: right",
+        "no: state",
+        "yes",
+        "no: right"
+      ]
+    },
+    {
+      "state": "had, MUSIC",
+      "action": "the Play row",
+      "answers": [
+        "yes",
+        "yes",
+        "yes",
+        "yes",
+        "yes"
+      ]
+    },
+    {
+      "state": "had, MUSIC",
+      "action": "Favourite, Rating",
+      "answers": [
+        "yes",
+        "no: right",
+        "yes",
+        "yes",
+        "yes"
+      ]
+    },
+    {
+      "state": "had, MUSIC",
+      "action": "Edit, Change cover, Missing tracks…",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "had, MUSIC",
+      "action": "Save to, Move to MORE, Replace in MUSIC",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "had, MUSIC",
+      "action": "Move to IN, Move to IN2 (F34)",
+      "answers": [
+        "no: state",
+        "no",
+        "no",
+        "no",
+        "no"
+      ]
+    },
+    {
+      "state": "had, MUSIC",
+      "action": "Delete album",
+      "answers": [
+        "ask",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "had, MUSIC",
+      "action": "Download…, Sync to this device",
+      "answers": [
+        "yes",
+        "no: right",
+        "yes",
+        "yes",
+        "no: right"
+      ]
+    },
+    {
+      "state": "had only in OWN-A, alice's first",
+      "action": "Edit",
+      "answers": [
+        "yes",
+        "no",
+        "yes",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "had only in OWN-A, alice's first",
+      "action": "Delete album",
+      "answers": [
+        "no: right",
+        "no",
+        "ask",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "had only in OWN-A, alice's first",
+      "action": "Save to MUSIC",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "MUSIC's copy converting",
+      "action": "Move, Replace, Delete of that copy",
+      "answers": [
+        "no: state",
+        "no",
+        "no",
+        "no",
+        "no"
+      ]
+    },
+    {
+      "state": "MUSIC's copy converting",
+      "action": "Cancel conversion",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "arrival in IN, asked by alice",
+      "action": "Add to Your music (OWN-A, her default)",
+      "answers": [
+        "—",
+        "no",
+        "yes",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "arrival in IN, asked by alice",
+      "action": "Add to MUSIC",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "arrival in IN, asked by alice",
+      "action": "Replace in MUSIC (better)",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "arrival in IN, asked by alice",
+      "action": "Delete",
+      "answers": [
+        "ask",
+        "no",
+        "ask",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "arrival in IN, asked by alice",
+      "action": "Undo, after root's Add to MUSIC",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "arrival in IN2, asked by nobody",
+      "action": "Add to MUSIC",
+      "answers": [
+        "yes",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "arrival in IN2, asked by nobody",
+      "action": "Delete",
+      "answers": [
+        "ask",
+        "no",
+        "no: right",
+        "no: right",
+        "no: right"
+      ]
+    },
+    {
+      "state": "bob's upload in UPL, waiting",
+      "action": "Add to (his default)",
+      "answers": [
+        "yes",
+        "no",
+        "none: hidden",
+        "yes",
+        "none: hidden"
+      ]
+    },
+    {
+      "state": "bob's upload in UPL, waiting",
+      "action": "Delete",
+      "answers": [
+        "ask",
+        "no",
+        "none: hidden",
+        "ask",
+        "none: hidden"
+      ]
+    },
+    {
+      "state": "bob's upload in UPL, waiting",
+      "action": "Replace in MUSIC (UP03.4)",
+      "answers": [
+        "no: state",
+        "no",
+        "none",
+        "no: state",
+        "none"
+      ]
+    }
+  ]
+}

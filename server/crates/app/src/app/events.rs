@@ -89,6 +89,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut preferences = app.served.as_ref().map(|s| s.userdata.subscribe_preferences());
     // Albums' covers as they change (0.9.7): their new stamps.
     let mut covers = app.served.as_ref().map(|s| s.subscribe_covers());
+    // Records a view shows as they change (LV3): the change log's rev and their ids.
+    let mut records = app.served.as_ref().map(|s| s.subscribe_records());
     // Single-track replacement's downloads as they go (0.9.8).
     let mut fetches = super::track_fetch::subscribe();
     // Runs changing the library's files (decision 0092), as they go.
@@ -146,6 +148,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
         let mut open = [true; 4];
         let mut resend = tokio::time::interval(RESEND);
         resend.reset();
+        let mut burst = Burst::default();
         loop {
             let alive = tokio::select! {
                 r = player.recv() => match r {
@@ -259,6 +262,26 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                     }
                 },
                 r = async {
+                    match records.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match r {
+                    Ok(c) => match records_told(&c, &mut burst, std::time::Instant::now()) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
+                    // Some went by unheard: the page reads the records on screen again.
+                    Err(broadcast::error::RecvError::Lagged(_)) => match Message::of("changed", &serde_json::json!({ "stale": "record" })) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
+                    Err(broadcast::error::RecvError::Closed) => {
+                        records = None;
+                        true
+                    }
+                },
+                r = async {
                     match covers.as_mut() {
                         Some(rx) => rx.recv().await,
                         None => std::future::pending().await,
@@ -280,6 +303,36 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
         }
     }));
     rx
+}
+
+/// Above this many records told in one second, the page is told the records are stale in place of their ids (LV12, the review's M4):
+/// it reads what is on screen.
+const RECORDS_ONE_BY_ONE: usize = 200;
+
+/// How many records a stream told in the second it is in.
+#[derive(Debug, Default)]
+struct Burst {
+    since: Option<std::time::Instant>,
+    told: usize,
+}
+
+/// What a stream is told of records changed (LV3, LV12): `changed { rev, ids }`, every page alike (a record row is everyone's:
+/// what one account alone sees, its hearts, comes as its favourites); past `RECORDS_ONE_BY_ONE` in a second, `changed { rev,
+/// stale: "record" }` once that second. Pure.
+fn records_told(c: &crate::serve::RecordsChanged, burst: &mut Burst, now: std::time::Instant) -> Option<Message> {
+    if burst.since.is_none_or(|s| now.duration_since(s) >= std::time::Duration::from_secs(1)) {
+        *burst = Burst { since: Some(now), told: 0 };
+    }
+    let before = burst.told;
+    burst.told += c.ids.len();
+    if burst.told <= RECORDS_ONE_BY_ONE {
+        Message::of("changed", &serde_json::json!({ "rev": c.rev, "ids": c.ids }))
+    } else if before <= RECORDS_ONE_BY_ONE {
+        Message::of("changed", &serde_json::json!({ "rev": c.rev, "stale": "record" }))
+    } else {
+        // Told stale already this second: the page reads what is on screen once.
+        None
+    }
 }
 
 /// Above this many covers changed at once (a library restructured), the page is told to read every stamp again.
@@ -327,4 +380,51 @@ async fn changed<T: Clone>(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::serve::{RecordChanged, RecordsChanged};
+
+    fn changed(rev: i64, ids: std::ops::Range<i64>) -> RecordsChanged {
+        RecordsChanged { rev, ids: ids.map(|n| RecordChanged { id: format!("al-{n}"), op: "changed", into: None }).collect() }
+    }
+
+    fn data(m: Option<Message>) -> serde_json::Value {
+        let m = m.expect("told");
+        assert_eq!(m.name, "changed");
+        serde_json::from_str(&m.data).unwrap()
+    }
+
+    /// LV3: a record's change is told as `changed { rev, ids }`, the same to every stream: a record row is everyone's (the log's
+    /// `account` ''), and what one account alone sees, its hearts, is its favourites' (the starred channel, to its pages alone). A
+    /// merged record names where it went.
+    #[test]
+    fn a_change_is_told_to_whose_view_it_changes() {
+        let night_ferry = RecordsChanged { rev: 140, ids: vec![RecordChanged { id: "al-42".into(), op: "changed", into: None }] };
+        let now = std::time::Instant::now();
+        let told: Vec<serde_json::Value> = ["root", "alice", "bob"].iter().map(|_| data(records_told(&night_ferry, &mut Burst::default(), now))).collect();
+        for t in &told {
+            assert_eq!(t, &serde_json::json!({ "rev": 140, "ids": [{ "id": "al-42", "op": "changed" }] }));
+        }
+        let merged = RecordsChanged { rev: 141, ids: vec![RecordChanged { id: "al-21".into(), op: "merged", into: Some("al-20".into()) }] };
+        assert_eq!(data(records_told(&merged, &mut Burst::default(), now))["ids"][0], serde_json::json!({ "id": "al-21", "op": "merged", "into": "al-20" }));
+    }
+
+    /// LV12 (kind 4): past 200 ids in a second, "records stale" in place of the ids, once that second; the next second, ids again.
+    /// Never 11,000 ids in one message.
+    #[test]
+    fn a_burst_tells_records_stale() {
+        let start = std::time::Instant::now();
+        let mut burst = Burst::default();
+        assert_eq!(data(records_told(&changed(100, 0..150), &mut burst, start))["ids"].as_array().unwrap().len(), 150);
+        let stale = data(records_told(&changed(101, 150..11_000), &mut burst, start + std::time::Duration::from_millis(300)));
+        assert_eq!(stale, serde_json::json!({ "rev": 101, "stale": "record" }));
+        assert!(records_told(&changed(102, 11_000..11_010), &mut burst, start + std::time::Duration::from_millis(600)).is_none(), "told once that second");
+        let later = data(records_told(&changed(103, 0..5), &mut burst, start + std::time::Duration::from_millis(1_200)));
+        assert_eq!(later["ids"].as_array().unwrap().len(), 5, "a new second: ids again");
+        // One burst alone past the limit: stale, never its ids.
+        assert_eq!(data(records_told(&changed(104, 0..11_000), &mut Burst::default(), start))["stale"], "record");
+    }
 }

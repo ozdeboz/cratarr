@@ -228,16 +228,18 @@
     }
   }
 
-  /** The others' ticked ones into one's own playlists, one Undo for them all. */
-  async function copy(list: string[]) {
+  /** The others' ticked ones into one's own playlists, one Undo for them all; the toast names one by its name. */
+  async function copy(list: Item[]) {
     if (working) return;
     working = true;
     const made: string[] = [];
+    const names: string[] = [];
     const tokens: (string | null)[] = [];
     try {
-      for (const id of list) {
-        const { playlist, undo } = await copyPlaylist(id);
+      for (const p of list) {
+        const { playlist, undo } = await copyPlaylist(p.id);
         made.push(playlist);
+        names.push(p.name);
         tokens.push(undo);
       }
       onclose();
@@ -248,7 +250,7 @@
       refresh();
     }
     if (!made.length) return;
-    withUndo(made.length === 1 ? `Copied to ${made[0]}.` : `Copied ${made.length} playlists.`, tokens, {
+    withUndo(made.length === 1 ? `Copied ${names[0]}.` : `Copied ${made.length} playlists.`, tokens, {
       after: (undone) => made.forEach(undone ? followDelete : followCreate),
     });
   }
@@ -339,7 +341,7 @@
     <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
   {:else if e === 'copyToMine'}
     {#if theirs.length}
-      <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(theirs.map((x) => x.id))} />
+      <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(theirs)} />
     {/if}
   {:else if e === 'download'}
     <MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (mode = 'download')} />
@@ -393,7 +395,7 @@
         icon="pencil"
         label="Rename"
         onclick={() => {
-          nameField = one.id;
+          nameField = one.name;
           mode = 'rename';
         }}
       />
@@ -464,7 +466,7 @@
     >
       <div class="heading">Rename</div>
       <input type="text" aria-label="New name" maxlength="100" bind:value={nameField} />
-      <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === one.id} aria-busy={working}>Rename</button>
+      <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === one.name} aria-busy={working}>Rename</button>
     </form>
   {:else if mode === 'spoken'}
     <form

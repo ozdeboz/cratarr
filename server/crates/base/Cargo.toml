@@ -19,6 +19,7 @@ cratarr-served.workspace = true
 # The job runner (RN): its jobs, resources and words, below the base.
 cratarr-runner.workspace = true
 cratarr-rules.workspace = true
+cratarr-domain.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true

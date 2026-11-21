@@ -578,36 +578,32 @@ fn disc_of(path: &str) -> Option<&str> {
     is_disc_folder(last).then_some(last)
 }
 
-/// Words that make a recording another version of its title (X3): a file's title saying one its list's title does not is not
-/// that track.
-const VERSIONS: [&str; 12] = ["instrumental", "live", "remix", "mix", "acoustic", "demo", "karaoke", "acapella", "cappella", "unplugged", "reprise", "edit"];
-
-/// Whether a file's title (one way its name reads, `titles_of`) is a list track's (X3): as `renumber::same_title` has it, but an
-/// "Artist - Title" list compares its title part, never its artist alone; and a version word in brackets or after " - " that the
-/// list's title lacks (Instrumental, Live, Remix…) makes the file another version. Pure.
-fn titled_as(file: &str, list: &str) -> bool {
-    let words = |s: &str| -> Vec<String> { s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect() };
-    let listed = words(list);
-    let lower = file.to_lowercase();
-    let marked: Vec<&str> = lower.split(['(', '[']).skip(1).chain(lower.split(" - ").skip(1)).collect();
-    if marked.iter().any(|part| words(part).iter().any(|w| VERSIONS.contains(&w.as_str()) && !listed.contains(w))) {
-        return false;
-    }
-    match list.split_once(" - ") {
-        Some((_, title)) => crate::app::import::loose(file) == crate::app::import::loose(list) || super::renumber_base::same_title(file, title.trim()),
-        None => super::renumber_base::same_title(file, list),
-    }
-}
+// Whether a file's title (one way its name reads, `titles_of`) is a list track's: the one title rule, X3's, the domain's
+// (PAIR01, OQ-PAIR01-1 (a)), which the holding's copies pair by too.
+use cratarr_domain::identity::titled_as;
 
 fn format_of(f: &Offered) -> String {
     f.extension.clone().filter(|e| !e.is_empty()).unwrap_or_else(|| crate::slskd::base_name(&f.filename).rsplit('.').next().unwrap_or("").to_string()).to_lowercase()
 }
 
-/// The folders among a search's answers that hold every track of the release, each track's file by its title and the
-/// closest length (within the slack, where both are known), in the release's order. Files are FLAC or MP3 (the library's
-/// formats, which Cratarr writes tags into), never locked; users in `failed` are left out. Best first: lossless, the highest
-/// bitrate (G3), a free slot, a short queue, fewest extra files, the fastest.
+/// The disc and the number a file's path says (PAIR01's Soulseek `fits`): its disc from a disc folder ("CD2" is 2), its number from
+/// its name's leading digits. They only break ties (`assign`).
+fn place_of(path: &str) -> (Option<u32>, Option<u32>) {
+    let disc = disc_of(path).and_then(|d| d.trim_start_matches(|c: char| !c.is_ascii_digit()).split(|c: char| !c.is_ascii_digit()).next()?.parse().ok());
+    let name = crate::slskd::base_name(path);
+    let digits: String = name.chars().take_while(char::is_ascii_digit).collect();
+    (disc, digits.parse().ok())
+}
+
+/// The folders among a search's answers that hold every track of the release, paired one for one by `assign` (PAIR01): the most
+/// pairs, then the fewest by title alone, then the least difference in length, ties by the files' places and paths; each pair by
+/// the one title rule and the one length rule (within the slack, where both are known). A folder is a candidate exactly when every
+/// track pairs; its files are each track's, in the release's order. Files are FLAC or MP3 (the library's formats, which Cratarr
+/// writes tags into), never locked; users in `failed` are left out. A length no file can have, or one past what milliseconds hold,
+/// is never within the slack: read as unknown, its file pairs by title alone and its folder is never certain (G2). Best first:
+/// lossless, the highest bitrate (G3), a free slot, a short queue, fewest extra files, the fastest.
 pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Vec<Folder> {
+    use cratarr_domain::assign::{Fit, Side, assign, fit, ms_of_secs};
     let mut out = Vec::new();
     if tracks.is_empty() {
         return out;
@@ -623,32 +619,22 @@ pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Ve
             };
             dirs.entry(dir.to_string()).or_default().push(f);
         }
-        'dir: for (dir, files) in dirs {
+        for (dir, files) in dirs {
             if files.len() < tracks.len() {
                 continue;
             }
-            let mut used = vec![false; files.len()];
-            let mut picked = Vec::with_capacity(tracks.len());
-            for t in tracks {
-                let best = files
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, f)| {
-                        !used[*i]
-                            && titles_of(&f.filename).iter().any(|n| titled_as(n, &t.title))
-                            && match (t.length_ms, f.length) {
-                                (Some(want), Some(secs)) => (want - secs * 1000).abs() <= LENGTH_SLACK_MS,
-                                _ => true,
-                            }
-                    })
-                    .min_by_key(|(_, f)| match (t.length_ms, f.length) {
-                        (Some(want), Some(secs)) => (want - secs * 1000).abs(),
-                        _ => i64::MAX,
-                    });
-                let Some((i, f)) = best else { continue 'dir };
-                used[i] = true;
-                picked.push((*f).clone());
+            // Each file's length in whole milliseconds, by a checked multiply (T4): none where it can't be held.
+            let ms: Vec<Option<i64>> = files.iter().map(|f| f.length.and_then(ms_of_secs)).collect();
+            let titles: Vec<Vec<String>> = files.iter().map(|f| titles_of(&f.filename)).collect();
+            let places: Vec<(Option<u32>, Option<u32>)> = files.iter().map(|f| place_of(&f.filename)).collect();
+            let list: Vec<Side> = tracks.iter().map(|t| Side { disc: Some(t.disc), number: Some(t.position), key: &t.title, length_ms: t.length_ms }).collect();
+            let sides: Vec<Side> = files.iter().zip(&places).zip(&ms).map(|((f, (disc, number)), ms)| Side { disc: *disc, number: *number, key: &f.filename, length_ms: *ms }).collect();
+            let pairs = assign(&list, &sides, |t, f| if titles[f].iter().any(|n| titled_as(n, &tracks[t].title)) { fit(tracks[t].length_ms, ms[f]) } else { Fit::No });
+            if pairs.len() < tracks.len() {
+                continue;
             }
+            // A length that can't be held reads as unknown from here on (the check, the ranks, `certain_folder`).
+            let picked: Vec<Offered> = pairs.iter().map(|&(_, f)| Offered { length: files[f].length.filter(|_| ms[f].is_some()), ..files[f].clone() }).collect();
             let mut counts: BTreeMap<String, usize> = BTreeMap::new();
             for f in &picked {
                 *counts.entry(format_of(f)).or_default() += 1;
@@ -4726,6 +4712,47 @@ pub mod tests {
         assert_eq!(found.iter().map(|f| (f.dir.as_str(), f.files.len())).collect::<Vec<_>>(), [(r"x\Air\Moon Safari", 2)]);
         assert_eq!(disc_of(r"x\Air\Moon Safari\CD2\01 Two.flac"), Some("CD2"));
         assert!(is_disc_folder("Disc 1") && is_disc_folder("cd2") && !is_disc_folder("CDs and more"));
+    }
+
+    /// PAIR01.1 through the caller (the first failing test): a folder every track pairs with is found, each track its file in the
+    /// list's order, in either listing order. Red first: today's greedy gives track 1 the first listed of two at 1 000 and leaves
+    /// track 2 3 000 off (the twin: 4 000), so no folder.
+    #[test]
+    fn a_crossing_folder_is_found() {
+        let q = |first: (&str, i64), second: (&str, i64)| {
+            answer("peer-q", true, vec![file(&format!(r"q\Kite Theory\Quiet Hours\{}", first.0), first.1), file(&format!(r"q\Kite Theory\Quiet Hours\{}", second.0), second.1)])
+        };
+        for (list, files) in [
+            // The crossing case: 181 000 and 179 000 against 180 s (listed first) and 182 s.
+            ([track(1, "Untitled", 181), track(2, "Untitled", 179)], [("01 Untitled.flac", 180), ("02 Untitled.flac", 182)]),
+            // Its twin, with no tie: 180 000 and 178 000 against 179 s and 182 s.
+            ([track(1, "Untitled", 180), track(2, "Untitled", 178)], [("01 Untitled.flac", 179), ("02 Untitled.flac", 182)]),
+        ] {
+            for answers in [vec![q(files[0], files[1])], vec![q(files[1], files[0])]] {
+                let found = folders_of(&answers, &list, &[]);
+                assert_eq!(found.len(), 1, "a folder every track pairs with is found: {list:?}");
+                let names: Vec<&str> = found[0].files.iter().map(|f| crate::slskd::base_name(&f.filename)).collect();
+                assert_eq!(names, ["02 Untitled.flac", "01 Untitled.flac"], "each track its file, in the list's order");
+                assert_eq!(found[0].extra, 0);
+            }
+        }
+    }
+
+    /// PAIR01.5 (c) through the caller: a peer's impossible length pairs nothing by length, never panics nor wraps. Red first:
+    /// `secs * 1000` panics in a test build for `i64::MAX` and 2^61 + 250 (a release build wraps the second to Pier's 250 000).
+    #[test]
+    fn a_peers_impossible_length_pairs_nothing() {
+        let pier = [track(1, "Pier", 250)];
+        let wraps = 2_305_843_009_213_694_202_i64;
+        assert_eq!(wraps.wrapping_mul(1_000), 250_000);
+        for secs in [-5, 0, i64::MAX, wraps] {
+            let found = folders_of(&[answer("peer-p", true, vec![file(r"p\Glass Harbour\Sea Wall\01 Pier.flac", secs)])], &pier, &[]);
+            // Never found "within the slack": no folder, or one paired by title alone whose length reads as unknown, so never certain
+            // (G2).
+            if let Some(f) = found.first() {
+                assert!(f.files.iter().all(|o| o.length.is_none()), "{secs} s: paired by title alone, its length unknown: {f:?}");
+            }
+        }
     }
 
     /// X3: a version word in a file's title that the list's title lacks makes it another version; an "Artist - Title" list is

@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS change_log (
   at INTEGER NOT NULL, shared INTEGER NOT NULL DEFAULT 0, seen_by TEXT NOT NULL DEFAULT '');
 -- The highest rev pruned: asked for changes since before it, a device reads everything again.
 CREATE TABLE IF NOT EXISTS change_log_floor (one INTEGER PRIMARY KEY CHECK (one = 1), rev INTEGER NOT NULL);
+-- A kind pruned on its own (LV12: the records', so a burst of them prunes no other kind's rows): the highest of its revs pruned.
+CREATE TABLE IF NOT EXISTS change_log_kind_floor (kind TEXT PRIMARY KEY, rev INTEGER NOT NULL) WITHOUT ROWID;
 -- The playlist operations applied or refused, by the account and the operation's id: one sent again is not applied
 -- again, and a refused one is refused again (`why`, none when applied). Kept as long as the change log (epoch ms).
 CREATE TABLE IF NOT EXISTS playlist_op (account TEXT NOT NULL, op_id TEXT NOT NULL, at INTEGER NOT NULL, why TEXT,
@@ -61,11 +63,52 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     if !has("playlist_op", "why")? {
         conn.execute_batch("ALTER TABLE playlist_op ADD COLUMN why TEXT")?;
     }
+    // A merged record's row names the record it went into (LV, RV3).
+    if !has("change_log", "into_item")? {
+        conn.execute_batch("ALTER TABLE change_log ADD COLUMN into_item TEXT")?;
+    }
     Ok(())
 }
 
-/// The most rows the change log keeps; past them the oldest go, as do those older than `KEEP_SECS`.
+/// The user data's tables a record view reads (LV1), by `album` (`al-<n>`), each with the columns an update must change to show:
+/// the facts set by hand, an arrival's review and its checks heard.
+const RECORD_TABLES: [(&str, &[&str]); 3] = [("record_overrides", &["field", "value"]), ("album_review", &["folder", "state", "undo"]), ("intake_heard", &["folder", "heard"])];
+
+/// A record's row in the change log, for everyone, by a trigger on a table its view reads: its earlier row gone, a new rev (not
+/// `INSERT OR REPLACE`: inside a trigger the conflict handling is the statement's that fired it).
+fn record_logged(at: &str) -> String {
+    format!(
+        "DELETE FROM change_log WHERE account = '' AND kind = 'record' AND item = {at}.album AND seen_by = '';
+         INSERT INTO change_log (account, kind, item, op, at, shared) VALUES ('', 'record', {at}.album, 'changed', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), 1);"
+    )
+}
+
+/// Whether the row `at`'s album is a record's id, `al-<n>`: never an album's id from before records (0.15's `al-<hash>`), which
+/// the first start moves off (`albums`).
+fn a_record(at: &str) -> String {
+    format!("({at}.album GLOB 'al-[0-9]*' AND NOT substr({at}.album, 4) GLOB '*[^0-9]*')")
+}
+
+/// The triggers that log a record's view's changes written here (LV1): no writer has to remember. Written again at each opening.
+pub(super) fn record_triggers(conn: &Connection) -> Result<()> {
+    let mut sql = String::from("BEGIN;");
+    for (table, columns) in RECORD_TABLES {
+        let differ = columns.iter().map(|c| format!("OLD.{c} IS NOT NEW.{c}")).collect::<Vec<_>>().join(" OR ");
+        for (on, at, when) in [("INSERT", "NEW", a_record("NEW")), ("DELETE", "OLD", a_record("OLD")), ("UPDATE", "NEW", format!("{} AND ({differ})", a_record("NEW")))] {
+            let name = format!("record_logged_{table}_{}", on.to_lowercase());
+            sql.push_str(&format!("DROP TRIGGER IF EXISTS {name}; CREATE TRIGGER {name} AFTER {on} ON {table} WHEN {when} BEGIN {} END;", record_logged(at)));
+        }
+    }
+    sql.push_str("COMMIT;");
+    conn.execute_batch(&sql)?;
+    Ok(())
+}
+
+/// The most rows the change log keeps of its 0087 kinds; past them the oldest go, as do those older than `KEEP_SECS`.
 pub const LOG_MOST: i64 = 50_000;
+
+/// The most record rows it keeps, apart (LV12): one a record, its latest, so a library's every record once.
+pub const RECORDS_MOST: i64 = 50_000;
 
 /// How long what is kept here is kept (s): a device gives a play or a change up after 30 days.
 pub const KEEP_SECS: i64 = 30 * 24 * 3600;
@@ -92,9 +135,13 @@ pub enum ChangeKind {
     Rating,
     /// What is excluded everywhere: `tracks` or `artists`.
     Excluded,
+    /// A record a view shows (LV1, DC1): `al-<n>`, logged for everyone (`account` ''), pruned apart (LV12). Asked for by name
+    /// alone: 0087's kinds, and the app's answers, stay as they were (LV13).
+    Record,
 }
 
 impl ChangeKind {
+    /// 0087's kinds: what is read where none are named.
     pub const ALL: [ChangeKind; 4] = [ChangeKind::Playlist, ChangeKind::Favourite, ChangeKind::Rating, ChangeKind::Excluded];
 
     pub fn as_str(self) -> &'static str {
@@ -103,11 +150,12 @@ impl ChangeKind {
             ChangeKind::Favourite => "favourite",
             ChangeKind::Rating => "rating",
             ChangeKind::Excluded => "excluded",
+            ChangeKind::Record => "record",
         }
     }
 
     pub fn of(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|k| k.as_str() == s)
+        Self::ALL.into_iter().chain([ChangeKind::Record]).find(|k| k.as_str() == s)
     }
 }
 
@@ -145,6 +193,8 @@ pub struct Logged {
     /// As the log keeps it (a playlist's: its key, `Store::key`).
     pub item: String,
     pub op: Op,
+    /// A record merged into another: that one (`al-<n>`); its row is `deleted`.
+    pub into: Option<String>,
 }
 
 /// What changed since a device last looked (`changes_since`).
@@ -213,6 +263,24 @@ impl UserData {
             .unwrap_or(0))
     }
 
+    /// Records a view shows changed (LV1, `Catalogue::owed_records`), each `al-<n>` and how: changed, or deleted (forgotten, or
+    /// merged into the record named), for every account. Their earlier rows go; one transaction. The rev of the last.
+    pub fn log_records(&self, rows: &[(String, Op, Option<String>)]) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare_cached(
+                "INSERT OR REPLACE INTO change_log (account, kind, item, op, at, shared, into_item) VALUES ('', 'record', ?1, ?2, ?3, 1, ?4)",
+            )?;
+            for (item, op, into) in rows {
+                st.execute(params![item, op.as_str(), super::now_ms(), into])?;
+            }
+        }
+        let rev: i64 = tx.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'change_log'", [], |r| r.get(0)).optional()?.unwrap_or(0);
+        tx.commit()?;
+        Ok(rev)
+    }
+
     /// What `user` excluded everywhere changed: `tracks` or `artists`.
     pub fn excluded_changed(&self, user: &str, what: &str) -> Result<()> {
         log(&self.db(), user, ChangeKind::Excluded, what, Op::Changed, false)
@@ -227,6 +295,12 @@ impl UserData {
             .optional()?
             .unwrap_or(0);
         let floor: i64 = db.query_row("SELECT rev FROM change_log_floor WHERE one = 1", [], |r| r.get(0)).optional()?.unwrap_or(0);
+        // A kind pruned apart has its own floor, which only those asking for it meet (LV12).
+        let mut floor = floor;
+        for kind in kinds {
+            let own: Option<i64> = db.query_row("SELECT rev FROM change_log_kind_floor WHERE kind = ?1", [kind.as_str()], |r| r.get(0)).optional()?;
+            floor = floor.max(own.unwrap_or(0));
+        }
         let Some(since) = since.filter(|&s| s >= floor && s <= rev) else { return Ok(Since::Reset { rev }) };
         if kinds.is_empty() {
             return Ok(Since::Changes { rev, changes: Vec::new(), more: false });
@@ -234,19 +308,20 @@ impl UserData {
         // The kinds' names are this module's own, never what was asked: safe in the statement.
         let kinds = kinds.iter().map(|k| format!("'{}'", k.as_str())).collect::<Vec<_>>().join(", ");
         let mut st = db.prepare(&format!(
-            "SELECT rev, kind, item, op FROM change_log WHERE rev > ?1 AND kind IN ({kinds})
+            "SELECT rev, kind, item, op, into_item FROM change_log WHERE rev > ?1 AND kind IN ({kinds})
                AND ((kind = 'playlist' AND ((seen_by = '' AND (account = ?3 OR shared = 1)) OR seen_by = ?2))
+                 OR (kind = 'record' AND account = '')
                  OR (kind <> 'playlist' AND account = ?2))
              ORDER BY rev LIMIT ?4"
         ))?;
         let rows = st.query_map(params![since, user, folder, most as i64 + 1], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
         })?;
         let mut changes = Vec::new();
         for row in rows {
-            let (rev, kind, item, op) = row?;
+            let (rev, kind, item, op, into) = row?;
             let Some(kind) = ChangeKind::of(&kind) else { continue };
-            changes.push(Logged { rev, kind, item, op: if op == Op::Deleted.as_str() { Op::Deleted } else { Op::Changed } });
+            changes.push(Logged { rev, kind, item, op: if op == Op::Deleted.as_str() { Op::Deleted } else { Op::Changed }, into });
         }
         let more = changes.len() > most;
         changes.truncate(most);
@@ -340,13 +415,26 @@ impl UserData {
         n += tx.execute("DELETE FROM change_at WHERE at < ?1", [cut * 1000])?;
         n += super::playlists::forget_old(&tx, cut * 1000)?;
         n += tx.execute("DELETE FROM playlist_op WHERE at < ?1", [cut * 1000])?;
-        let old: Option<i64> = tx.query_row("SELECT max(rev) FROM change_log WHERE at < ?1", [cut * 1000], |r| r.get(0))?;
-        let many: Option<i64> =
-            tx.query_row("SELECT rev FROM change_log ORDER BY rev DESC LIMIT 1 OFFSET ?1", [LOG_MOST], |r| r.get(0)).optional()?;
+        // 0087's kinds, by age and count; the records' apart, so a burst of them prunes no other row (LV12).
+        let old: Option<i64> = tx.query_row("SELECT max(rev) FROM change_log WHERE kind <> 'record' AND at < ?1", [cut * 1000], |r| r.get(0))?;
+        let many: Option<i64> = tx
+            .query_row("SELECT rev FROM change_log WHERE kind <> 'record' ORDER BY rev DESC LIMIT 1 OFFSET ?1", [LOG_MOST], |r| r.get(0))
+            .optional()?;
         if let Some(upto) = old.max(many) {
-            n += tx.execute("DELETE FROM change_log WHERE rev <= ?1", [upto])?;
+            n += tx.execute("DELETE FROM change_log WHERE kind <> 'record' AND rev <= ?1", [upto])?;
             tx.execute(
                 "INSERT INTO change_log_floor (one, rev) VALUES (1, ?1) ON CONFLICT (one) DO UPDATE SET rev = max(rev, excluded.rev)",
+                [upto],
+            )?;
+        }
+        let old: Option<i64> = tx.query_row("SELECT max(rev) FROM change_log WHERE kind = 'record' AND at < ?1", [cut * 1000], |r| r.get(0))?;
+        let many: Option<i64> = tx
+            .query_row("SELECT rev FROM change_log WHERE kind = 'record' ORDER BY rev DESC LIMIT 1 OFFSET ?1", [RECORDS_MOST], |r| r.get(0))
+            .optional()?;
+        if let Some(upto) = old.max(many) {
+            n += tx.execute("DELETE FROM change_log WHERE kind = 'record' AND rev <= ?1", [upto])?;
+            tx.execute(
+                "INSERT INTO change_log_kind_floor (kind, rev) VALUES ('record', ?1) ON CONFLICT (kind) DO UPDATE SET rev = max(rev, excluded.rev)",
                 [upto],
             )?;
         }
@@ -495,6 +583,75 @@ mod tests {
         // The counter goes on, never handing out a rev again.
         u.excluded_changed("me", "tracks").unwrap();
         assert_eq!(changes(u.changes_since(Some(2), "me", "", &ChangeKind::ALL, 10).unwrap()).1[0].0, 3);
+    }
+
+    /// LV12 (kind 4): a burst of records keeps the log and the devices whole. Red first: pruned with the rest, past `LOG_MOST`
+    /// record rows took the app's playlist rows and raised the one floor, and the app read everything again.
+    #[test]
+    fn a_burst_of_records_resets_no_device() {
+        let u = UserData::open(None).unwrap();
+        let app_kinds = ChangeKind::ALL;
+        let mine = u.create_playlist("", "Evening", &[], &Default::default()).unwrap().unwrap();
+        u.playlist_changed(&mine, Op::Changed, false).unwrap(); // 1
+        u.excluded_changed("me", "tracks").unwrap(); // 2
+        let read_at = 2;
+        // The fold and a record pass touch 11,000 records twice, then a library's worth more past the records' cap.
+        let burst = |from: i64, to: i64| -> Vec<(String, Op, Option<String>)> { (from..to).map(|n| (format!("al-{n}"), Op::Changed, None)).collect() };
+        u.log_records(&burst(0, 11_000)).unwrap();
+        u.log_records(&burst(0, 11_000)).unwrap();
+        let rows: i64 = u.db().query_row("SELECT count(*) FROM change_log WHERE kind = 'record'", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 11_000, "one row a record, its latest");
+        u.log_records(&burst(11_000, 11_000 + RECORDS_MOST)).unwrap();
+        u.forget_old_offline(now()).unwrap();
+        // The app reading 0087's kinds from where it was: no reset, its rows all there.
+        let (_, got, _) = changes(u.changes_since(Some(read_at), "me", "", &app_kinds, 10).unwrap());
+        assert!(got.is_empty(), "nothing of its kinds since: {got:?}");
+        let (_, got, _) = changes(u.changes_since(Some(0), "me", "", &app_kinds, 10).unwrap());
+        assert_eq!(got.iter().map(|c| c.0).collect::<Vec<_>>(), [1, 2], "no row of another kind pruned by the burst");
+        // Records asked for from before what they kept: read again.
+        assert!(matches!(u.changes_since(Some(read_at), "me", "", &[ChangeKind::Record], 10).unwrap(), Since::Reset { .. }));
+        let left: i64 = u.db().query_row("SELECT count(*) FROM change_log WHERE kind = 'record'", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, RECORDS_MOST, "the records' rows kept to their cap");
+    }
+
+    /// LV1's user data half: a record's facts set by hand, its arrival's review and a check heard are logged for everyone by the
+    /// tables' own triggers, at a new rev each, its latest row alone; an update that changes nothing logs nothing.
+    #[test]
+    fn record_views_written_here_are_logged() {
+        let u = UserData::open(None).unwrap();
+        let rows = |u: &UserData| -> Vec<(i64, String, String)> {
+            let db = u.db();
+            let mut st = db.prepare("SELECT rev, account, item FROM change_log WHERE kind = 'record' ORDER BY rev").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        u.set_overrides(&["al-42".to_string()], &[("year".into(), Some(serde_json::json!(2014)))], 100).unwrap();
+        assert_eq!(rows(&u), vec![(1, String::new(), "al-42".to_string())], "a type or a year set by hand");
+        u.db().execute("INSERT INTO intake_heard (album, folder, at, heard) VALUES ('al-9', 1, 1, '{}')", []).unwrap();
+        u.db().execute("UPDATE intake_heard SET heard = '{\"ok\":true}' WHERE album = 'al-9'", []).unwrap();
+        u.db().execute("UPDATE intake_heard SET heard = heard WHERE album = 'al-9'", []).unwrap();
+        assert_eq!(rows(&u), vec![(1, String::new(), "al-42".to_string()), (3, String::new(), "al-9".to_string())], "a check heard: its latest row");
+        let (_, got, _) = changes(u.changes_since(Some(1), "bob", "", &[ChangeKind::Record], 10).unwrap());
+        assert_eq!(got, vec![(3, "record", "al-9".to_string(), "changed")], "for every account");
+    }
+
+    /// LV9's server half (DC1-F): records are a kind the log answers, to every account, by name only; a merged one names where it
+    /// went. 0087's kinds answer as before (LV13).
+    #[test]
+    fn records_are_a_kind_the_log_answers() {
+        let u = UserData::open(None).unwrap();
+        u.excluded_changed("me", "tracks").unwrap(); // 1
+        let rev = u.log_records(&[("al-42".into(), Op::Changed, None), ("al-21".into(), Op::Deleted, Some("al-20".into()))]).unwrap();
+        assert_eq!(rev, 3);
+        assert_eq!(ChangeKind::of("record"), Some(ChangeKind::Record));
+        assert!(!ChangeKind::ALL.contains(&ChangeKind::Record), "asked by name alone");
+        for user in ["me", "you"] {
+            let (_, got, _) = changes(u.changes_since(Some(0), user, "", &[ChangeKind::Record], 10).unwrap());
+            assert_eq!(got, vec![(2, "record", "al-42".to_string(), "changed"), (3, "record", "al-21".to_string(), "deleted")], "{user}");
+        }
+        let Since::Changes { changes: merged, .. } = u.changes_since(Some(2), "me", "", &[ChangeKind::Record], 10).unwrap() else { panic!("a reset") };
+        assert_eq!(merged[0].into.as_deref(), Some("al-20"));
+        let (_, got, _) = changes(u.changes_since(Some(0), "me", "", &ChangeKind::ALL, 10).unwrap());
+        assert_eq!(got, vec![(1, "excluded", "tracks".to_string(), "changed")], "0087's kinds as before");
     }
 
     #[test]

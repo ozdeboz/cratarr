@@ -126,6 +126,39 @@ pub fn rights(serve: &Serve) -> Permissions {
     serve.current_user().and_then(|n| serve.users.get(&n)).map(|u| u.permissions).unwrap_or_default()
 }
 
+/// Who asks, once per request (CN8): the domain's viewer, its role decided in one place (`Role::of`) from the account's flag and
+/// whether a key brought it (a key that reads or controls: a full key acts as its account signed in, as `access::signed_in` has
+/// it), its permissions read once (`rights`). No one signed in, only while signing in is off: the one administrator.
+pub fn viewer(serve: &Serve) -> cratarr_domain::can::Viewer {
+    use cratarr_domain::can::{May, Scope, Viewer};
+    let (account, admin, key) = match crate::serve::who::current() {
+        Some(w) => {
+            let key = match w.scope {
+                crate::serve::who::Scope::Full => None,
+                crate::serve::who::Scope::Control => Some(Scope::Control),
+                crate::serve::who::Scope::Read => Some(Scope::Read),
+            };
+            (w.user, w.admin, key)
+        }
+        None => (String::new(), crate::serve::access::administering(), None),
+    };
+    let p = rights(serve);
+    Viewer::new(&account, admin, key, May { request: p.request, offline: p.offline, playlists: p.playlists }, None)
+}
+
+/// Want's right, by `decide()` at the top of each Want (CN2, CN9): without "Request albums", or by a key that changes nothing, it
+/// is refused as a right (a 403) in the table's words, and no request is made. Its state (had, one's own request open) is the
+/// request's own to answer: asked again, the open request is the answer (CN11), and a record had is judged as it is asked for. The
+/// record's facts come with RS01's actions (DC1a): here none are read, and none is needed for a right.
+fn may_want(serve: &Serve) -> Result<()> {
+    use cratarr_domain::can::{Action, Decision, Record, Why, decide};
+    let not_had = Record { copies: Vec::new(), plays: None, preview: false, holding: cratarr_domain::holding::Holding::NotHad, open_requests: Vec::new() };
+    match decide(&viewer(serve), &Action::Want, &not_had) {
+        Decision::Deny(Why::Right(words)) => Err(crate::app::ToggleError::Forbidden(words.into()).into()),
+        _ => Ok(()),
+    }
+}
+
 /// The fetcher approved requests are handed to: Lidarr, where it is connected and switched on, with the profiles and
 /// root folder chosen on its page in Connections.
 pub fn fetcher(app: &dyn RequestsHost) -> Option<Box<dyn Fetcher>> {
@@ -162,9 +195,7 @@ pub async fn ask<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &str, ke
 
 /// [`ask`], on its host.
 async fn ask_on(app: &dyn RequestsHost, serve: &Serve, account: &str, key: &str) -> Result<Request> {
-    if !rights(serve).request {
-        bail!("Requesting albums is not on for this account");
-    }
+    may_want(serve)?;
     let s = super::discover::suggestion(serve, account, key)?.context("That suggestion is gone; look again")?;
     if let Some(r) = open_request(serve, account, &s.key)? {
         return Ok(r);
@@ -185,9 +216,7 @@ pub async fn ask_album<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &s
 /// [`ask_album`], on its host.
 #[allow(clippy::too_many_arguments)]
 async fn ask_album_on(app: &dyn RequestsHost, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<Request> {
-    if !rights(serve).request {
-        bail!("Requesting albums is not on for this account");
-    }
+    may_want(serve)?;
     // An album with no title would be a record named nothing for life (W6).
     if album.trim().is_empty() {
         bail!("An album needs its title");
@@ -212,9 +241,7 @@ pub async fn ask_record<H: RequestsHost>(app: &Arc<H>, serve: &Serve, account: &
 
 /// [`ask_record`], handed with `h`.
 pub(crate) async fn ask_record_with(h: &Hands<'_>, serve: &Serve, account: &str, record: i64) -> Result<Request> {
-    if !rights(serve).request {
-        bail!("Requesting albums is not on for this account");
-    }
+    may_want(serve)?;
     asked_record(h, serve, account, record, None, None).await
 }
 
@@ -1657,22 +1684,22 @@ struct AskersCopy {
 fn held_for(cat: &crate::catalogue::Catalogue, r: &Request, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<(Option<RecordOf>, Option<AskersCopy>)> {
     let of = records_held(cat, std::slice::from_ref(r), kinds)?.pop().flatten();
     let Some((record, holder, holding)) = of.as_ref().and_then(|o| Some((o.record, o.holder?, o.holding))) else { return Ok((of, None)) };
-    let Some(q) = cat.requested(&[record])?.remove(&record) else { return Ok((of, None)) };
     let places = super::room::Places::of(kinds, &cat.folders());
+    let Some(copies) = cat.copies_held(&[(record, holder)], &library_of(kinds, &places))?.remove(&record) else { return Ok((of, None)) };
     let own: Vec<i64> = places.own.iter().filter(|(_, account)| *account == r.user).map(|(folder, _)| *folder).collect();
-    let Some(folder) = copy_folder(&q, holding, |folder| crate::serve::library::kind_in(kinds, folder).0, &own) else { return Ok((of, None)) };
+    let Some(folder) = copy_folder(&copies, holding, |folder| crate::serve::library::kind_in(kinds, folder).0, &own) else { return Ok((of, None)) };
     let went = cat.went_of(&[holder])?.remove(&holder).unwrap_or_default();
     let came = went.iter().filter(|w| w.folder == folder && w.gone.is_none() && w.trashed.is_none()).filter_map(|w| w.came).max();
     Ok((of, Some(AskersCopy { folder, own: own.contains(&folder), came })))
 }
 
-/// The catalogue folder holding a request's asker's copy whole (RQ01.6), as its holding reads it (W4, I05): their own music first,
-/// else a main library, where it is done for them; an Incoming library where it arrived; none else (partly there, not had, or held
-/// only in another's own music), nor for tracks no file holds. Pure.
-fn copy_folder(q: &crate::catalogue::records::Requested, holding: Holding, kind: impl Fn(i64) -> crate::settings::LibraryKind, own: &[i64]) -> Option<i64> {
+/// The catalogue folder holding a request's asker's copy whole (RQ01.6), as its holding reads it (W4, I05, HD15): their own music
+/// first, else a main library, where it is done for them; an Incoming library where it arrived; none else (partly there, not had, or
+/// held only in another's own music). Whole as the holding has it (`holding::whole`). Pure.
+fn copy_folder(copies: &crate::catalogue::holding::Copies, holding: Holding, kind: impl Fn(i64) -> crate::settings::LibraryKind, own: &[i64]) -> Option<i64> {
     use crate::settings::LibraryKind;
-    let whole = |n: usize| q.list.is_none_or(|l| n >= l);
-    let first = |pick: &dyn Fn(i64) -> bool| q.copies.iter().find(|(folder, n)| whole(*n) && pick(*folder)).map(|(folder, _)| *folder);
+    let whole = |c: &&cratarr_domain::holding::CopyFacts| cratarr_domain::holding::whole(c, copies.shortest);
+    let first = |pick: &dyn Fn(i64) -> bool| copies.copies.iter().filter(whole).find(|c| pick(c.folder)).map(|c| c.folder);
     match holding {
         Holding::Done => first(&|folder| own.contains(&folder)).or_else(|| first(&|folder| kind(folder) == LibraryKind::Main)),
         Holding::Arrived => first(&|folder| kind(folder) == LibraryKind::Incoming),
@@ -1880,32 +1907,29 @@ pub enum Holding {
     Elsewhere,
 }
 
-/// Whether a record held whole is in `own`'s view (I05): a whole copy in a main library, or in the catalogue folders `own` names (the
-/// asker's own music). Tracks no file holds, as the tests make them, are one copy kept, in view. Pure.
-fn in_view(q: &crate::catalogue::records::Requested, kind: impl Fn(i64) -> crate::settings::LibraryKind, own: &[i64]) -> bool {
-    let whole = |n: usize| q.list.is_none_or(|l| n >= l);
-    q.copies.is_empty() || q.copies.iter().any(|(folder, n)| whole(*n) && (kind(*folder) == crate::settings::LibraryKind::Main || own.contains(folder)))
+/// How a request's record is held, in its asker's view (HD15): the one had rule, `holding()` (rules), over the record's copies as
+/// the one reader gives them (`Catalogue::copies_held`), every library counted (a request never follows a viewer's switch, HD7).
+/// Had is done; retired or not had, none. Pure.
+pub fn held(copies: &crate::catalogue::holding::Copies, asker: &str) -> Holding {
+    use cratarr_domain::holding::{Holding as Held, On, holding};
+    match holding(&copies.copies, copies.shortest, asker, &On::all()) {
+        Held::Had => Holding::Done,
+        Held::Elsewhere => Holding::Elsewhere,
+        Held::Arrived => Holding::Arrived,
+        Held::Partly { has, of } => Holding::Partly { has: u32::from(has), of: u32::from(of) },
+        Held::NotHad | Held::Retired { .. } => Holding::None,
+    }
 }
 
-/// How a record read for its requests is held (`Holding`), each catalogue folder's library as `kind` says: a copy is whole where it
-/// holds every track of the list it must hold (`Requested::list`; with none, any copy is). Tracks no file holds, as the tests make
-/// them, are one copy kept. Pure.
-pub fn holding_of(q: &crate::catalogue::records::Requested, kind: impl Fn(i64) -> crate::settings::LibraryKind) -> Holding {
-    if q.holder.is_none() || q.present == 0 {
-        return Holding::None;
-    }
-    let whole = |n: usize| q.list.is_none_or(|l| n >= l);
-    let partly = Holding::Partly { has: q.present as u32, of: q.list.unwrap_or(q.present) as u32 };
-    if q.copies.is_empty() {
-        return if whole(q.present) { Holding::Done } else { partly };
-    }
-    let whole_in: Vec<crate::settings::LibraryKind> = q.copies.iter().filter(|(_, n)| whole(*n)).map(|(folder, _)| kind(*folder)).collect();
-    if whole_in.is_empty() {
-        partly
-    } else if whole_in.iter().any(|k| *k != crate::settings::LibraryKind::Incoming) {
-        Holding::Done
-    } else {
-        Holding::Arrived
+/// Each catalogue folder's library as the holding reads it (`CopyFacts::library`), from the libraries' kinds and the folders in use:
+/// an own-music folder is the account's its name is (as room reads it, `room::Places`). The holding reads no fetcher.
+pub fn library_of(kinds: &[(i64, crate::settings::LibraryKind)], places: &super::room::Places) -> impl Fn(i64) -> cratarr_domain::holding::Library {
+    use cratarr_domain::holding::{Fetcher, Library};
+    let (kinds, own) = (kinds.to_vec(), places.own.clone());
+    move |folder: i64| match crate::serve::library::kind_in(&kinds, folder).0 {
+        crate::settings::LibraryKind::Main => Library::Main,
+        crate::settings::LibraryKind::Incoming => Library::Incoming { fetcher: Fetcher::Lidarr, uploader: None },
+        crate::settings::LibraryKind::Own => Library::Own(own.iter().find(|(f, _)| *f == folder).map(|(_, account)| account.clone()).unwrap_or_default()),
     }
 }
 
@@ -1926,18 +1950,13 @@ pub fn records_of(cat: &crate::catalogue::Catalogue, rs: &[Request]) -> Result<V
 /// its asker's view alone (I05): a record held whole only in another's own music is `Elsewhere` for them. An own-music folder is
 /// the account's its name is (as room reads it, `room::Places`).
 pub fn records_held(cat: &crate::catalogue::Catalogue, rs: &[Request], kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Vec<Option<RecordOf>>> {
-    let read = cat.requested(&rs.iter().filter_map(|r| r.record).collect::<Vec<_>>())?;
-    let kind = |folder: i64| crate::serve::library::kind_in(kinds, folder).0;
     let places = super::room::Places::of(kinds, &cat.folders());
-    let own_of = |user: &str| -> Vec<i64> { places.own.iter().filter(|(_, account)| account == user).map(|(folder, _)| *folder).collect() };
+    let (read, copies) = cat.requested_held(&rs.iter().filter_map(|r| r.record).collect::<Vec<_>>(), &library_of(kinds, &places))?;
     Ok(rs
         .iter()
         .map(|r| {
             let q = read.get(&r.record?)?;
-            let holding = match holding_of(q, kind) {
-                Holding::Done if !in_view(q, kind, &own_of(&r.user)) => Holding::Elsewhere,
-                held => held,
-            };
+            let holding = copies.get(&q.row.id).filter(|_| q.holder.is_some()).map_or(Holding::None, |c| held(c, &r.user));
             Some(RecordOf {
                 record: q.row.id,
                 groups: q.groups.clone(),

@@ -19,6 +19,8 @@ pub mod requests;
 pub mod requests_host;
 #[cfg(test)]
 mod served_tests_requests;
+#[cfg(test)]
+mod had_vectors;
 // What counts against each user's room (AL01).
 pub mod room;
 // Records not had that nobody sees, forgotten (RT01).
