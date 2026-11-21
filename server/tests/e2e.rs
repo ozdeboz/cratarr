@@ -1153,7 +1153,8 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     // Nothing that has somewhere to go stays behind, in any table of the user data or any store. Not named here: a scan has no list.
     let old: Vec<(String, String)> = every_text(&data.join("userdata.sqlite")).into_iter().filter(|(table, _)| table != "migration_report").flat_map(|(table, text)| hashes_in(&text).into_iter().map(move |id| (table.clone(), id))).collect();
     assert_eq!(old, [("annotation".to_string(), ORPHAN.to_string())], "the one no tag makes, kept");
-    for store in ["crates.json", "users/bob/crates.json", "queues.json", "track-intake.json", "convert-queue.json"] {
+    // The bulk queue as the first start moved it, kept by 0.18's step as `track-intake.json.017` once its items are on rows (RN's DM3).
+    for store in ["crates.json", "users/bob/crates.json", "queues.json", "track-intake.json.017", "convert-queue.json"] {
         let text = std::fs::read_to_string(data.join(store)).unwrap();
         assert_eq!(hashes_in(&text), Vec::<String>::new(), "{store}");
     }
@@ -6593,7 +6594,7 @@ async fn a_017_data_folder_upgrades_to_018_end_to_end() {
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&library).unwrap();
     std::fs::create_dir_all(&data).unwrap();
-    settings(&data, &[(&library, "music")], &root.join("own"));
+    settings(&data, &[(&library, "main")], &root.join("own"));
     // A first start makes the data folder's stores; stopped, it is given what 0.17 kept of RN's.
     Server::start(&data).await.stop();
     let fixture = include_bytes!("fixtures/0.17/track-intake.json");

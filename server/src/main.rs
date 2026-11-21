@@ -242,25 +242,23 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
-    // Every outside service's hold kept across a restart taken up before anything is asked (OQ-T3), Bandcamp's day after its bot
-    // check among them (Y8); their holds kept from now on.
-    // The journal's file holds them (RN's R4), with the saved queues and the runner's jobs: opened here, once, for the app too.
-    let journal = std::sync::Arc::new(
-        journal::Journal::open(data_dir.as_deref().map(|d| std::path::Path::new(d).join("journal.sqlite")).as_deref()).context("cannot open the journal")?,
-    );
-    journal::set_instance(journal.clone());
-    // 0.18's step, RN's parts (DI06): 0.17's bulk queue and its kept holds onto the journal's rows, before the turns take the holds up.
-    app::step_018::run(&journal, data_dir.as_deref().map(std::path::Path::new), &served.userdata, app::moment::now_secs()).context("cannot finish 0.18's step")?;
-    // The runner's jobs (RN): those a stop cut off read back and said so, before any job begins; the finished pruned each hour.
-    runner::runner().attach(journal.clone()).context("cannot read the runner's jobs")?;
-    runner::runner().prune_hourly();
-    app::turn::keep_all(&journal, &[&app::discogs::TURN, &app::lastfm::FM]);
     // The environment's server settings, with what Settings saved over them (0.9.8).
     let runtime = app::runtime::start(app::runtime::Seed::from_env(&env), Some(&served.userdata), &cfg.bind);
     let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), runtime.snapcast_host.clone());
     // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
     let lan_base = app::runtime::lan_base(&runtime);
     let app = app::App::new(cfg, saved, origin, Some(served.clone())).await.context("cannot open the catalogue")?;
+    // RN's start, once the first start has moved what it moves (0.15's stores and journal, inside `App::new`) and before any pass asks a
+    // source (each waits minutes first). The app's journal is the server's (RN's R1: the saved queues and the runner's jobs in it).
+    journal::set_instance(app.journal.clone());
+    // 0.18's step, RN's parts (DI06): 0.17's bulk queue and its kept holds onto the journal's rows, before the turns take the holds up.
+    app::step_018::run(&app.journal, data_dir.as_deref().map(std::path::Path::new), &served.userdata, app::moment::now_secs()).context("cannot finish 0.18's step")?;
+    // Every outside service's hold kept across a restart taken up before anything is asked (OQ-T3), Bandcamp's day after its bot
+    // check among them (Y8); their holds kept from now on, in the journal's file (RN's R4).
+    app::turn::keep_all(&app.journal, &[&app::discogs::TURN, &app::lastfm::FM]);
+    // The runner's jobs (RN): those a stop cut off read back and said so, before any job begins; the finished pruned each hour.
+    runner::runner().attach(app.journal.clone()).context("cannot read the runner's jobs")?;
+    runner::runner().prune_hourly();
     // Before the first build and the first request: which copy plays turns on them.
     served.library.set_kinds(app.library.folder_kinds());
     // The libraries' part of the migration report, then the file as 0.16's (decision 0101): what the roles held, and
