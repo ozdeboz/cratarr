@@ -9,6 +9,7 @@
 //! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
 mod artists;
+pub use artists::Credits;
 mod editions;
 pub mod facts;
 mod first;
@@ -20,8 +21,11 @@ mod index_log;
 mod join_tests;
 #[cfg(test)]
 mod judging_tests;
+mod provenance;
 #[cfg(test)]
 mod step_018_tests;
+#[cfg(test)]
+mod wm_tests;
 pub mod labels;
 pub mod lists;
 pub mod normalise;
@@ -276,6 +280,15 @@ fn copy_row(tx: &Connection, table: &str, from: (i64, &str), to: (i64, &str), se
 }
 
 /// Whether a folder shows nothing, or is not there: how a mount that is not up looks, and no sign its files are gone.
+/// A fact field's value through the one tag rule (WM.1, WM.2; the rules crate's `hygiene`): a site's stamp is none, one beside a
+/// value is cut. Any other tag as it is.
+pub fn fact_value(name: &str, value: &str) -> Option<String> {
+    match cratarr_rules::hygiene::Field::of(name) {
+        Some(field) => cratarr_rules::hygiene::value(field, value).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()),
+        None => Some(value.to_string()),
+    }
+}
+
 fn holds_nothing(path: &str) -> bool {
     std::fs::read_dir(path).map_or(true, |mut d| !d.any(|e| e.is_ok_and(|e| !e.file_name().to_string_lossy().starts_with('.'))))
 }
@@ -946,6 +959,9 @@ pub struct ServedRow {
     pub record: Option<i64>,
     /// Its track has another file, here or gone a while: a copy's, so it stays with its record ([`vote_of`]).
     pub shared: bool,
+    /// The placing folder of the copy Cratarr placed it in (COU.18), where it lies under one: what gathers it, never its tags
+    /// (COU.17, T-COU-16).
+    pub placed: Option<String>,
 }
 
 /// What the served library takes from a file's analysis: its gain and peak, its tempo when confident, and its album's
@@ -1883,6 +1899,13 @@ impl Catalogue {
             None => Self::read_crate_facts(&self.db(), &folders, &rules, &several)?,
         };
         drop(reader);
+        // One year, the record's (SIM.21): what similarity, a crate's year and Radio's era read.
+        if let Some(s) = &served {
+            match s.library().song_years() {
+                Ok(years) => Self::with_record_years(&mut facts, &years),
+                Err(e) => tracing::warn!("crates: the records' years not read: {e:#}"),
+            }
+        }
         if let Some(s) = &served
             && let Ok(types) = s.library().song_release_types()
         {
@@ -1927,6 +1950,16 @@ impl Catalogue {
         drop(was);
         *kept = Some(KeptFacts { written, folders, rules, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
         Ok(facts)
+    }
+
+    /// Each file's year its record's, as the library resolves it (`song_years`, by song): one year for similarity, a crate's year
+    /// and Radio's era (SIM.21, T-SIM-17). A file of a song the library has no year for keeps its own.
+    pub fn with_record_years(facts: &mut [crate::crates::Facts], years: &HashMap<String, u32>) {
+        for f in facts {
+            if let Some(&y) = f.track.and_then(|t| years.get(&crate::serve::ids::song(t))) {
+                f.year = Some(f64::from(y));
+            }
+        }
     }
 
     /// One `Facts` a track: `several` holds each track with more than one file present, by the place its row copy has in the
@@ -2055,9 +2088,9 @@ impl Catalogue {
                 for (n, v) in &tags {
                     let (into, parts): (&mut Vec<String>, Vec<String>) = match n.as_str() {
                         "genre" => (&mut genres, encoding.words(v)),
-                        // A compilation's album artist is no artist (as the radio has it).
-                        "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, vec![v.clone()]),
-                        "artists" if !crate::crates::various(v) => (&mut listed, vec![v.clone()]),
+                        // A compilation's album artist is no artist (as the radio has it); a site's stamp none either (WM.2).
+                        "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, fact_value(n, v).into_iter().collect()),
+                        "artists" if !crate::crates::various(v) => (&mut listed, fact_value(n, v).into_iter().collect()),
                         "mood" => (&mut file_moods, encoding.words(v)),
                         "style" => (&mut file_styles, encoding.words(v)),
                         "grouping" => (&mut file_tags, encoding.words(v)),
@@ -2260,12 +2293,12 @@ impl Catalogue {
                 let (mut original, mut date, mut bpm) = (None, None, None);
                 for t in found {
                     let (name, value) = t?;
-                    // The first value of each (a tag can hold several).
+                    // The first value of each (a tag can hold several), a fact through the one tag rule (WM.2).
                     match name.as_str() {
-                        "title" => drop(row.title.get_or_insert(value)),
-                        "artist" => drop(row.artist.get_or_insert(value)),
-                        "album" => drop(row.album.get_or_insert(value)),
-                        "albumartist" => drop(row.album_artist.get_or_insert(value)),
+                        "title" => drop(fact_value(&name, &value).map(|v| row.title.get_or_insert(v))),
+                        "artist" => drop(fact_value(&name, &value).map(|v| row.artist.get_or_insert(v))),
+                        "album" => drop(fact_value(&name, &value).map(|v| row.album.get_or_insert(v))),
+                        "albumartist" => drop(fact_value(&name, &value).map(|v| row.album_artist.get_or_insert(v))),
                         "tracknumber" => row.track = row.track.or_else(|| number(&value)),
                         "discnumber" => row.disc = row.disc.or_else(|| number(&value)),
                         "originaldate" => original = original.or_else(|| year(&value)),
@@ -2334,7 +2367,10 @@ impl Catalogue {
                 "artist" => &mut e.artist,
                 _ => &mut e.release_group,
             };
-            if slot.is_none() && !value.trim().is_empty() {
+            let value = if name == "musicbrainz_releasegroupid" { Some(value) } else { fact_value(&name, &value) };
+            if let Some(value) = value.filter(|v| !v.trim().is_empty())
+                && slot.is_none()
+            {
                 *slot = Some(value);
             }
         }
@@ -2350,10 +2386,13 @@ impl Catalogue {
     /// One copy's audio files as Replace pairs them (RF2): each present file under `dir` of catalogue folder `folder`, in path order,
     /// with its named tags (`album_tags`) and its length where read (`album_lengths`). On a reader, never the writer's lock: the
     /// Library and Health ask it of copies waiting while a build runs. Blocking.
-    pub fn copy_read(&self, folder: i64, dir: &str) -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
-        let read = |db: &Connection| -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
+    pub fn copy_read(&self, folder: i64, dir: &str) -> Result<Vec<(String, Vec<(String, String)>, Option<u64>)>> {
+        let read = |db: &Connection| -> Result<Vec<(String, Vec<(String, String)>, Option<u64>)>> {
             let lengths = album_lengths_in(db, folder, dir)?;
-            Ok(album_tags_in(db, folder, dir)?.into_iter().map(|(rel, tags)| (tags, lengths.get(&rel).copied())).collect())
+            Ok(album_tags_in(db, folder, dir)?.into_iter().map(|(rel, tags)| {
+                let ms = lengths.get(&rel).copied();
+                (rel, tags, ms)
+            }).collect())
         };
         match self.reader() {
             Some(c) => read(&c),
@@ -2645,6 +2684,13 @@ impl Catalogue {
             }
             tx.execute("DELETE FROM handovers WHERE at < ?1", [now - GONE_KEEP_SECS])?;
             new.retain(|f| !claimed.contains(&(f.folder, f.rel.clone())));
+            // A placed file as placed (T-COU-17): its size and time as first read.
+            tx.execute(
+                "UPDATE placements SET size = (SELECT f.size FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path),
+                   mtime = (SELECT f.mtime FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path)
+                 WHERE size IS NULL AND number IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path)",
+                [],
+            )?;
         }
         let gone = facts("SELECT folder, rel, duration_ms, track, size, mtime FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
         let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -3017,6 +3063,8 @@ impl Catalogue {
         }
         // Folders a fetcher placed for a record not had (C50): their albums are those records.
         let expected = records::expected_in(tx, now)?;
+        // Copies Cratarr placed (COU.18): an arrival under one is judged against its record first (WM.8, T-WM-3).
+        let placed = records::placed_in(tx)?;
         let mut not_had = None;
         let mut given = 0;
         // The records a track moved out of.
@@ -3030,6 +3078,12 @@ impl Catalogue {
                 let record = match records[i] {
                     Some(r) => r,
                     None => {
+                        // WM.8 (T-WM-3): the placement's record, the strongest evidence, read before any name or release. Only an
+                        // album no record holds yet: a hand's split or join, and every album already settled, go by their tracks.
+                        let provenance = match provenance::placed_for(&placed, &a.files) {
+                            Some(record) => provenance::judged_in(tx, &a.files, a.facts.release.as_deref(), &a.facts.artist, record)?,
+                            None => None,
+                        };
                         let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
                         let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
                         let same: Option<(usize, i64)> = named.chain(released).find(|(j, _)| identity::same_record(&a.facts, &albums[*j].facts)).copied();
@@ -3083,19 +3137,39 @@ impl Catalogue {
                                 given += 1;
                             }
                         }
-                        let r = match same {
-                            Some((j, r)) if identity::same_record(&a.facts, &albums[j].facts) => {
+                        let r = match (provenance, same) {
+                            // Its record's copy (WM.10, WM.11): each file takes the record's track it pairs with.
+                            (Some(provenance::Placed::Copy { record, takes }), _) => {
+                                for (f, theirs) in takes {
+                                    if let Some(ours) = tracks[i].get(f).copied() {
+                                        take.pair(&held, record, ours, theirs);
+                                    }
+                                }
+                                if let Some(((folder, dir), _)) = records::expected_of(&expected, &a.files) {
+                                    tx.execute("DELETE FROM expected WHERE folder = ?1 AND dir = ?2", params![folder, dir])?;
+                                }
+                                record
+                            }
+                            // Another record, its edition, named by the rule from the record it was fetched for (WM.12, OQ-WM-3 (a)), the
+                            // link and the names stored at the join so they outlive the item and the week.
+                            (Some(provenance::Placed::Edition { of, title, artist }), _) => {
+                                born.execute(params![now, title, artist, a.year])?;
+                                let r = tx.last_insert_rowid();
+                                tx.execute("INSERT OR REPLACE INTO edition_links (record, of, how, at) VALUES (?1, ?2, 'placement', ?3)", params![r, of, now])?;
+                                r
+                            }
+                            (None, Some((j, r))) if identity::same_record(&a.facts, &albums[j].facts) => {
                                 take.place_by_place(&held, r, &tracks[i], &tracks[j]);
                                 r
                             }
                             // By name and length, as place by place a file would take a track it is not.
-                            Some((j, r)) => {
+                            (None, Some((j, r))) => {
                                 take.by_name(&held, r, (&tracks[i], &a.facts.tracks), (&tracks[j], &albums[j].facts.tracks));
                                 r
                             }
                             // A record not had that this album is (C50: expected here, else by its references, else by its
                             // list), else a new record.
-                            None => {
+                            (None, None) => {
                                 let at = records::expected_of(&expected, &a.files);
                                 match records::wanted_record(tx, a, at.as_ref().map(|(_, record)| *record), &mut not_had)? {
                                     Some(r) => {
@@ -4554,6 +4628,7 @@ fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str, gains: 
             came: r.get(10)?,
             record: r.get(11)?,
             shared: r.get(12)?,
+            placed: None,
         })
     })?;
     for f in files {
@@ -4564,6 +4639,16 @@ fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str, gains: 
         }
         index.insert(f.rel.clone(), rows.len());
         rows.push(f);
+    }
+    // The copies Cratarr placed here (COU.18): each file under a placing folder, the deepest, is that copy's (COU.17).
+    let placings: Vec<String> = db
+        .prepare_cached("SELECT path FROM placements WHERE folder = ?1 AND track IS NULL AND number IS NULL")?
+        .query_map([folder], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !placings.is_empty() {
+        for row in rows.iter_mut() {
+            row.placed = placings.iter().filter(|p| !p.is_empty() && row.rel.starts_with(&format!("{p}/"))).max_by_key(|p| p.len()).cloned();
+        }
     }
     // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
     let albums = if gains { album_gains_in(db, folder, dir)? } else { HashMap::new() };

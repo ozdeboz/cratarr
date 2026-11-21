@@ -1682,7 +1682,12 @@ impl Alike {
             tracks.push(t);
             sounds.push(f.sound.clone());
         }
-        let lib = Library::new(&tracks, sounds);
+        let mut lib = Library::new(&tracks, sounds);
+        // A decade is a number in words, never telling when shared (SIM, T-SIM-6): of the genres, styles and tags.
+        for (k, kind) in [(2, crate::similarity::Signal::Genres), (3, crate::similarity::Signal::Styles), (4, crate::similarity::Signal::Tags)] {
+            let decades: Vec<u32> = names[k].iter().enumerate().filter(|(_, w)| crate::similarity::era_word(w)).map(|(n, _)| n as u32).collect();
+            lib = lib.untold(kind, decades);
+        }
         // By every line: a playlist's entry may name any copy.
         let place: FxHashMap<String, usize> = all.iter().enumerate().flat_map(|(i, f)| f.every_line().map(move |l| (l.to_string(), i))).collect();
         let of_track = all.iter().enumerate().filter_map(|(i, f)| Some((f.track?, i))).collect();
@@ -3050,6 +3055,79 @@ mod tests {
         assert!(select(&files, &like.conditions, &w).is_empty());
         let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()], 10);
         assert!(select(&files, &resolved(&unheard.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &every, &Weights::EQUAL), &w).is_empty());
+    }
+
+    /// F-LISTS' P, Q, R and T as files (SCENARIOS-SIM): P and its kin Q heard near one sound, Ambient and drone, of the same years
+    /// and tempo; R of P's years and nothing else; T heard far off, Metal, later and faster.
+    fn p_q_r_t() -> Vec<Facts> {
+        let near = |c: [f32; 4], j: usize| -> Arc<[f32]> { c.iter().zip([0.0, 0.03 * (j % 3) as f32, 0.03 * ((j + 1) % 3) as f32, 0.02 * (j % 2) as f32]).map(|(a, b)| a + b).collect() };
+        let mut files = Vec::new();
+        for j in 1..=8usize {
+            let x = 30.0 + (j % 3) as f64;
+            let heard = |rel: String, track: i64, artist: &str, c: [f32; 4], year: f64| Facts {
+                rel,
+                track: Some(track),
+                artists: vec![artist.into()],
+                genres: vec!["Ambient".into()],
+                styles: vec!["drone".into()],
+                year: Some(year),
+                bpm: Some(90.0 + (j - 1) as f64 * 20.0 / 7.0),
+                energy: Some(x),
+                danceability: Some(x),
+                clap_moods: Some([x as f32 / 100.0; 5]),
+                sound: Some(near(c, j)),
+                ..Facts::default()
+            };
+            files.push(heard(format!("p/{j}.flac"), j as i64, "a", [1.0, 0.0, 0.0, 0.0], 1994.0 + j as f64));
+            files.push(heard(format!("q/{j}.flac"), 10 + j as i64, "b", [0.92, 0.39, 0.0, 0.0], 1995.0 + j as f64));
+            files.push(Facts { rel: format!("r/{j}.flac"), track: Some(20 + j as i64), artists: vec!["c".into()], year: Some(1994.0 + j as f64), ..Facts::default() });
+            files.push(Facts {
+                genres: vec!["Metal".into()],
+                styles: Vec::new(),
+                year: Some(2015.0 + ((j - 1) % 5) as f64),
+                bpm: Some(150.0 + (j - 1) as f64 * 10.0 / 7.0),
+                energy: Some(95.0),
+                danceability: Some(95.0),
+                clap_moods: Some([0.95; 5]),
+                sound: Some(near([0.0, 0.0, 1.0, 0.0], j)),
+                ..heard(format!("t/{j}.flac"), 30 + j as i64, "d", [0.0; 4], 0.0)
+            });
+        }
+        files
+    }
+
+    /// SIM.17 (a guard): a Sounds like keeps its own measure (T-SIM-9): rules 1 and 2 order it, its count is its own, and no floor,
+    /// too little known or something telling cuts it.
+    #[test]
+    fn sounds_like_keeps_its_count_and_min() {
+        let files = p_q_r_t();
+        let membership = HashMap::new();
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
+        let like = like_crate("like:p", "P", (1..=8).map(|j| format!("tr-{j}")).collect(), 30);
+        let others: Vec<&Facts> = files.iter().filter(|f| !f.rel.starts_with("p/")).collect();
+        let picked = select(&files, &resolved(&like.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &others, &Weights::EQUAL), &w);
+        assert_eq!(picked.len(), 24, "every file of Q, R and T, within its count of 30: {picked:?}");
+        // Rules 1 and 2 order it: the rank its picks are taken by (`closest_fit`, as `resolved` takes them; `select` keeps the files'
+        // order), every Q above every R.
+        let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
+        let seeds: Vec<String> = (1..=8).map(|j| format!("tr-{j}")).collect();
+        let ranked: Vec<&str> = closest_weighted(&seeds, &[], LikeMode::default(), &alike, &others, &Weights::EQUAL).iter().map(|(f, _)| f.rel.as_str()).collect();
+        let (last_q, first_r) = (ranked.iter().rposition(|r| r.starts_with("q/")), ranked.iter().position(|r| r.starts_with("r/")));
+        assert!(last_q.is_some() && first_r.is_some() && last_q < first_r, "R's after Q's: {ranked:?}");
+        assert_eq!(picked.iter().filter(|r| r.starts_with("t/")).count(), 8, "T's, alike on nothing telling and under any floor, still listed");
+    }
+
+    /// SIM.17 (change by design, L8): Grave digging leaves out an album sharing none of the taste's signals; one sharing any is
+    /// compared as before.
+    #[test]
+    fn grave_digging_leaves_out_an_album_sharing_nothing_with_the_taste() {
+        let mut files = p_q_r_t();
+        files.push(Facts { rel: "x/1.flac".into(), track: Some(99), length: Some(200.0), ..Facts::default() });
+        let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
+        let places = |prefix: &str| -> Vec<(usize, f64)> { files.iter().enumerate().filter(|(_, f)| f.rel.starts_with(prefix)).map(|(i, _)| (i, 1.0)).collect() };
+        let taste = alike.profile(&places("p/"));
+        assert_eq!(alike.compare(&taste, &alike.profile(&places("x/")), &Weights::EQUAL), None, "nothing of the taste's to compare");
+        assert!(alike.compare(&taste, &alike.profile(&places("r/")), &Weights::EQUAL).is_some(), "its years, at least");
     }
 
     #[test]

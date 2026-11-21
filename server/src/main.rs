@@ -358,6 +358,14 @@ async fn main() -> Result<()> {
     if let Err(e) = app::references::start_due_reads() {
         tracing::warn!(target: "library", "the records' due read: {e}");
     }
+    // Its part `wm` (WM.22), before the fold (T-WM-5): a record named by a site's stamp named again by the tag rule, 0.17's
+    // expectations seeded as placements, a record made by a stamp merged into the one its placement names; the raw tags kept.
+    if let Some((report, merges)) = served.catalogue().step_018_wm(&[], &|| Ok(())).context("cannot finish 0.18's step (wm)")? {
+        tracing::info!(target: "migration", "0.18's wm: {}", serde_json::to_string(&report.counts).unwrap_or_default());
+        for (from, into) in merges {
+            tracing::info!(target: "migration", "0.18's wm: al-{from} into al-{into}");
+        }
+    }
     // Its part `fold` (FA22): F40's pairs, one tracklist one record, joined once; each merge said for the HA session.
     if let Some(folded) = served.catalogue().fold_018(&served.library.kinds(), &|| Ok(())).context("cannot finish 0.18's step (fold)")? {
         for (from, into) in folded {

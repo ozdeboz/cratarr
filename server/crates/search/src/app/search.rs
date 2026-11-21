@@ -820,7 +820,8 @@ async fn search_on(app: &dyn SearchHost, q: &str, kinds: &[String], limit: usize
                     album_type: None,
                     album_secondary: Vec::new(),
                     duration_secs: None,
-                    subject: format!("artist:cratarr/{}", a.name),
+                    // By its id (NAMES.25): two namesakes are two subjects, "(2)" opening the second.
+                    subject: format!("artist:cratarr/{}", a.id),
                     title: a.name.clone(),
                     sub: artist_line(a.album_count),
                     cover: Some(format!("/api/artists/{}/photo", a.id)),

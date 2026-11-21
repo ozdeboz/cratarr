@@ -281,6 +281,11 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 annotate_albums(serve, &me, albums)?;
             }
             annotate_artists(serve, &me, std::slice::from_mut(&mut artist))?;
+            // NAMES.25 (T-NAMES-15): its plays are its tracks' plays, by its credits by id, worked out now; none read by artist.
+            let (lib, of) = (serve.library.clone(), artist.id.clone());
+            let songs = blocking(move || lib.artist_songs(&of)).await?;
+            let plays: u32 = serve.userdata.get(&me, Kind::Song, &songs)?.values().map(|a| a.play_count).sum();
+            artist.play_count = (plays > 0).then_some(plays);
             Ok(Answer::Json(json!({ "artist": artist })))
         }
         // What online services know (biography, pictures, top songs). Navidrome asks Last.fm and Spotify when they are
@@ -895,6 +900,21 @@ mod tests {
         assert_eq!(missing["error"], 70);
         let unknown = call(&s, &me, "getPodcasts", "").await;
         assert_eq!(unknown["error"], 501);
+    }
+
+    /// NAMES.25 (T-NAMES-15): an artist's plays are its tracks' plays, worked out at read by its credits by id; nothing stored by
+    /// artist. Red first: no playCount on an artist.
+    #[tokio::test]
+    async fn an_artists_plays_are_its_tracks_plays() {
+        let (s, me) = server();
+        let found = call(&s, &me, "search3", "query=&songCount=500").await;
+        let songs: Vec<String> = found["searchResult3"]["song"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect();
+        for (i, song) in songs.iter().enumerate() {
+            call(&s, &me, "scrobble", &format!("id={song}&time={}", 1_792_065_086_000u64 + i as u64 * 1_000)).await;
+        }
+        let artist = call(&s, &me, "getSong", &format!("id={}", songs[0])).await["song"]["artistId"].as_str().unwrap().to_string();
+        let a = call(&s, &me, "getArtist", &format!("id={artist}")).await;
+        assert_eq!(a["artist"]["playCount"].as_u64(), Some(songs.len() as u64), "{a}");
     }
 
     #[tokio::test]

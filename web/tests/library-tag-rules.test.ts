@@ -6,7 +6,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const { AMPERSAND, encodingOf, genreSeparatorsRefused, splittingLine, textOf } = await import('../src/lib/settings/tagRules.ts');
+const { AMPERSAND, ARTIST_PHRASE, FEATURING, artistSeparatorsRefused, encodingOf, genreSeparatorsRefused, splittingLine, textOf } = await import(
+  '../src/lib/settings/tagRules.ts'
+);
 
 const source = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
@@ -53,9 +55,9 @@ test('"&" is refused as a genre separator, with the reason, in both editors (OQ-
   assert.match(AMPERSAND, /Drum & Bass and R&B/);
   const page = source('lib/settings/LibrariesPart.svelte');
   const editors = page.slice(page.indexOf('{#snippet splitting('), page.indexOf('{/snippet}', page.indexOf('{#snippet splitting(')));
-  // The genre separators' sheet refuses; the artists' keep their own rules ("&" is part of credits, never split anyway).
+  // The genre separators' sheet refuses "&", the artist separators' sheet all but "/" and ";" (GEN.63, the credit model).
   assert.ok(editors.includes("refuse: genreSeparatorsRefused, save: (v) => set('genreSeps', v)"));
-  assert.equal(editors.split('refuse:').length - 1, 1);
+  assert.equal(editors.split('refuse:').length - 1, 2);
   // Refused: said under the field as it is typed and at Done, the sheet stays (its save throws), nothing taken.
   const sheet = page.slice(page.indexOf('{#if typing}'), page.indexOf('{/if}', page.indexOf('{/snippet}', page.indexOf('{#if typing}'))));
   assert.ok(sheet.includes('oninput={t.refuse ? (v) => (refused = t.refuse?.(v) ?? null) : null}'));
@@ -64,6 +66,22 @@ test('"&" is refused as a genre separator, with the reason, in both editors (OQ-
   // The server says it the same way when it refuses one.
   const server = readFileSync(new URL('../../server/crates/store/src/catalogue/normalise.rs', import.meta.url), 'utf8');
   assert.ok(server.includes(`pub const AMPERSAND: &str = "${AMPERSAND.replace(/"/g, '\\"')}";`));
+});
+
+// GEN.63 (5), the page's part of `artist_separators_are_list_separators_only`: a library's artist separators are list
+// separators only, "/" and ";" (the credit model, 2026-11-21 14:24). A credit's printed phrases and the Featuring words are
+// refused in both editors, each with its reason, as the server says it.
+test('artist separators are list separators only, in both editors, each refusal with its reason', () => {
+  for (const phrase of ['&', 'and', 'x', 'with', 'vs.', ',', '/ ; &', '+']) assert.equal(artistSeparatorsRefused(phrase), ARTIST_PHRASE, phrase);
+  for (const featuring of ['feat.', 'ft.', 'featuring', 'Feat.', '/ feat.']) assert.equal(artistSeparatorsRefused(featuring), FEATURING, featuring);
+  for (const fine of ['/', ';', '/ ;', '', '  ']) assert.equal(artistSeparatorsRefused(fine), null, fine);
+  const page = source('lib/settings/LibrariesPart.svelte');
+  const editors = page.slice(page.indexOf('{#snippet splitting('), page.indexOf('{/snippet}', page.indexOf('{#snippet splitting(')));
+  assert.ok(editors.includes("refuse: artistSeparatorsRefused, save: (v) => set('artistSeps', v)"));
+  const server = readFileSync(new URL('../../server/crates/store/src/catalogue/normalise.rs', import.meta.url), 'utf8');
+  for (const [name, words] of [['ARTIST_PHRASE', ARTIST_PHRASE], ['FEATURING', FEATURING]]) {
+    assert.ok(server.includes(`pub const ${name}: &str = "${words.replace(/"/g, '\\"')}";`), name);
+  }
 });
 
 test('an encoding goes to its editors as text and back in the order the server keeps it', () => {

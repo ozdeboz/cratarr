@@ -33,6 +33,22 @@ fn owed(select: &str) -> String {
     )
 }
 
+impl Catalogue {
+    /// These records owed to the change log (LV11's way: moved once the served library has them): what a build that serves their
+    /// artists under other ids says, though no catalogue row changed (NAMES.25: a synced device learns of each once, no reset).
+    /// Blocking.
+    pub fn owe_records(&self, records: &[i64]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        for record in records {
+            tx.execute("DELETE FROM record_owed WHERE record = ?1", [record])?;
+            tx.execute("INSERT INTO record_owed (record) VALUES (?1)", [record])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
 /// Whether any of these columns differ: what an update of them has to say.
 fn differ(columns: &[&str]) -> String {
     columns.iter().map(|c| format!("OLD.{c} IS NOT NEW.{c}")).collect::<Vec<_>>().join(" OR ")

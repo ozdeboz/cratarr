@@ -1,0 +1,189 @@
+{
+  "about": "WM.1's table (SCENARIOS-WM): a tag's value as a fact reads it, by the rules crate's hygiene::clean; reads null is no value (a site's stamp alone). Written by hand from the scenario's rows, never by a write.",
+  "cases": [
+    {
+      "value": "www.electronicfresh.com",
+      "reads": null
+    },
+    {
+      "value": "WWW.ELECTRONICFRESH.COM",
+      "reads": null
+    },
+    {
+      "value": " www.electronicfresh.com ",
+      "reads": null
+    },
+    {
+      "value": "http://electronicfresh.com",
+      "reads": null
+    },
+    {
+      "value": "https://www.mp3site.ru/album/123",
+      "reads": null
+    },
+    {
+      "value": "electronicfresh.com",
+      "reads": null
+    },
+    {
+      "value": "flacsite.net",
+      "reads": null
+    },
+    {
+      "value": "Ripped by Team X",
+      "reads": null
+    },
+    {
+      "value": "ripped by: Team X",
+      "reads": null
+    },
+    {
+      "value": "RIPPED BY TEAM X",
+      "reads": null
+    },
+    {
+      "value": "Ripped by Love",
+      "reads": null
+    },
+    {
+      "value": "​www.electronicfresh.com",
+      "reads": null
+    },
+    {
+      "value": "www.electronicfresh.com ",
+      "reads": null
+    },
+    {
+      "value": "[www.electronicfresh.com]",
+      "reads": null
+    },
+    {
+      "value": "Mumia www.electronicfresh.com",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia - www.electronicfresh.com",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia – www.electronicfresh.com",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia [www.electronicfresh.com]",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia (electronicfresh.com)",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia | electronicfresh.com",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia [Ripped by Team X]",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia - ripped by Team X",
+      "reads": "Mumia"
+    },
+    {
+      "value": "T2 www.",
+      "reads": "T2"
+    },
+    {
+      "value": "T2 www.electro",
+      "reads": "T2"
+    },
+    {
+      "value": "T4 - www.electronicfresh.com",
+      "reads": "T4"
+    },
+    {
+      "value": "www.electronicfresh.com - T1",
+      "reads": "T1"
+    },
+    {
+      "value": "[www.electronicfresh.com] T1",
+      "reads": "T1"
+    },
+    {
+      "value": "electronicfresh.com | T1",
+      "reads": "T1"
+    },
+    {
+      "value": "Mumia​ www.electronicfresh.com",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia - www.electronicfresh.com",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Mumia www.electronicfresh.com​",
+      "reads": "Mumia"
+    },
+    {
+      "value": "Harbour Lights [www.flacsite.net]",
+      "reads": "Harbour Lights"
+    },
+    {
+      "value": "Live at www.club.com 2003",
+      "reads": "Live at www.club.com 2003"
+    },
+    {
+      "value": "will.i.am",
+      "reads": "will.i.am"
+    },
+    {
+      "value": "M.I.A.",
+      "reads": "M.I.A."
+    },
+    {
+      "value": "D.A.N.C.E.",
+      "reads": "D.A.N.C.E."
+    },
+    {
+      "value": "Mr. Oizo",
+      "reads": "Mr. Oizo"
+    },
+    {
+      "value": "St.Germain",
+      "reads": "St.Germain"
+    },
+    {
+      "value": "Dr. Dre",
+      "reads": "Dr. Dre"
+    },
+    {
+      "value": "flacsite.io",
+      "reads": "flacsite.io"
+    },
+    {
+      "value": "electronicfresh.fm",
+      "reads": "electronicfresh.fm"
+    },
+    {
+      "value": "Vol. 2",
+      "reads": "Vol. 2"
+    },
+    {
+      "value": "Op. 100",
+      "reads": "Op. 100"
+    },
+    {
+      "value": "No. 5",
+      "reads": "No. 5"
+    },
+    {
+      "value": "2.0",
+      "reads": "2.0"
+    },
+    {
+      "value": "4.44",
+      "reads": "4.44"
+    }
+  ]
+}

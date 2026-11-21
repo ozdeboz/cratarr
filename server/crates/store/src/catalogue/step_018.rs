@@ -261,3 +261,108 @@ impl Catalogue {
         Ok(out)
     }
 }
+
+/// The part `wm`'s mark (SCENARIOS-WM WM.22): its report, in `FactsReport`'s shape.
+pub const WM: &str = "018:wm";
+
+/// How long 0.17's expectation of a folder (C50) still speaks at the step: its own week (`expect_record`).
+const EXPECTED_WEEK: i64 = 7 * 86_400;
+
+/// A value as a fact reads it (the one tag rule): what's left, else none.
+fn cleaned(value: &str) -> Option<String> {
+    use cratarr_rules::hygiene::{Field, value as clean};
+    clean(Field::Album, value).map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+impl Catalogue {
+    /// The part `wm` (WM.22, T-WM-5, T-WM-9), once, before the part `fold`: WM's cleaned values at the upgrade, the raw tags kept.
+    /// - **Provenance seeded** from what 0.17 holds alone: its C50 expectations still within their week, and the placings `seeds`
+    ///   names (a fetcher's items still placed, listing their folder: the requests crate's to read), each a copy's placement row.
+    /// - **A record named by a stamp** takes its clean name: a stamp beside a name is cut; a title that is only a stamp is merged into
+    ///   the record a seeded placement names where its copy is that record's (WM.10 (b1): `identity::judge`), else titled as a file
+    ///   with no album titles it, and listed as made by a stamp with no placement known (b2). Its artist line the same way.
+    /// - **Artists and labels named by a stamp** are listed: their credits follow the files' cleaned names at the first build.
+    /// One IMMEDIATE transaction whose last write is its mark (its report); `after` heard before the mark (what a test cuts it by). Done
+    /// before: none. The merges, each (the record that went, the one it went into), are said for the user data to follow. Blocking.
+    pub fn step_018_wm(&self, seeds: &[(i64, String, i64)], after: &dyn Fn() -> Result<()>) -> Result<Option<(FactsReport, Vec<(i64, i64)>)>> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.query_row("SELECT 1 FROM meta WHERE key = ?1", [WM], |_| Ok(())).optional()?.is_some() {
+            return Ok(None);
+        }
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let mut report = FactsReport::default();
+        // Provenance from what 0.17 holds, never invented (T-WM-9).
+        let n = tx.execute("INSERT OR IGNORE INTO placements (folder, path, record, at) SELECT folder, dir, record, at FROM expected WHERE at >= ?1", [at - EXPECTED_WEEK])?;
+        report.count("placements seeded from expectations", n as u64);
+        for (folder, dir, record) in seeds {
+            let n = tx.execute("INSERT OR IGNORE INTO placements (folder, path, record, at) VALUES (?1, ?2, ?3, ?4)", params![folder, dir.trim_matches('/'), record, at])?;
+            report.count("placements seeded from placed items", n as u64);
+        }
+        let placed = super::records::placed_in(&tx)?;
+        let mut merges: Vec<(i64, i64)> = Vec::new();
+        let named: Vec<(i64, String, String)> = tx
+            .prepare("SELECT id, COALESCE(title, ''), COALESCE(artist, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (record, title, artist) in named {
+            let (title_clean, artist_clean) = (cleaned(&title), cleaned(&artist));
+            let title_stamped = !title.trim().is_empty() && title_clean.as_deref() != Some(title.trim());
+            let artist_stamped = !artist.trim().is_empty() && artist_clean.as_deref() != Some(artist.trim());
+            if !title_stamped && !artist_stamped {
+                continue;
+            }
+            let subject = ids::record(record);
+            if title_stamped && title_clean.is_none() {
+                // A title only a stamp: its copy under a placement 0.17's evidence names is that record's, merged (WM.10 (b1)).
+                let files: Vec<(i64, String, i64)> = tx
+                    .prepare(&format!(
+                        "SELECT f.folder, f.rel, f.track FROM files f JOIN tracks t ON t.id = f.track WHERE t.record = ?1 AND t.retired_at IS NULL AND {} ORDER BY f.folder, f.rel",
+                        super::PRESENT_F
+                    ))?
+                    .query_map([record], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<rusqlite::Result<_>>()?;
+                let places: Vec<(i64, String)> = files.iter().map(|(f, r, _)| (*f, r.clone())).collect();
+                if let Some(into) = super::provenance::placed_for(&placed, &places).filter(|into| *into != record) {
+                    let folded = super::identity::fold(&artist_clean.clone().unwrap_or_default());
+                    match super::provenance::judged_in(&tx, &places, None, &folded, into)? {
+                        Some(super::provenance::Placed::Copy { takes, .. }) => {
+                            for (f, stays) in takes {
+                                let goes = files[f].2;
+                                if goes != stays {
+                                    tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {} WHERE id = ?1", super::REMEMBER), params![goes, at])?;
+                                    super::taken_for_good(&tx, goes, stays)?;
+                                }
+                            }
+                            tx.execute("UPDATE tracks SET record = ?2 WHERE record = ?1", params![record, into])?;
+                            super::records::merge_records_in(&tx, record, into)?;
+                            report.list("merged by its seeded placement", format!("{subject} \"{title}\" into {}", ids::record(into)));
+                            merges.push((record, into));
+                            continue;
+                        }
+                        _ => report.list("a placement names another record, its tracks differ: not merged", format!("{subject} \"{title}\" ({})", ids::record(into))),
+                    }
+                } else {
+                    report.list("made by a stamp, no placement known", format!("{subject} \"{title}\""));
+                }
+            }
+            // Its clean name: the stamp cut, or as a file with no album titles it.
+            let new_title = if title_stamped { title_clean.unwrap_or_else(|| super::records::UNKNOWN_ALBUM.to_string()) } else { title.clone() };
+            let new_artist = if artist_stamped { artist_clean.unwrap_or_else(|| crate::serve::library::UNKNOWN_ARTIST.to_string()) } else { artist.clone() };
+            tx.execute("UPDATE records SET title = ?2, artist = ?3 WHERE id = ?1", params![record, new_title, new_artist])?;
+            report.list("named again by the tag rule", format!("{subject} \"{title}\" by \"{artist}\" -> \"{new_title}\" by \"{new_artist}\""));
+            report.count("records named again", 1);
+        }
+        for (table, line) in [("artists", "artists named by a stamp (their credits follow the cleaned files at the first build)"), ("labels", "labels named by a stamp (their credits follow the cleaned files at the first build)")] {
+            let rows: Vec<(i64, String)> = tx.prepare(&format!("SELECT id, name FROM {table} ORDER BY id"))?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            for (id, name) in rows.into_iter().filter(|(_, name)| cleaned(name).as_deref() != Some(name.trim())) {
+                report.list(line, format!("{id} \"{name}\""));
+            }
+        }
+        report.count("merged", merges.len() as u64);
+        after()?;
+        tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![WM, serde_json::to_string(&report)?])?;
+        tx.commit()?;
+        Ok(Some((report, merges)))
+    }
+}

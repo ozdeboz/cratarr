@@ -358,7 +358,9 @@ fn the_shipped_links_are_the_approved_genre_set() {
         ("Latin Jazz", &["Jazz", "Latin"]),
         ("Drill And Bass", &["Electronic", "Dance"]),
         ("Ragga HipHop", &["Hip Hop", "Reggae"]),
-        ("Jazz-Funk", &["Jazz"]),
+        // Changed by design: Jazz-Funk links to Jazz and Funk (the owner, 2026-11-21 13:12, "Jazz and Funk"), so it gives
+        // neither (GEN.64).
+        ("Jazz-Funk", &["Jazz", "Funk"]),
         ("Leftfield", &["Electronic"]),
         ("Modern Classical", &["Classical"]),
         ("Contemporary", &["Classical"]),
@@ -388,6 +390,18 @@ fn the_shipped_links_are_the_approved_genre_set() {
     for (style, want) in approved {
         assert_eq!(list.genres_of(style), *want, "{style}");
     }
+    // The links that name several genres are exactly 25 (GEN.8): each a blend, giving no genre (GEN.64); the map keeps them
+    // true. Any edit that changes how many name several shows here.
+    let mut several: Vec<&str> = list.links().iter().filter(|l| l.genres.len() > 1).map(|l| l.style.as_str()).collect();
+    several.sort_unstable();
+    assert_eq!(
+        several,
+        [
+            "Acid Jazz", "Afro-Cuban Jazz", "Alternative Dance", "Ambient Dub", "Ballad", "Bayou Funk", "Blues Rock", "Calypso", "Country Rock",
+            "Dream Pop", "Drill And Bass", "Dub", "Ethereal", "Folk Pop", "Funk Rock", "Glitch Hop", "Jazz-Funk", "Latin Jazz", "Merengue",
+            "Neo Soul", "Pop Rock", "Psychedelic", "Ragga HipHop", "Turntablism", "World Fusion",
+        ]
+    );
     // No link: Instrumental (the owner's point); the styles nobody gave one of the 26; the words that are no style (Health's); a
     // genre's own word; an exception's written form (read as its words first).
     let none = [

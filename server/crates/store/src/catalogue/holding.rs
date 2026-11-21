@@ -88,7 +88,7 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
     let holders: Vec<i64> = asked.iter().map(|(_, holder)| *holder).collect();
     let went = super::records::went_in(db, &holders)?;
     let mut files_of = db.prepare_cached(&format!(
-        "SELECT f.folder, f.rel, f.track, f.duration_ms, a.duration_secs, a.complete FROM files f JOIN tracks t ON t.id = f.track
+        "SELECT f.folder, f.rel, f.track, f.duration_ms, a.duration_secs, a.complete, f.size, f.mtime FROM files f JOIN tracks t ON t.id = f.track
            LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
          WHERE t.record = ?1 AND t.retired_at IS NULL AND {} ORDER BY f.folder, f.rel",
         super::PRESENT_F
@@ -109,14 +109,27 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
         }
         let mut folders: BTreeMap<i64, Vec<Present>> = BTreeMap::new();
         let rows = files_of.query_map([holder], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<f64>>(4)?, r.get::<_, Option<bool>>(5)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<f64>>(4)?,
+                r.get::<_, Option<bool>>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
+            ))
         })?;
+        // The files Cratarr placed for it (COU.18): each pairs at its told place while it is as placed (WM.25 (e)).
+        let told = super::provenance::told_files_in(db, holder)?;
         for row in rows {
-            let (folder, rel, track, header, decoded, complete) = row?;
+            let (folder, rel, track, header, decoded, complete, size, mtime) = row?;
             let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), None);
+            let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), &rel, None);
             let ms = served_ms(header, decoded, complete);
-            folders.entry(folder).or_default().push(Present { track, file: cratarr_domain::facts::Present { disc: facts.disc, number: facts.number, key: rel, title: facts.title, ms } });
+            let mut file = facts.side(rel, ms);
+            file.told = told.get(&(folder, file.key.clone())).and_then(|t| super::provenance::as_placed(t, size, mtime));
+            folders.entry(folder).or_default().push(Present { track, file });
         }
         // A guess today's pairing confirms is none (RV-22): a copy in a main library or own music, never an Incoming arrival not
         // yet added (C15), whose files and the list pair one for one, both ways. Worked out at each read, never stored.

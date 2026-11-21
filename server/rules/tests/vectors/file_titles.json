@@ -1,0 +1,84 @@
+{
+  "about": "WM.25 (a)'s table (SCENARIOS-WM): a file's titles, by the rules crate's hygiene::file_titles: its TITLE cleaned where it has a value (its name unread), else its name's, each cleaned. Written by hand from the scenario's rows.",
+  "cases": [
+    {
+      "file": "03 Pier.flac",
+      "titles": [
+        "03 Pier",
+        "Pier"
+      ]
+    },
+    {
+      "file": "03 - Pier.flac",
+      "titles": [
+        "03 - Pier",
+        "Pier"
+      ]
+    },
+    {
+      "file": "1-03 Pier.flac",
+      "titles": [
+        "1-03 Pier",
+        "Pier"
+      ]
+    },
+    {
+      "file": "Glass Harbour - Pier.mp3",
+      "titles": [
+        "Glass Harbour - Pier",
+        "Pier"
+      ]
+    },
+    {
+      "file": "T4 - www.electronicfresh.com.mp3",
+      "titles": [
+        "T4"
+      ]
+    },
+    {
+      "file": "02 - www.electronicfresh.com.flac",
+      "titles": [
+        "02"
+      ]
+    },
+    {
+      "file": "99 Luftballons.flac",
+      "titles": [
+        "99 Luftballons",
+        "Luftballons"
+      ]
+    },
+    {
+      "file": "1979.flac",
+      "titles": [
+        "1979"
+      ]
+    },
+    {
+      "file": "a1b2c3.flac",
+      "titles": [
+        "a1b2c3"
+      ]
+    },
+    {
+      "file": "07 Breakwater.flac",
+      "titles": [
+        "Pier"
+      ],
+      "title": "Pier"
+    },
+    {
+      "file": "soulseek/Polo & Pan/Mumia (2023) 2/T4 - www.electronicfresh.com.mp3",
+      "titles": [
+        "T4"
+      ]
+    },
+    {
+      "file": "x.flac",
+      "titles": [
+        "T2"
+      ],
+      "title": "T2 www."
+    }
+  ]
+}

@@ -15,9 +15,9 @@
 //!   genres, a file's GENRE) names is a style; any other a tag. Digits alone are no word, and so is a word only a file's
 //!   STYLE uses that no caller knows (GEN-DESIGN §8). Mood is AudioMuse's and the hand's alone. A service's stored word is
 //!   split by that service's rule as it is read (GEN.4).
-//! - **Links** (GEN-DESIGN §5). After the merge, a record's genres and each track's are its genre words and the genres its
-//!   styles count toward (`shared/genres.json`'s links), by one function, `with_links`: never shown, naming no source, never
-//!   held to the services' three; a hand genre list final. A track's start from its record's genre words, not its record's
+//! - **Links** (GEN-DESIGN §5). After the merge, a record's genres and each track's are its genre words and the genre of each
+//!   style linked to exactly one (`shared/genres.json`'s links; a blend, linked to several, gives none: GEN.64), by one
+//!   function, `with_links`: never shown, naming no source, never held to the services' three; a hand genre list final. A track's start from its record's genre words, not its record's
 //!   link-given genres, so a track's own hand style list gives its genres alone (OQ-GEN-15).
 //! - **One spelling.** A word's key folds case, spaces and hyphens (`super::key`); a kind's aliases name the word it
 //!   is; its shown spelling is the 26's name, the alias's, else the most written.
@@ -106,14 +106,15 @@ impl Source {
         })
     }
 
-    /// How far a service's word is trusted (0.9.7's): the household's as the files'; Bandcamp's as Last.fm's, both free tags
-    /// (OQ-GEN-23: no rank of its own).
+    /// How far a service's word is trusted: the household's as the files'; the curated services' genres and styles alike,
+    /// MusicBrainz's and Discogs' (the owner, 2026-11-21, "Curated equal, tags lower", GEN.66); the crowd's free tags lower:
+    /// Last.fm's, Bandcamp's (OQ-GEN-23: no rank of its own) and MusicBrainz's tags.
     fn trust(self, raw_kind: &str) -> f32 {
         match (self, raw_kind) {
             (Source::Hand | Source::Files | Source::Audiomuse | Source::Household, _) => 1.0,
             (Source::Musicbrainz, "tag") => 0.5,
             (Source::Musicbrainz, _) => 0.9,
-            (Source::Discogs, _) => 0.8,
+            (Source::Discogs, _) => 0.9,
             (Source::Lastfm | Source::Bandcamp, _) => 0.5,
         }
     }
@@ -157,6 +158,9 @@ enum Field {
 
 /// A service's word below this merged weight is left out (0.9.7's floor).
 pub const FLOOR: f32 = 0.15;
+
+/// Two merged weights this close are one: equally weighted words, which a cap keeps together (GEN.66).
+const TIED: f32 = 1e-6;
 
 /// One track as read: its files' tags (Genre, STYLE, MOOD, Grouping) and what AudioMuse heard (its styles, and the
 /// moods it stands out on); its words set by hand (0.15's track Edit), by kind.
@@ -513,7 +517,8 @@ impl Gathered {
         }
     }
 
-    /// A kind's words kept: the firm ones, then the services' strongest above the floor, up to the kind's most.
+    /// A kind's words kept: the firm ones, then the services' strongest above the floor, up to the kind's most; a word weighed
+    /// as the last one kept is kept too, so a cap never cuts one of equally weighted words by its spelling (GEN.66).
     fn words(&self, lib: &Library, kind: Kind) -> Vec<(String, Word, f32)> {
         let mut out: Vec<(String, Word, f32, bool)> = self
             .order
@@ -531,10 +536,15 @@ impl Gathered {
             .collect();
         out.sort_by(|a, b| b.3.cmp(&a.3).then(b.2.total_cmp(&a.2)).then_with(|| a.1.word.cmp(&b.1.word)));
         let mut services = 0;
-        out.retain(|(_, _, _, firm)| {
+        let mut last = f32::INFINITY;
+        out.retain(|(_, _, weight, firm)| {
             *firm || {
                 services += 1;
-                services <= kind.most()
+                let kept = services <= kind.most() || (weight - last).abs() < TIED;
+                if kept {
+                    last = *weight;
+                }
+                kept
             }
         });
         out.into_iter().map(|(k, w, x, _)| (k, w, x)).collect()
@@ -589,15 +599,20 @@ fn by_hand(lib: &Library, kind: Kind, list: &[String]) -> KindWords {
 
 /// A kind's genres from its genre words and its style words (GEN-DESIGN §5, GEN.22): the one link function, for a record and for
 /// each of its tracks alike, after the merge. A hand genre list is final: the links add nothing to it (GEN.23, GEN.51). Else its
-/// genre words, then each style's links in the styles' order, each genre once (one its genre words hold adds nothing); never held
-/// to the services' three (R7), and naming no source and no style (C7 (c), GEN.48).
+/// genre words, then the genre of each style linked to exactly one, in the styles' order, each genre once (one its genre words
+/// hold adds nothing). A style linked to several genres, a blend, gives none (the owner, 2026-11-21, "Blends give none",
+/// GEN.64), though the map keeps its links. Never held to the services' three (R7), and naming no source and no style (C7 (c),
+/// GEN.48).
 fn with_links(lib: &Library, genres: KindWords, styles: &[Word]) -> KindWords {
     if genres.hand {
         return genres;
     }
     let mut have: HashSet<String> = genres.words.iter().map(|w| lib.key(Kind::Genre, &w.word)).collect();
     let mut words = genres.words;
-    for genre in styles.iter().flat_map(|s| lib.genres.genres_of(&s.word)) {
+    for genre in styles.iter().filter_map(|s| match lib.genres.genres_of(&s.word) {
+        [one] => Some(one),
+        _ => None,
+    }) {
         if have.insert(lib.key(Kind::Genre, genre)) {
             words.push(Word { word: genre.clone(), sources: Vec::new() });
         }
@@ -794,17 +809,17 @@ mod tests {
         let r = RecordIn { id: "r".into(), tracks: ts, ..RecordIn::default() };
         let lib = of(std::slice::from_ref(&r), &HashMap::new());
         let w = record(&lib, &r);
-        // GEN's sort, by design: Dub, a file's GENRE and none of the 26, is a style; the record's genres are its links' (Electronic,
-        // Reggae by the fixture map), naming no source.
+        // GEN's sort, by design: Dub, a file's GENRE and none of the 26, is a style. Changed by design (GEN.64): Dub links to two
+        // (Electronic, Reggae by the fixture map), a blend, so the record has no genre.
         assert_eq!(kind(&w, Kind::Style), [("Dub", &[Source::Files][..])], "Dub on every track: the record's");
-        assert_eq!(kind(&w, Kind::Genre), [("Electronic", LINKED), ("Reggae", LINKED)], "Dub's links; Hip-Hop is one track's");
+        assert!(kind(&w, Kind::Genre).is_empty(), "Dub, a blend, gives none; Hip-Hop is one track's");
         assert_eq!(kind(&w, Kind::Mood), [("relaxed", &[Source::Audiomuse][..])]);
         let t0: Vec<&str> = w.of_track("t0", Kind::Genre).iter().map(|w| w.word.as_str()).collect();
-        assert_eq!(t0, ["Hip Hop", "Electronic", "Reggae"], "its own, one of the 26, named as the list names it, then its styles' links");
+        assert_eq!(t0, ["Hip Hop"], "its own, one of the 26, named as the list names it, alone");
         let t3: Vec<&str> = w.of_track("t3", Kind::Mood).iter().map(|w| w.word.as_str()).collect();
         assert_eq!(t3, ["aggressive"], "a heard track's mood is its own measure");
         let t1: Vec<&str> = w.of_track("t1", Kind::Genre).iter().map(|w| w.word.as_str()).collect();
-        assert_eq!(t1, ["Electronic", "Reggae"], "a track like its record reads its record's");
+        assert!(t1.is_empty(), "a track like its record reads its record's: none");
         assert_eq!(w.tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t0", "t3"]);
     }
 
@@ -953,12 +968,9 @@ mod tests {
         let signal = rec("al-115", vec![track("t1")], vec![said(Source::Musicbrainz, "deep house", "genre", 1.0), said(Source::Musicbrainz, "r&b/hip-hop", "tag", 0.67)]);
         let lib = of(&[funk.clone(), signal.clone()], &HashMap::new());
         let w = record(&lib, &funk);
-        // The services' three, Discogs' 0.8 each; after the merge, the links: Turntablism's Hip Hop and Electronic, New Jack Swing's
-        // R&B once, none naming a source.
-        assert_eq!(
-            kind(&w, Kind::Genre),
-            [("Funk", &[Source::Discogs][..]), ("R&B", &[Source::Discogs][..]), ("Soul", &[Source::Discogs][..]), ("Hip Hop", LINKED), ("Electronic", LINKED)]
-        );
+        // The services' three, Discogs' 0.9 each (GEN.66); after the merge, the links: New Jack Swing's R&B once, naming no source.
+        // Changed by design (GEN.64): Turntablism, a blend (Hip Hop and Electronic), gives neither.
+        assert_eq!(kind(&w, Kind::Genre), [("Funk", &[Source::Discogs][..]), ("R&B", &[Source::Discogs][..]), ("Soul", &[Source::Discogs][..])]);
         assert_eq!(kind(&w, Kind::Style), [("New Jack Swing", &[Source::Discogs][..]), ("Turntablism", &[Source::Discogs][..])]);
         let s = record(&lib, &signal);
         assert_eq!(kind(&s, Kind::Style), [("deep house", &[Source::Musicbrainz][..])]);
@@ -1007,14 +1019,15 @@ mod tests {
         let w = record(&lib, &d);
         assert_eq!(keys(&w, Kind::Style), ["deep house", "hauntology", "female vocalists", "dub"]);
         assert_eq!(keys(&w, Kind::Tag), ["seen live", "melancholic"]);
-        assert_eq!(kind(&w, Kind::Genre), [("Dance", LINKED), ("Electronic", LINKED), ("Reggae", LINKED)], "only the links': deep house's, dub's");
+        // Changed by design (GEN.64): dub, a blend (Electronic and Reggae), gives none.
+        assert_eq!(kind(&w, Kind::Genre), [("Dance", LINKED)], "only a link's: deep house's");
         assert_eq!(keys(&record(&lib, &f), Kind::Tag), ["chillwave", "glitch hop", "witch house", "wonky"], "no style made for others");
         assert!(keys(&record(&lib, &f), Kind::Style).is_empty());
         // B gone, nobody calls "hauntology" any more: a tag at the next build. Nothing stored changes.
         let lib = of(&[a, c, d.clone(), e, f], &HashMap::new());
         let w = record(&lib, &d);
         assert!(keys(&w, Kind::Tag).contains(&"hauntology".to_string()) && !keys(&w, Kind::Style).contains(&"hauntology".to_string()));
-        assert_eq!(keys(&w, Kind::Genre), ["dance", "electronic", "reggae"], "its styles' links as before");
+        assert_eq!(keys(&w, Kind::Genre), ["dance"], "its styles' links as before");
         assert_eq!(d.said.len(), 6);
     }
 
@@ -1205,9 +1218,18 @@ mod tests {
         r
     }
 
-    /// Pale Dock (al-110): six Discogs styles, each 1.0.
+    /// Pale Dock (al-110): five Discogs styles, each 1.0. (Samba dropped by design, 2026-11-21 14:31: six tied styles would
+    /// all be kept; the cut moved to Shore Line.)
     fn pale_dock() -> RecordIn {
-        rec("al-110", tracks(4), ["Abstract", "Deep House", "Dub", "Electro", "Glitch", "Samba"].iter().map(|w| said(Source::Discogs, w, "style", 1.0)).collect())
+        rec("al-110", tracks(4), ["Abstract", "Deep House", "Dub", "Electro", "Glitch"].iter().map(|w| said(Source::Discogs, w, "style", 1.0)).collect())
+    }
+
+    /// Shore Line (al-137): six Discogs styles at 1.0; Last.fm's tag "samba" at 1.0, a style since Discogs names it for another
+    /// record of the library (`elsewhere`).
+    fn shore_line() -> (RecordIn, RecordIn) {
+        let mut said_: Vec<Said> = ["Abstract", "Deep House", "Dub", "Electro", "Glitch", "Techno"].iter().map(|w| said(Source::Discogs, w, "style", 1.0)).collect();
+        said_.push(said(Source::Lastfm, "samba", "tag", 1.0));
+        (rec("al-137", tracks(4), said_), rec("elsewhere", tracks(1), vec![said(Source::Discogs, "Samba", "style", 1.0)]))
     }
 
     /// al-116 (GEN.11): Discogs' three genres outside the 26, and Score.
@@ -1266,23 +1288,26 @@ mod tests {
         assert!(!names_a_style(&w, "Deep House"));
     }
 
-    /// GEN.18 (R7): Jazz-Funk gives Jazz and Funk; Acid Jazz five, never held to the services' three: a union after the merge.
+    /// GEN.18 (R7), changed by design (GEN.64, the owner, 2026-11-21: "Blends give none"; and GEN.66's ties): a style linked to
+    /// several genres gives none, at the record or any track, and stays a style; single-genre styles' genres are a union after
+    /// the merge, any number, never held to the services' three; a cap keeps every word tied at its edge.
     #[test]
-    fn a_style_counts_toward_any_number_of_the_26() {
+    fn single_genre_styles_give_any_number_and_a_multi_genre_style_none() {
         let saturday = on_every("al-103", 8, &["Jazz-Funk"]);
         let moss = on_every("al-105", 8, &["Acid Jazz"]);
         let lib = of(&[saturday.clone(), moss.clone()], &HashMap::new());
         let w = record(&lib, &saturday);
-        assert_eq!(kind(&w, Kind::Genre), [("Jazz", LINKED), ("Funk", LINKED)]);
+        assert!(kind(&w, Kind::Genre).is_empty() && !w.tracks.iter().any(|t| t.kinds.iter().any(|k| k.kind == Kind::Genre)), "Jazz-Funk links to two: none");
         assert_eq!(kind(&w, Kind::Style), [("Jazz-Funk", &[Source::Files][..])]);
         let w = record(&lib, &moss);
-        assert_eq!(kind(&w, Kind::Genre).into_iter().map(|(g, _)| g).collect::<Vec<_>>(), ["Jazz", "Electronic", "Funk", "Hip Hop", "Soul"], "five, by Acid Jazz's link");
+        assert!(kind(&w, Kind::Genre).is_empty() && !w.tracks.iter().any(|t| t.kinds.iter().any(|k| k.kind == Kind::Genre)), "Acid Jazz links to five: none");
         assert_eq!(kind(&w, Kind::Style), [("Acid Jazz", &[Source::Files][..])]);
-        // A services' style's links too: Discogs' Acid Jazz gives all five beside Discogs' three genres.
-        let said_ = ["Rock", "Pop", "Blues", "Latin"].iter().map(|g| said(Source::Discogs, g, "genre", 1.0)).chain([said(Source::Discogs, "Acid Jazz", "style", 1.0)]).collect();
-        let r = rec("services", tracks(1), said_);
+        // Wide Shelf: Discogs' four genres tie at 0.9 at the cap's edge, all kept (GEN.66); then its four single-genre styles'
+        // genres, in the styles' order: eight, never held to the services' three (R7).
+        let said_ = ["Rock", "Pop", "Blues", "Latin"].iter().map(|g| said(Source::Discogs, g, "genre", 1.0)).chain(["Deep House", "Swing", "Score", "Sonata"].iter().map(|st| said(Source::Discogs, st, "style", 1.0))).collect();
+        let r = rec("wide-shelf", tracks(1), said_);
         let lib = of(std::slice::from_ref(&r), &HashMap::new());
-        assert_eq!(keys(&record(&lib, &r), Kind::Genre), ["blues", "latin", "pop", "jazz", "electronic", "funk", "hip hop", "soul"], "the services' three, then the links' five");
+        assert_eq!(keys(&record(&lib, &r), Kind::Genre), ["blues", "latin", "pop", "rock", "dance", "soundtrack", "classical", "jazz"]);
     }
 
     /// GEN.19: an unlinked style gives nothing, and no genre is guessed from a style's name; Discogs' three fixed.
@@ -1316,13 +1341,21 @@ mod tests {
     /// word from two fields rising once.
     #[test]
     fn links_read_the_merged_words() {
-        // (a) The services' most: five of Pale Dock's six styles kept (by firm, weight, then the word); Samba's Latin not given.
+        // (a) The services' most, changed by design (GEN.66's ties, GEN.64's blends): Shore Line's six styles tie at 0.9 at the cap's
+        // edge, so all six are kept; Last.fm's samba, a style at 0.5 below the last kept, is cut, and its Latin not given. Dub, a
+        // blend, gives no Reggae.
+        let (shore, elsewhere) = shore_line();
+        let lib = of(&[shore.clone(), elsewhere], &HashMap::new());
+        let w = record(&lib, &shore);
+        assert_eq!(keys(&w, Kind::Style), ["abstract", "deep house", "dub", "electro", "glitch", "techno"]);
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", LINKED), ("Dance", LINKED)]);
+        assert!(!shown_anywhere(&w, "Latin") && !shown_anywhere(&w, "Samba"), "never a link read from a word the merge left out");
+        assert!(!shown_anywhere(&w, "Reggae"));
         let pale = pale_dock();
         let lib = of(std::slice::from_ref(&pale), &HashMap::new());
         let w = record(&lib, &pale);
         assert_eq!(keys(&w, Kind::Style), ["abstract", "deep house", "dub", "electro", "glitch"]);
-        assert_eq!(kind(&w, Kind::Genre), [("Electronic", LINKED), ("Dance", LINKED), ("Reggae", LINKED)]);
-        assert!(!shown_anywhere(&w, "Latin") && !shown_anywhere(&w, "Samba"), "never a link read from a word the merge left out");
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", LINKED), ("Dance", LINKED)], "no Reggae: Dub is a blend");
         // (b) Discogs off for Style: its styles leave the kind, and their links give nothing.
         let off = HashMap::from([(Kind::Style, HashSet::from([Source::Discogs]))]);
         let w = record(&of(std::slice::from_ref(&pale), &HashMap::new()).with_off(off), &pale);
@@ -1372,6 +1405,12 @@ mod tests {
         assert_eq!(keys(&record(&before, &lantern), Kind::Genre), ["electronic", "dance"]);
         let gains = map(|links| links.push(serde_json::json!({ "style": "Hauntology", "genres": ["Electronic"] })));
         assert_eq!(kind(&record(&under(&all, gains), &grey), Kind::Genre), [("Electronic", LINKED)], "Hauntology's new link");
+        // Changed by design (GEN.64): a second link takes the style's genre away at the next build, at the record and every
+        // track; back to one, Electronic again.
+        let two = map(|links| links.push(serde_json::json!({ "style": "Hauntology", "genres": ["Electronic", "Experimental"] })));
+        let w = record(&under(&all, two), &grey);
+        assert!(!shown_anywhere(&w, "Electronic") && !shown_anywhere(&w, "Experimental"), "a blend gives none: {w:?}");
+        assert_eq!(kind(&record(&under(&all, gains), &grey), Kind::Genre), [("Electronic", LINKED)], "back to one link");
         let loses = map(|links| {
             for l in links.iter_mut().filter(|l| l["style"] == "Deep House") {
                 l["genres"] = serde_json::json!([]);
@@ -1428,9 +1467,10 @@ mod tests {
         assert_eq!(keys_of(&w, "t7", Kind::Genre), ["electronic", "dance"], "t7: no hand list, its Deep House's link");
     }
 
-    /// Tin Harbour (al-111): every track GENRE Jazz and Dub; the hand's styles Deep House and Jazz-Funk.
+    /// Tin Harbour (al-111): every track GENRE Jazz, Dub and Samba (Samba added by design, 2026-11-21, so the record level's
+    /// left-out style is a single-genre one); the hand's styles Deep House and Jazz-Funk.
     fn tin_harbour() -> RecordIn {
-        let mut r = on_every("al-111", 4, &["Jazz", "Dub"]);
+        let mut r = on_every("al-111", 4, &["Jazz", "Dub", "Samba"]);
         r.hand.insert(Kind::Style, strings(&["Deep House", "Jazz-Funk"]));
         r
     }
@@ -1443,11 +1483,13 @@ mod tests {
         let mut twin = on_every("al-111-twin", 4, &["Jazz", "Dub"]);
         twin.hand.insert(Kind::Genre, strings(&["Soul"]));
         twin.hand.insert(Kind::Style, strings(&["Deep House"]));
-        let mut saturday = on_every("al-103", 8, &["Jazz-Funk"]);
-        saturday.tracks[1].hand.insert(Kind::Style, strings(&["Turntablism"]));
-        let lib = of(&[tin.clone(), twin.clone(), saturday.clone()], &HashMap::new());
+        // Changed by design (GEN.64): Lantern Rooms' t2 replaces Saturday Band's, whose record and list both link to two genres.
+        let mut lantern = lantern_rooms();
+        lantern.tracks[1].hand.insert(Kind::Style, strings(&["Turntablism", "Swing"]));
+        let lib = of(&[tin.clone(), twin.clone(), lantern.clone()], &HashMap::new());
         let w = record(&lib, &tin);
-        assert_eq!(kind(&w, Kind::Genre), [("Jazz", &[Source::Files][..]), ("Dance", LINKED), ("Funk", LINKED)], "the files' Jazz, once; the hand's styles' Dance and Funk");
+        assert_eq!(kind(&w, Kind::Genre), [("Jazz", &[Source::Files][..]), ("Dance", LINKED)], "the files' Jazz; Deep House's Dance; Jazz-Funk, a blend, none");
+        assert!(!shown_anywhere(&w, "Funk") && !shown_anywhere(&w, "Latin") && !shown_anywhere(&w, "Samba"), "never Funk, a blend's; never Samba's Latin, left out");
         let styles = w.kinds.iter().find(|k| k.kind == Kind::Style).unwrap();
         assert!(styles.hand && keys(&w, Kind::Style) == ["deep house", "jazz funk"], "the hand's, final");
         // Never: a link read from a style the hand's list left out: the files' Dub gives no Electronic or Reggae, at any level.
@@ -1456,11 +1498,13 @@ mod tests {
         let w = record(&lib, &twin);
         assert_eq!(kind(&w, Kind::Genre), [("Soul", &[Source::Hand][..])], "a hand genre list is final");
         assert!(!shown_anywhere(&w, "Dance") && !shown_anywhere(&w, "Jazz"));
-        // Saturday Band's t2: its genre words (none: the record's Jazz and Funk are link-given) and its own styles' links alone.
-        let w = record(&lib, &saturday);
-        assert_eq!(keys(&w, Kind::Genre), ["jazz", "funk"]);
-        assert_eq!((keys_of(&w, "t2", Kind::Genre), keys_of(&w, "t2", Kind::Style)), (strings(&["hip hop", "electronic"]), strings(&["turntablism"])));
-        assert_eq!(keys_of(&w, "t1", Kind::Genre), ["jazz", "funk"], "a track without a hand list reads the record's");
+        // Lantern Rooms' t2: its genre words (the record's before the links, and its own: Electronic) and Swing's Jazz, alone.
+        // Turntablism, a blend, gives neither of its two; the record's Dance doesn't come down, and t2's own Deep House, which its
+        // hand list leaves out, gives none: one function per level.
+        let w = record(&lib, &lantern);
+        assert_eq!(keys(&w, Kind::Genre), ["electronic", "dance"]);
+        assert_eq!((keys_of(&w, "t2", Kind::Genre), keys_of(&w, "t2", Kind::Style)), (strings(&["electronic", "jazz"]), strings(&["turntablism", "swing"])));
+        assert_eq!(keys_of(&w, "t1", Kind::Genre), ["electronic", "dance"], "a track without a hand list reads the record's");
         // GEN.25's Grey Archive after its routing: the hand's styles Hauntology and Leftfield, no hand genre list; its genres as
         // given, Electronic by Leftfield's link as for any style, and never Leftfield as a genre.
         let mut grey = on_every("al-104", 6, &["Hauntology"]);
@@ -1482,11 +1526,12 @@ mod tests {
         let cases: [((Vec<String>, Vec<String>), (Option<Vec<String>>, Option<Vec<String>>), (Option<Vec<String>>, Option<Vec<String>>)); 7] = [
             // Lantern Rooms: "Jazz" and "Wonky Jazz" typed into the style row: both rows edited, Dance stays.
             ((s(&["Electronic", "Dance"]), s(&["Deep House"])), (None, Some(s(&["Deep House", "Jazz", "Wonky Jazz"]))), (ks(&["Electronic", "Dance", "Jazz"]), ks(&["Deep House", "Wonky Jazz"]))),
-            // Pale Dock: "Dance" typed into the style row: the genre row's, as shown; the style row gained and lost no style.
+            // Pale Dock: "Dance" typed into the style row: the genre row's, as shown; the style row gained and lost no style. (Its
+            // rows as now shown, Dub a blend: GEN.64.)
             (
-                (s(&["Electronic", "Dance", "Reggae"]), s(&["Abstract", "Deep House", "Dub", "Electro", "Glitch"])),
+                (s(&["Electronic", "Dance"]), s(&["Abstract", "Deep House", "Dub", "Electro", "Glitch"])),
                 (None, Some(s(&["Abstract", "Deep House", "Dub", "Electro", "Glitch", "Dance"]))),
-                (ks(&["Electronic", "Dance", "Reggae"]), None),
+                (ks(&["Electronic", "Dance"]), None),
             ),
             // Grey Archive (R9): "Leftfield" typed into the genre row edits the style row; the genre row isn't edited.
             ((Vec::new(), s(&["Hauntology"])), (Some(s(&["Leftfield"])), None), (None, ks(&["Hauntology", "Leftfield"]))),
@@ -1640,8 +1685,17 @@ mod tests {
         let mut grey = on_every("al-104", 6, &["Hauntology"]);
         hand(&mut grey, Kind::Style, &["Hauntology", "Leftfield"]);
         let mut pale = pale_dock();
-        hand(&mut pale, Kind::Genre, &["Electronic", "Dance", "Reggae"]);
+        // Changed by design (GEN.64): Pale Dock's list as GEN.25 now shows it, Dub a blend.
+        hand(&mut pale, Kind::Genre, &["Electronic", "Dance"]);
         records.extend([lantern, night, moss, tin_harbour(), twin, saturday, routed, grey, pale]);
+        // GEN.64's lists: Copper Steps' t5 and its twin's record; and GEN.43's al-133, a hand genre word linked to several.
+        let mut copper = on_every("al-132", 8, &["Acid Jazz", "Samba"]);
+        copper.tracks[4].hand.insert(Kind::Style, strings(&["Turntablism", "Swing"]));
+        let mut copper_twin = on_every("al-132-twin", 8, &["Acid Jazz", "Samba"]);
+        hand(&mut copper_twin, Kind::Style, &["Acid Jazz", "Turntablism", "Score"]);
+        let mut r133 = on_every("al-133", 3, &["Electronic"]);
+        hand(&mut r133, Kind::Genre, &["Acid Jazz", "Soul"]);
+        records.extend([copper, copper_twin, r133]);
         // Set 8: GEN.43's lists, before the step and after it.
         let mut kept = rec("al-109", tracks(2), vec![said(Source::Discogs, "Modern Classical", "style", 1.0), said(Source::Discogs, "Drone", "style", 1.0)]);
         hand(&mut kept, Kind::Genre, &["Contemporary", "Experimental", "Leftfield", "Neo-Classical"]);
@@ -1680,7 +1734,8 @@ mod tests {
         }
         records.extend([kept, r122, r123, r125, r126, r127]);
         records.extend(after);
-        // The three maps: the fixture's, none, and every style of these records linked to all 26.
+        // The four maps: the fixture's, none, every style of these records linked to all 26, and every one linked to one genre
+        // alone, Country, which no hand list holds (changed by design, GEN.64: the all-26 map's blends give nothing).
         let every: Vec<serde_json::Value> = {
             let list = fixture();
             let all26: Vec<&str> = list.genres().iter().map(|g| g.name.as_str()).collect();
@@ -1692,11 +1747,23 @@ mod tests {
             words.filter(|w| list.genre_of(w).is_none() && seen.insert(super::super::key(w))).map(|w| serde_json::json!({ "style": w, "genres": all26 })).collect()
         };
         assert!(every.len() > 15, "{every:?}");
-        let maps = [fixture(), map(|links| links.clear()), map(|links| *links = every)];
-        for genres in maps {
+        let one: Vec<serde_json::Value> = every.iter().map(|l| serde_json::json!({ "style": l["style"].clone(), "genres": ["Country"] })).collect();
+        let maps = [fixture(), map(|links| links.clear()), map(|links| *links = every), map(|links| *links = one)];
+        for (at, genres) in maps.into_iter().enumerate() {
             let lib = under(&records, genres);
             for r in &records {
                 let w = record(&lib, r);
+                // Where the genre kind has no hand list: the all-26 map's links give nothing; the one-genre map's give Country
+                // wherever the record has a style.
+                if !r.hand.contains_key(&Kind::Genre) {
+                    let country = keys(&w, Kind::Genre).contains(&"country".to_string());
+                    let styled = w.kinds.iter().any(|k| k.kind == Kind::Style && !k.words.is_empty());
+                    match at {
+                        2 => assert!(!country, "{}: a blend of all 26 gives none", r.id),
+                        3 => assert_eq!(country, styled, "{}: every style gives Country", r.id),
+                        _ => {}
+                    }
+                }
                 for (kind, list) in &r.hand {
                     let want = by_hand(&lib, *kind, list);
                     let got = w.kinds.iter().find(|k| k.kind == *kind);
@@ -1714,5 +1781,95 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// GEN.64 (the owner, 2026-11-21 13:47, "Only single-genre styles"; "Blends give none"): only a style linked to exactly
+    /// one genre gives it, at the record, at a track, from a track's hand style list and a record's. A blend (Acid Jazz's five,
+    /// Dub's, Jazz-Funk's and Turntablism's two in the fixture map) gives none, stays a style where it was, and keeps its links.
+    #[test]
+    fn only_a_style_linked_to_one_genre_gives_it() {
+        let mut copper = on_every("al-132", 8, &["Acid Jazz", "Samba"]);
+        copper.tracks[1].genre.extend(strings(&["Dub", "Deep House"]));
+        copper.tracks[4].hand.insert(Kind::Style, strings(&["Turntablism", "Swing"]));
+        copper.said.push(said(Source::Discogs, "Jazz-Funk", "style", 1.0));
+        let mut twin = on_every("al-132-twin", 8, &["Acid Jazz", "Samba"]);
+        twin.hand.insert(Kind::Style, strings(&["Acid Jazz", "Turntablism", "Score"]));
+        let lib = of(&[copper.clone(), twin.clone()], &HashMap::new());
+
+        let w = record(&lib, &copper);
+        assert_eq!(kind(&w, Kind::Genre), [("Latin", LINKED)], "the record: Samba's Latin alone, naming no source");
+        assert_eq!(keys(&w, Kind::Style), ["acid jazz", "samba", "jazz funk"], "the files' two, then Discogs'");
+        assert_eq!(keys_of(&w, "t1", Kind::Genre), ["latin"], "a track without words of its own reads the record's");
+        assert_eq!(keys_of(&w, "t2", Kind::Genre), ["latin", "dance"], "t2: Deep House's Dance; Dub gives none");
+        let t2 = keys_of(&w, "t2", Kind::Style);
+        assert!(["acid jazz", "samba", "jazz funk", "dub", "deep house"].iter().all(|x| t2.contains(&x.to_string())), "{t2:?}");
+        assert_eq!(keys_of(&w, "t5", Kind::Genre), ["jazz"], "t5: Swing's Jazz alone; the record's Latin doesn't come down");
+        assert_eq!(keys_of(&w, "t5", Kind::Style), ["turntablism", "swing"], "the hand's, final");
+        for t in ["t1", "t2", "t3", "t4", "t6", "t7", "t8"] {
+            assert!(keys_of(&w, t, Kind::Style).contains(&"acid jazz".to_string()), "{t}: Acid Jazz stays a style");
+        }
+        assert!(!keys_of(&w, "t5", Kind::Style).contains(&"acid jazz".to_string()));
+        assert!(shows(&w, Kind::Style, "Dub") && shows(&w, Kind::Style, "Jazz-Funk") && shows(&w, Kind::Style, "Turntablism"));
+        for blend in ["Jazz", "Electronic", "Funk", "Hip Hop", "Soul", "Reggae"] {
+            for t in ["t1", "t2", "t3"] {
+                assert!(!keys_of(&w, t, Kind::Genre).contains(&super::super::key(blend)), "{t}: never {blend}, a blend's");
+            }
+            assert!(!keys(&w, Kind::Genre).contains(&super::super::key(blend)), "the record: never {blend}");
+        }
+        for style in ["Samba", "Deep House", "Swing", "Acid Jazz"] {
+            assert!(!names_a_style(&w, style), "no link shown: {style}");
+        }
+
+        let w = record(&lib, &twin);
+        assert_eq!(kind(&w, Kind::Genre), [("Soundtrack", LINKED)], "the twin: Score's Soundtrack alone");
+        assert!(w.tracks.iter().all(|t| t.kinds.iter().filter(|k| k.kind == Kind::Genre).all(|k| k.words.iter().all(|x| x.word == "Soundtrack"))));
+        assert_eq!(keys_of(&w, "t3", Kind::Genre), ["soundtrack"], "every track reads it");
+        assert_eq!(keys(&w, Kind::Style), ["acid jazz", "turntablism", "score"], "the hand's three, final");
+        assert!(!shown_anywhere(&w, "Latin"), "the files' Samba, left out by the hand's list, gives nothing");
+
+        // The map stays true: the one link function alone applies the rule (GEN.22).
+        let links = |style: &str| fixture().links().iter().find(|l| super::super::key(&l.style) == super::super::key(style)).map_or(0, |l| l.genres.len());
+        assert_eq!(links("Acid Jazz"), 5);
+        for blend in ["Dub", "Jazz-Funk", "Turntablism"] {
+            assert_eq!(links(blend), 2, "{blend}");
+        }
+    }
+
+    /// GEN.66 (the owner, 2026-11-21, "Curated equal, tags lower"): MusicBrainz's and Discogs' genres and styles weigh the same,
+    /// 0.9 each; the crowd's tags 0.5 (Last.fm's, Bandcamp's, MusicBrainz's tags); the floor and the caps stay; and a cap never
+    /// cuts one of equally weighted words (the coordinator, 14:31): ties at its edge are all kept, never cut by their spelling.
+    #[test]
+    fn curated_words_weigh_the_same_and_crowd_tags_less() {
+        let crowd = || vec![said(Source::Musicbrainz, "reggae", "tag", 1.0), said(Source::Lastfm, "rock", "tag", 1.0), said(Source::Bandcamp, "latin", "tag", 1.0)];
+        let mut even = rec("al-135", tracks(1), vec![
+            said(Source::Discogs, "Blues", "genre", 1.0),
+            said(Source::Discogs, "Funk", "genre", 1.0),
+            said(Source::Musicbrainz, "jazz", "genre", 1.0),
+            said(Source::Musicbrainz, "soul", "genre", 1.0),
+        ]);
+        even.said.extend(crowd());
+        let mut mirror = rec("al-135b", tracks(1), vec![
+            said(Source::Discogs, "Jazz", "genre", 1.0),
+            said(Source::Discogs, "Soul", "genre", 1.0),
+            said(Source::Musicbrainz, "blues", "genre", 1.0),
+            said(Source::Musicbrainz, "funk", "genre", 1.0),
+        ]);
+        mirror.said.extend(crowd());
+        let edge = |at: f32| rec("al-136", tracks(1), vec![said(Source::Discogs, "Hard Bop", "style", at), said(Source::Musicbrainz, "post-bop", "genre", at)]);
+        let lib = of(&[even.clone(), mirror.clone(), edge(0.17), edge(0.16)], &HashMap::new());
+
+        let w = record(&lib, &even);
+        assert_eq!(keys(&w, Kind::Genre), ["blues", "funk", "jazz", "soul"], "four tied at 0.9 at the cap's edge: all kept");
+        assert_eq!(kind(&w, Kind::Genre).iter().map(|(_, s)| s.to_vec()).collect::<Vec<_>>(), [vec![Source::Discogs], vec![Source::Discogs], vec![Source::Musicbrainz], vec![Source::Musicbrainz]]);
+        for tag in ["Rock", "Reggae", "Latin"] {
+            assert!(!shows(&w, Kind::Genre, tag), "{tag}: a crowd tag at 0.5, below the last kept");
+        }
+        let m = record(&lib, &mirror);
+        assert_eq!(keys(&m, Kind::Genre), keys(&w, Kind::Genre), "which curated service said which word changes nothing kept");
+
+        let at = record(&lib, &edge(0.17));
+        assert_eq!(keys(&at, Kind::Style), ["hard bop", "post bop"], "0.153 each, above the floor: both kept");
+        let below = record(&lib, &edge(0.16));
+        assert!(keys(&below, Kind::Style).is_empty(), "0.144 each, below the floor: both left out");
     }
 }

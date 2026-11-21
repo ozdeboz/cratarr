@@ -186,6 +186,8 @@ struct Shape<'a> {
     longest_ms: u64,
     name: &'a str,
     various: bool,
+    /// Each track's title, in order, where the caller has them (VERSIONS: one song in versions); none for another server's album.
+    titles: &'a [&'a str],
 }
 
 /// The whole release of an album found missing tracks (`app::incomplete`, user data `album_complete`): how many tracks
@@ -214,38 +216,28 @@ impl Shape<'_> {
 
 const MINUTE_MS: u64 = 60_000;
 
-/// An album's release type (0.13, the owner's rule, 2026-10-31; decision 0081's second amendment), on top of what
-/// MusicBrainz's release group, else Discogs' format, says: MusicBrainz's Single is one song in versions, not a short
-/// release, and an EP of either may be an album of twelve tracks. In order:
+/// An album's release type by the owner's rule (0.13, 2026-10-31; decision 0081's second amendment), from its files alone (the
+/// owner, 2026-11-21, "Files only": no service's type goes in; MusicBrainz's or Discogs' is its own version in the facts layer, and
+/// a Broadcast or Other is set by hand). In order:
 /// 1. The name wins: "… EP" an EP, "… LP" an album.
-/// 2. Seven tracks or more, or over 45 minutes: an album (the owner's EPs reach 44 minutes, their albums start at 47).
-/// 3. Four to six tracks: an EP.
-/// 4. One to three: an EP where over 15 minutes or a track is 10 minutes or longer, else a single.
-/// 5. A Single said (one song in versions) is an EP at most, however long.
+/// 2. One song in versions (VERSIONS, the owner 2026-11-20: every track's title one base title once its version parts are set
+///    aside, at least two tracks): a single up to 30 minutes, else an EP.
+/// 3. Seven tracks or more, or over 45 minutes: an album (the owner's EPs reach 44 minutes, their albums start at 47).
+/// 4. Four to six tracks: an EP.
+/// 5. One to three: an EP where over 15 minutes or a track is 10 minutes or longer, else a single.
 ///
-/// An album found missing tracks is read as its whole release (`Whole`; 0.13, the owner: incomplete is no type). The
-/// same for an album neither says anything of. A Broadcast or Other stays as said. A Various Artists album is a
-/// compilation besides. (primary, where from, which rule where the rule decided, secondary): where from is the source
-/// that said a type, none where none did; the rule ("name", "tracks", "length", "one song") only where the type is not
-/// the one said.
-fn release_type_of(
-    musicbrainz: Option<&Kept>,
-    discogs: Option<&Kept>,
-    album: &Shape,
-) -> (Option<String>, Option<&'static str>, Option<&'static str>, Vec<String>) {
-    let (said, from, mut secondary) = match (musicbrainz, discogs) {
-        (Some((Some(p), s)), _) => (Some(p.as_str()), Some("musicbrainz"), s.clone()),
-        (_, Some((Some(p), s))) => (Some(p.as_str()), Some("discogs"), s.clone()),
-        _ => (None, None, musicbrainz.or(discogs).map(|t| t.1.clone()).unwrap_or_default()),
-    };
-    if album.various && !secondary.iter().any(|s| s == "compilation") {
-        secondary.push("compilation".into());
-    }
-    if matches!(said, Some("other" | "broadcast")) || album.tracks == 0 {
-        return (said.map(str::to_string), from, None, secondary);
+/// An album found missing tracks is read as its whole release (`Whole`; 0.13, the owner: incomplete is no type), whose missing
+/// tracks give no titles, so it is never read as one song (T-VER-1). (type, which rule: "name", "versions", "tracks", "length").
+/// Its secondaries are `secondaries_of`'s.
+fn release_type_of(album: &Shape) -> (Option<String>, Option<&'static str>) {
+    if album.tracks == 0 {
+        return (None, None);
     }
     let (kind, why) = if let Some(kind) = named(album.name) {
         (kind, "name")
+    } else if album.titles.len() == album.tracks && one_song_in_versions(album.titles) {
+        // VERSIONS: one song in versions, every track's title read (an incomplete record's missing tracks give none, T-VER-1).
+        (if album.duration_ms <= 30 * MINUTE_MS { "single" } else { "ep" }, "versions")
     } else {
         let (kind, why) = if album.tracks >= 7 {
             ("album", "tracks")
@@ -258,9 +250,25 @@ fn release_type_of(
         } else {
             ("single", "tracks")
         };
-        if kind == "album" && said == Some("single") { ("ep", "one song") } else { (kind, why) }
+        (kind, why)
     };
-    (Some(kind.into()), from, (said != Some(kind)).then_some(why), secondary)
+    (Some(kind.into()), Some(why))
+}
+
+/// A record's secondary types where no hand set them (rule 8; the coordinator, 2026-11-21): a set, so a union with none ranked:
+/// MusicBrainz's and Discogs', in the order first heard, each once, and the rule's "compilation" for a Various Artists album last.
+/// Which source said each is the facts layer's (the entity's secondaries as `Said`s).
+fn secondaries_of(musicbrainz: Option<&Kept>, discogs: Option<&Kept>, various: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in musicbrainz.into_iter().chain(discogs).flat_map(|k| k.1.iter()) {
+        if !out.contains(s) {
+            out.push(s.clone());
+        }
+    }
+    if various && !out.iter().any(|s| s == "compilation") {
+        out.push("compilation".into());
+    }
+    out
 }
 
 /// Another server's album typed by the owner's rule (0.13, the owner: a record's type is always known): its track
@@ -275,11 +283,13 @@ pub fn type_by_rule(album: &mut crate::source::Album) {
         longest_ms: 0,
         name: &album.title,
         various: album.artist.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("Various Artists")),
+        // Another server's album: its titles aren't given, so no type is guessed from them (VER.5).
+        titles: &[],
     };
-    let (kind, _, why, secondary) = release_type_of(None, None, &shape);
+    let (kind, why) = release_type_of(&shape);
     album.release.kind = kind;
     album.release.type_why = why.map(str::to_string);
-    album.release.secondary = secondary;
+    album.release.secondary = secondaries_of(None, None, shape.various);
 }
 
 /// A had record's release type by the owner's rule (`release_type_of`), nothing said of it, until a build types its album (RF1:
@@ -287,19 +297,55 @@ pub fn type_by_rule(album: &mut crate::source::Album) {
 /// length where its files' was read (T10). None where the rule cannot say whether it is a single: its answer hangs on a length not
 /// read yet (a short record whose files the walker has not read), or it has no tracks. Else its type as a build reads it, a length
 /// not read as none.
-pub fn type_by_files(name: &str, lengths: &[Option<u64>]) -> Option<String> {
+pub fn type_by_files(name: &str, titles: &[&str], lengths: &[Option<u64>]) -> Option<String> {
     if lengths.is_empty() {
         return None;
     }
     // The rule with each length not read the shortest it could be, and the longest: placed where the two agree it is a single or not.
     let typed = |unread: u64| {
         let ms = || lengths.iter().map(|l| l.unwrap_or(unread));
-        let shape = Shape { tracks: lengths.len(), duration_ms: ms().fold(0, u64::saturating_add), longest_ms: ms().max().unwrap_or(0), name, various: false };
-        release_type_of(None, None, &shape).0
+        let shape = Shape { tracks: lengths.len(), duration_ms: ms().fold(0, u64::saturating_add), longest_ms: ms().max().unwrap_or(0), name, various: false, titles };
+        release_type_of(&shape).0
     };
     let (shortest, longest) = (typed(0), typed(u64::MAX));
     let single = |t: &Option<String>| t.as_deref() == Some("single");
     if single(&shortest) == single(&longest) { shortest } else { None }
+}
+
+/// The words that make a bracketed part a version of the song (VERSIONS, the owner 2026-11-20; "original", T-VER-5), whole words.
+const VERSION_WORDS: [&str; 12] = ["mix", "remix", "edit", "version", "dub", "instrumental", "extended", "radio", "vip", "rework", "live", "original"];
+
+/// Whether a record's tracks are one song in versions (VERSIONS, the owner 2026-11-20): at least two tracks, one of them a version
+/// (a bracketed part: two bare titles alike are one title twice); each title's bracketed parts (round or square) set aside where
+/// each holds a version word as a whole word; the rest one base title, case-folded and its spaces as one, never empty (a title not
+/// read). A title with no bracket is the base version; a dash-joined part is no bracket (T-VER-2).
+pub(crate) fn one_song_in_versions(titles: &[&str]) -> bool {
+    if titles.len() < 2 || !titles.iter().any(|t| t.contains(['(', '['])) {
+        return false;
+    }
+    let mut bases = titles.iter().map(|t| base_title(t));
+    let Some(Some(first)) = bases.next() else { return false };
+    bases.all(|b| b.as_deref() == Some(first.as_str()))
+}
+
+/// A title with its version parts set aside, folded; none where a bracketed part holds no version word, or a bracket isn't closed.
+fn base_title(title: &str) -> Option<String> {
+    let (mut base, mut rest) = (String::new(), title);
+    while let Some(open) = rest.find(['(', '[']) {
+        let close = if rest[open..].starts_with('(') { ')' } else { ']' };
+        let inside_at = open + 1;
+        let end = inside_at + rest[inside_at..].find(close)?;
+        let part = &rest[inside_at..end];
+        if !part.split(|c: char| !c.is_alphanumeric()).any(|w| VERSION_WORDS.contains(&w.to_lowercase().as_str())) {
+            return None;
+        }
+        base.push_str(&rest[..open]);
+        rest = &rest[end + 1..];
+    }
+    base.push_str(rest);
+    let base = base.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    // A title not read (empty) is no title: nothing to compare.
+    (!base.is_empty()).then_some(base)
 }
 
 /// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case). The words an artist's own lists leave out of
@@ -318,16 +364,16 @@ mod release_type_tests {
 
     fn shape(name: &str, tracks: usize, minutes: f64, longest: f64) -> Shape<'_> {
         let ms = |m: f64| (m * MINUTE_MS as f64) as u64;
-        Shape { tracks, duration_ms: ms(minutes), longest_ms: ms(longest), name, various: false }
+        Shape { tracks, duration_ms: ms(minutes), longest_ms: ms(longest), name, various: false, titles: &[] }
     }
 
     fn said(kind: &str) -> Kept {
         (Some(kind.into()), Vec::new())
     }
 
-    /// (type, rule) for an album as `kept` says.
-    fn typed(kept: Option<&Kept>, album: Shape) -> (String, Option<&'static str>) {
-        let (kind, _, why, _) = release_type_of(kept, None, &album);
+    /// (type, rule) for an album whatever a service says of it (`_said`: the owner's "Files only", 2026-11-21: it goes in nowhere).
+    fn typed(_said: Option<&Kept>, album: Shape) -> (String, Option<&'static str>) {
+        let (kind, why) = release_type_of(&album);
         (kind.unwrap_or_default(), why)
     }
 
@@ -341,6 +387,119 @@ mod release_type_tests {
         assert_eq!(type_label("compilation"), "Compilation");
     }
 
+    /// A record of these titles, each track as long (minutes in all), as the build's shape has it.
+    fn titled<'a>(name: &'a str, titles: &'a [&'a str], minutes: f64) -> Shape<'a> {
+        let ms = |m: f64| (m * MINUTE_MS as f64) as u64;
+        Shape { tracks: titles.len(), duration_ms: ms(minutes), longest_ms: ms(minutes / titles.len().max(1) as f64), name, various: false, titles }
+    }
+
+    /// N titles, one song in versions.
+    fn versions_of(n: usize) -> Vec<String> {
+        (0..n).map(|i| if i == 0 { "Pier".to_string() } else { format!("Pier (Mix {i})") }).collect()
+    }
+
+    const DEEP: [&str; 4] = ["Deep Harbour (Original Mix)", "Deep Harbour (Misty Bay Mix)", "Deep Harbour (Anz Safe Place Mix)", "Deep Harbour (Anz Defensive Mix)"];
+
+    /// VER.1: one song in versions by its titles alone (the owner, 2026-11-20; T-VER-2, T-VER-5).
+    #[test]
+    fn one_song_in_versions_by_its_titles() {
+        let rows: [(&[&str], bool, &str); 11] = [
+            (&DEEP, true, "(a)"),
+            (&["Deep Harbour", "deep harbour (Radio Edit)", "DEEP HARBOUR (Dub)"], true, "(b) case-folded; no bracket is the base"),
+            (&["Pier (Anz Remix) [Extended]", "Pier (VIP)", "Pier (Instrumental)"], true, "(c) two brackets"),
+            (&["Pier (Live)", "Pier (Rework)", "Pier (Version 2)"], true, "(d)"),
+            (&["Pier (feat. Anz)", "Pier"], false, "(e) feat. is no version part"),
+            (&["Intro", "Pier", "Low Water", "Intro (Reprise)"], false, "(f) Reprise is no version word"),
+            (&["Symphony No. 5 (I. Allegro)", "Symphony No. 5 (II. Andante)", "Symphony No. 5 (III. Scherzo)"], false, "(g) movements"),
+            (&["Pier - Anz Remix", "Pier - Radio Edit"], false, "(h) brackets only (T-VER-2)"),
+            (&["Deep Harbour (Anz Remix)"], false, "(i) one track"),
+            (&["Pier (Remix)", "Low Water (Remix)"], false, "(j) two base titles"),
+            (&["Deep Harbour (Original)", "Deep Harbour (Misty Bay Mix)"], true, "(k) original is a version word (T-VER-5)"),
+        ];
+        for (titles, want, row) in rows {
+            assert_eq!(one_song_in_versions(titles), want, "{row}");
+        }
+        // Never: a version word inside another word.
+        assert!(!one_song_in_versions(&["Pier (Remixed Memories)", "Pier"]), "Remixed is no remix");
+        assert!(!one_song_in_versions(&["Pier (Dubai)", "Pier"]), "Dubai is no dub");
+        // Titles not read (empty), and one title twice with no version part, are no versions.
+        assert!(!one_song_in_versions(&["", "", "", ""]), "titles not read");
+        assert!(!one_song_in_versions(&["A", "A"]), "the same title twice, no version");
+    }
+
+    /// VER.2: one song in versions is a single up to 30 minutes (30:00 included, T-VER-3), an EP over, before the track count and
+    /// the length; its `why` "versions" (T-VER-4). (e) and (g), a service's said type beside it, wait on the owner's word.
+    #[test]
+    fn one_song_in_versions_is_a_single_up_to_30_minutes() {
+        assert_eq!(typed(None, titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)), ("single".into(), Some("versions")), "(a) Deep Harbour, 16:44");
+        let (seven, five, four) = (versions_of(7), versions_of(5), versions_of(4));
+        let seven: Vec<&str> = seven.iter().map(String::as_str).collect();
+        let five: Vec<&str> = five.iter().map(String::as_str).collect();
+        let four: Vec<&str> = four.iter().map(String::as_str).collect();
+        assert_eq!(typed(None, titled("Pier", &seven, 28.0)), ("single".into(), Some("versions")), "(b) 7 versions, 28:00");
+        assert_eq!(typed(None, titled("Pier", &five, 40.0)), ("ep".into(), Some("versions")), "(c) 5 versions, 40:00");
+        assert_eq!(typed(None, titled("Pier", &seven, 40.0)), ("ep".into(), Some("versions")), "(d) 7 versions, 40:00");
+        assert_eq!(typed(None, titled("Pier", &four, 30.0)), ("single".into(), Some("versions")), "(f) 30:00 included");
+        assert_eq!(typed(None, titled("Pier", &four, 30.0 + 1.0 / 60.0)), ("ep".into(), Some("versions")), "(f) 30:01");
+        // (e), (g): no service's type goes in for a record you have (the owner, 2026-11-21 17:28, "Files only").
+        let (six, twin) = (versions_of(6), ["A", "B", "C", "D", "E", "F"]);
+        let six: Vec<&str> = six.iter().map(String::as_str).collect();
+        assert_eq!(typed(Some(&said("single")), titled("Kime Ne", &six, 56.0)), ("ep".into(), Some("versions")), "(e) Kime Ne: EP by versions, over 30 min");
+        assert_eq!(typed(Some(&said("single")), titled("Kime Ne", &twin, 56.0)), ("album".into(), Some("length")), "(e) its twin: album by length");
+        assert_eq!(typed(Some(&said("ep")), titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)), ("single".into(), Some("versions")), "(g) MB's EP is its version, not the answer");
+    }
+
+    /// VER.3 (a guard): the title first; an incomplete record not read as one song from the titles of only some of its tracks
+    /// (T-VER-1); a Broadcast said stays; a type set by hand wins at the build, after the rule.
+    #[test]
+    fn the_versions_rule_comes_after_the_title_and_incomplete() {
+        assert_eq!(typed(None, titled("Deep Harbour EP", &DEEP, 16.0 + 44.0 / 60.0)), ("ep".into(), Some("name")), "(a) the title wins");
+        let whole = Whole { tracks: 4, duration_ms: Some(1_004_000), longest_ms: Some(260_000) };
+        assert_eq!(typed(None, titled("Deep Harbour", &DEEP[..2], 8.0).whole(Some(&whole))), ("ep".into(), Some("tracks")), "(b) incomplete: the whole release");
+        // (c) The hand's type replaces the rule's at the build, after `release_type_of`.
+        let src = include_str!("library.rs").replace("\r\n", "\n");
+        let at = src.find("release_type_of(release.and_then(").unwrap();
+        assert!(src[at..at + 400].contains("if let Some(k) = set.and_then(|o| o.kind.clone())"), "the hand after the rule");
+    }
+
+    /// VER.3 (d), revised 17:29 (the owner, "Files only"): a service's type never decides a record you have: a said Broadcast or
+    /// Other is that service's version, the rule types the files; a Broadcast set by hand stays (the build's `set`, after the rule).
+    #[test]
+    fn a_service_type_never_decides_a_record_you_have() {
+        assert_eq!(typed(Some(&said("broadcast")), titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)), ("single".into(), Some("versions")), "(d) a said Broadcast");
+        assert_eq!(typed(Some(&said("broadcast")), shape("Essential Mix", 1, 120.0, 120.0)), ("album".into(), Some("length")), "a said Broadcast, by its files");
+        assert_eq!(typed(Some(&said("other")), shape("Odd", 12, 60.0, 6.0)), ("album".into(), Some("tracks")), "a said Other, by its files");
+        let src = include_str!("library.rs").replace("\r\n", "\n");
+        let at = src.find("let (mut kind, mut type_why) = release_type_of(&shape);").expect("the build types by the files alone");
+        assert!(src[at..at + 400].contains("if let Some(k) = set.and_then(|o| o.kind.clone())"), "a Broadcast set by hand stays");
+    }
+
+    /// VER.4 (guards and pins): what is not one song keeps its type; no `why` "versions".
+    #[test]
+    fn what_is_not_one_song_keeps_its_type() {
+        assert_eq!(typed(None, titled("Four", &["A", "B", "C", "D"], 18.0)), ("ep".into(), Some("tracks")), "(a)");
+        let symphony = ["Symphony No. 5 (I. Allegro)", "Symphony No. 5 (II. Andante)", "Symphony No. 5 (III. Scherzo)"];
+        assert_eq!(typed(None, titled("Symphony No. 5", &symphony, 38.0)), ("ep".into(), Some("length")), "(b)");
+        let nine = ["Intro", "B", "C", "D", "E", "F", "G", "H", "Intro (Reprise)"];
+        assert_eq!(typed(None, titled("Nine", &nine, 46.0)), ("album".into(), Some("tracks")), "(c)");
+        assert_eq!(typed(None, titled("Deep Harbour", &["Deep Harbour (Extended Mix)"], 9.0)), ("single".into(), Some("tracks")), "(d)");
+        assert_eq!(typed(None, titled("Intro", &["Intro", "Intro (Reprise)"], 5.0)), ("single".into(), Some("tracks")), "(e)");
+    }
+
+    /// VER.5 (kind 6), the pure half: the had rule before a build (`type_by_files`) is given the tracks' titles beside their
+    /// lengths, so it and the build type Deep Harbour alike; another server's album, whose titles aren't given, by count and length.
+    #[test]
+    fn the_had_rule_and_the_build_type_versions_alike() {
+        let lengths = [Some(251_000), Some(251_000), Some(251_000), Some(251_000)];
+        assert_eq!(type_by_files("Deep Harbour", &DEEP, &lengths).as_deref(), Some("single"), "the had rule, before a build");
+        assert_eq!(typed(None, titled("Deep Harbour", &DEEP, 16.0 + 44.0 / 60.0)).0, "single", "the build");
+        // The build gives the rule its songs' titles; another server's album none.
+        let src = include_str!("library.rs").replace("\r\n", "\n");
+        assert!(src.contains("let titles: Vec<&str> = songs.iter().map(|s| s.title.as_str()).collect();"), "the build's titles");
+        let at = src.find("pub fn type_by_rule(").unwrap();
+        assert!(src[at..at + 900].contains("titles: &[],"), "another server's album: no titles given");
+    }
+
     /// The owner's verdicts on the Library's Singles and EPs (2026-10-31).
     #[test]
     fn the_owner_s_rule_types_by_tracks_and_length_on_top_of_what_is_said() {
@@ -350,18 +509,22 @@ mod release_type_tests {
         assert_eq!(typed(Some(&single), shape("Take California", 4, 18.0, 6.0)), ("ep".into(), Some("tracks")));
         assert_eq!(typed(Some(&single), shape("Let's Get Down EP", 2, 9.0, 5.0)), ("ep".into(), Some("name")));
         assert_eq!(typed(Some(&single), shape("Melbourne Bolero", 2, 14.0, 10.0)), ("ep".into(), Some("length")), "a track of 10 minutes");
-        // One song in versions stays an EP, however long.
-        assert_eq!(typed(Some(&single), shape("Kime Ne", 6, 56.6, 12.0)), ("ep".into(), Some("one song")));
-        assert_eq!(typed(Some(&single), shape("Kime Ne", 8, 56.6, 12.0)), ("ep".into(), Some("one song")));
-        // Short ones stay singles, as said.
-        assert_eq!(typed(Some(&single), shape("Nautiluss", 2, 11.0, 6.0)), ("single".into(), None));
+        // One song in versions stays an EP, however long: by its titles now (VERSIONS; the coordinator, 2026-11-21, keeping the
+        // owner's verdict with files only), no longer by the Single MusicBrainz says.
+        let (kime6, kime8) = (versions_of(6), versions_of(8));
+        let kime6: Vec<&str> = kime6.iter().map(String::as_str).collect();
+        let kime8: Vec<&str> = kime8.iter().map(String::as_str).collect();
+        assert_eq!(typed(Some(&single), titled("Kime Ne", &kime6, 56.6)), ("ep".into(), Some("versions")));
+        assert_eq!(typed(Some(&single), titled("Kime Ne", &kime8, 56.6)), ("ep".into(), Some("versions")));
+        // Short ones stay singles, now by the rule's own why.
+        assert_eq!(typed(Some(&single), shape("Nautiluss", 2, 11.0, 6.0)), ("single".into(), Some("tracks")));
         // EPs that are albums: seven tracks or more, however short, or over 45 minutes.
         assert_eq!(typed(Some(&ep), shape("Plantation", 10, 63.0, 8.0)), ("album".into(), Some("tracks")));
         assert_eq!(typed(Some(&ep), shape("Just Piano", 8, 20.0, 3.0)), ("album".into(), Some("tracks")));
         assert_eq!(typed(Some(&ep), shape("Flowery Rave Tales", 6, 47.1, 9.0)), ("album".into(), Some("length")));
         // The owner's longest EPs stay EPs.
-        assert_eq!(typed(Some(&ep), shape("Afro Damba", 6, 43.6, 9.0)), ("ep".into(), None));
-        assert_eq!(typed(Some(&ep), shape("Awake Into Life", 4, 42.4, 12.0)), ("ep".into(), None));
+        assert_eq!(typed(Some(&ep), shape("Afro Damba", 6, 43.6, 9.0)), ("ep".into(), Some("tracks")));
+        assert_eq!(typed(Some(&ep), shape("Awake Into Life", 4, 42.4, 12.0)), ("ep".into(), Some("tracks")));
         // An EP of a few short tracks is a single.
         assert_eq!(typed(Some(&ep), shape("Islets In Pink Polypropylene", 2, 8.0, 4.5)), ("single".into(), Some("tracks")));
         // The name wins over the length both ways.
@@ -374,10 +537,10 @@ mod release_type_tests {
     fn an_album_found_missing_tracks_is_typed_as_its_whole_release() {
         let whole = |tracks, minutes: f64, longest: f64| Whole { tracks, duration_ms: Some((minutes * MINUTE_MS as f64) as u64), longest_ms: Some((longest * MINUTE_MS as f64) as u64) };
         // Two of an eleven-track album: an album, not a single.
-        assert_eq!(typed(Some(&said("album")), shape("Västertorp", 2, 9.0, 5.0).whole(Some(&whole(11, 50.0, 6.0)))), ("album".into(), None));
+        assert_eq!(typed(Some(&said("album")), shape("Västertorp", 2, 9.0, 5.0).whole(Some(&whole(11, 50.0, 6.0)))), ("album".into(), Some("tracks")));
         assert_eq!(typed(None, shape("Escape Reality", 2, 9.0, 5.0).whole(Some(&whole(5, 24.0, 6.0)))), ("ep".into(), Some("tracks")));
         // The name still wins.
-        assert_eq!(typed(Some(&said("ep")), shape("Outsider Music EP", 1, 7.0, 7.0).whole(Some(&whole(9, 40.0, 7.0)))), ("ep".into(), None));
+        assert_eq!(typed(Some(&said("ep")), shape("Outsider Music EP", 1, 7.0, 7.0).whole(Some(&whole(9, 40.0, 7.0)))), ("ep".into(), Some("name")));
         // Lengths not known: its tracks count, the library's length at least.
         let counted = Whole { tracks: 8, duration_ms: None, longest_ms: None };
         assert_eq!(typed(None, shape("Odd", 3, 12.0, 4.0).whole(Some(&counted))), ("album".into(), Some("tracks")));
@@ -418,29 +581,28 @@ mod release_type_tests {
     }
 
     #[test]
-    fn broadcast_and_other_stay_as_said() {
-        assert_eq!(typed(Some(&said("broadcast")), shape("Essential Mix", 1, 120.0, 120.0)), ("broadcast".into(), None));
-        assert_eq!(typed(Some(&said("other")), shape("Odd", 12, 60.0, 6.0)), ("other".into(), None));
-    }
-
-    #[test]
     fn where_nothing_is_said_the_same_rule_and_other_stays() {
-        assert_eq!(release_type_of(None, None, &shape("Odd", 5, 22.0, 6.0)), (Some("ep".into()), None, Some("tracks"), Vec::new()));
-        assert_eq!(release_type_of(None, None, &shape("Odd", 2, 7.0, 4.0)), (Some("single".into()), None, Some("tracks"), Vec::new()));
+        assert_eq!(release_type_of(&shape("Odd", 5, 22.0, 6.0)), (Some("ep".into()), Some("tracks")));
+        assert_eq!(release_type_of(&shape("Odd", 2, 7.0, 4.0)), (Some("single".into()), Some("tracks")));
+        // Changed by design (the owner, 2026-11-21 17:28, "Files only"): a service's type decides nothing of a record you have, and
+        // names no `from`; its secondaries are a union with the rule's "compilation", none ranked (the coordinator's reading).
         let dc = said("ep");
-        assert_eq!(release_type_of(None, Some(&dc), &shape("Odd", 4, 20.0, 6.0)), (Some("ep".into()), Some("discogs"), None, Vec::new()));
+        assert_eq!((typed(None, shape("Odd", 4, 20.0, 6.0)), secondaries_of(None, Some(&dc), false)), (("ep".into(), Some("tracks")), Vec::new()));
         let mb = (Some("album".to_string()), vec!["live".to_string()]);
-        assert_eq!(release_type_of(Some(&mb), Some(&dc), &shape("Odd", 12, 50.0, 6.0)), (Some("album".into()), Some("musicbrainz"), None, vec!["live".into()]));
+        assert_eq!((typed(Some(&mb), shape("Odd", 12, 50.0, 6.0)), secondaries_of(Some(&mb), Some(&dc), false)), (("album".into(), Some("tracks")), vec!["live".into()]));
         let broadcast = said("other");
-        assert_eq!(release_type_of(Some(&broadcast), None, &shape("Radio Show", 1, 120.0, 120.0)).0.as_deref(), Some("other"));
+        assert_eq!(typed(Some(&broadcast), shape("Radio Show", 1, 120.0, 120.0)).0, "album", "by its files, over 45 minutes");
+        // MusicBrainz and Discogs giving different secondaries: both, in the order first heard.
+        let dc_soundtrack = (Some("album".to_string()), vec!["soundtrack".to_string()]);
+        assert_eq!(secondaries_of(Some(&mb), Some(&dc_soundtrack), false), vec!["live".to_string(), "soundtrack".to_string()], "a union, none ranked");
     }
 
     #[test]
     fn a_various_artists_album_is_a_compilation_besides() {
         let album = Shape { various: true, ..shape("COD3 QR 015", 9, 59.0, 8.0) };
-        assert_eq!(release_type_of(None, None, &album), (Some("album".into()), None, Some("tracks"), vec!["compilation".into()]));
+        assert_eq!((release_type_of(&album), secondaries_of(None, None, album.various)), ((Some("album".into()), Some("tracks")), vec!["compilation".into()]));
         let soundtrack = (Some("album".to_string()), vec!["soundtrack".to_string(), "compilation".to_string()]);
-        assert_eq!(release_type_of(Some(&soundtrack), None, &album).3, vec!["soundtrack".to_string(), "compilation".to_string()], "once");
+        assert_eq!(secondaries_of(Some(&soundtrack), None, album.various), vec!["soundtrack".to_string(), "compilation".to_string()], "once");
     }
 }
 
@@ -496,6 +658,8 @@ pub struct Library {
     overrides: Mutex<HashMap<String, Overrides>>,
     /// Every artist's id for life, by `ids::artist_key`: the catalogue's, as `credit` last read them.
     artists: Mutex<HashMap<String, i64>>,
+    /// The records' credits by id and the MusicBrainz artist ids' holders (NAMES.25), as `credit` last read them.
+    credits: Mutex<crate::catalogue::Credits>,
     /// What each catalogue folder's library is, in the libraries' order (`set_kinds`).
     kinds: Mutex<Vec<(i64, Kind)>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
@@ -601,8 +765,16 @@ struct Song<'a> {
     artists: Vec<String>,
     artist_credit: Option<String>,
     album: String,
+    /// Whether a file of its folder's album names it (its ALBUM a value after the one tag rule, WM.3): one that names none says
+    /// nothing of its record's title (WM.5 (b)).
+    album_named: bool,
+    /// Its ALBUM was a site's stamp alone (WM.16): no vote in its folder's album.
+    stamped: bool,
     album_artist: String,
     album_artists: Vec<String>,
+    /// The album artist as the raw tags give it, settled with the folder's album as `album_artist` is: what the tag hash and the
+    /// persistent ids read, so no group or id moves by the tag rule (T-WM-2).
+    raw_album_artist: String,
     /// The record its album is (`songs_of`) and that record's id: what most of its group's tracks hold, so a stray shows
     /// with the album its file lies in.
     record: i64,
@@ -617,29 +789,78 @@ struct Song<'a> {
 /// The album artist of a file that credits none, not even an artist of its own.
 pub const UNKNOWN_ARTIST: &str = "[Unknown Artist]";
 
+/// A fact field's first value through the one tag rule (WM.1, WM.2): a site's stamp is none, one beside a value is cut.
+pub(crate) fn fact(row: &ServedRow, name: &str) -> Option<String> {
+    let field = cratarr_rules::hygiene::Field::of(name)?;
+    row.all(name).find_map(|v| cratarr_rules::hygiene::value(field, v).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+}
+
 fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
-    // OBJ5: a track's title by the one rule (its name, else its file's), as every surface names it.
+    use cratarr_rules::hygiene::{Field, value};
+    // OBJ5: a track's title by the one rule (its name, else its file's), as every surface names it; a stamp is no name (WM.2).
     let title = cratarr_rules::names::track_title(row.first("title"), &row.rel);
-    let list = |list: &str, text: &str| {
+    // A list's values as the library splits them, each through the one tag rule: a list whose values are all stamps is a list
+    // the file doesn't have (WM.3), and the next field speaks.
+    let raw = |list: &str, text: &str| {
         let from = if row.all(list).next().is_some() { list } else { text };
         rules.values(folder, from, &row.all(from).map(str::to_string).collect::<Vec<_>>())
+    };
+    let cleaned = |name: &str| -> Vec<String> {
+        let Some(field) = Field::of(name) else { return Vec::new() };
+        let values = rules.values(folder, name, &row.all(name).map(str::to_string).collect::<Vec<_>>());
+        values.iter().filter_map(|v| value(field, v)).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect()
+    };
+    let list = |list: &str, text: &str| {
+        let values = cleaned(list);
+        if values.is_empty() { cleaned(text) } else { values }
     };
     let artists = list("artists", "artist");
     // OBJ5, NAMES.23: the credit by the one formatter over the artists the file names (`credit_text`), never its ARTIST text raw
     // ("Commodo / Alfa Mist" is two artists' credit, "Commodo & Alfa Mist").
     let named: Vec<&str> = artists.iter().map(String::as_str).collect();
-    let artist_credit = Some(cratarr_rules::names::credit_text(&named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
+    let artist_credit = Some(cratarr_rules::names::credit_text(&named, None)).filter(|c| !c.is_empty()).or_else(|| fact(row, "artist"));
     // The album artist as the file credits it, else the song's artist.
-    let album_artist = row.first("albumartist").map(str::to_string).or_else(|| artist_credit.clone()).unwrap_or_else(|| UNKNOWN_ARTIST.into());
+    let album_artist = fact(row, "albumartist").or_else(|| artist_credit.clone()).unwrap_or_else(|| UNKNOWN_ARTIST.into());
     let mut album_artists = list("albumartists", "albumartist");
     if album_artists.is_empty() {
         album_artists = if artists.is_empty() { vec![album_artist.clone()] } else { artists.clone() };
     }
-    let album = row.first("album").map(str::to_string).unwrap_or_else(|| "[Unknown Album]".into());
-    let group = ids::album(row, &album_artist, folder);
-    let album_base = ids::album(row, &album_artist, 0);
+    let named_album = fact(row, "album");
+    // Its ALBUM as the file holds it, raw: a stamp alone there has no vote (WM.16).
+    let raw_album = row.first("album").is_some_and(|a| !a.trim().is_empty());
+    let stamped = named_album.is_none() && raw_album;
+    let album_named = named_album.is_some();
+    let album = named_album.unwrap_or_else(|| "[Unknown Album]".into());
+    // What gathers a folder's files and what persistent ids read stay the raw tags' (T-WM-2): no group or id moves by the rule.
+    let raw_artists = raw("artists", "artist");
+    let raw_named: Vec<&str> = raw_artists.iter().map(String::as_str).collect();
+    let raw_credit = Some(cratarr_rules::names::credit_text(&raw_named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
+    let raw_album_artist = row.first("albumartist").map(str::to_string).or(raw_credit).unwrap_or_else(|| UNKNOWN_ARTIST.into());
+    // A copy Cratarr placed is gathered by its placing folder, never by its tags (COU.17, T-COU-16).
+    let group = match &row.placed {
+        Some(dir) => format!("placed:{folder}:{dir}"),
+        None => ids::album(row, &raw_album_artist, folder),
+    };
+    let album_base = ids::album(row, &raw_album_artist, 0);
     let genres = rules.values(folder, "genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
-    Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, record: 0, album_id: String::new(), group, album_base, genres }
+    Song {
+        row,
+        folder,
+        title,
+        artists,
+        artist_credit,
+        album,
+        album_named,
+        stamped,
+        album_artist,
+        album_artists,
+        raw_album_artist,
+        record: 0,
+        album_id: String::new(),
+        group,
+        album_base,
+        genres,
+    }
 }
 
 /// What these files say, cheaply: when it differs from what the library was built from, it is built again (tests;
@@ -689,6 +910,7 @@ impl Library {
             incomplete: Mutex::default(),
             overrides: Mutex::default(),
             artists: Mutex::default(),
+            credits: Mutex::default(),
             kinds: Mutex::default(),
             building: Mutex::new(()),
         })
@@ -712,6 +934,8 @@ impl Library {
         if !known(&self.artists.lock().unwrap_or_else(|p| p.into_inner())) {
             self.set_artists(cat.artists_for(&names).context("giving the artists their ids")?);
         }
+        // NAMES.25: the records' credits and the MusicBrainz ids' holders, read at every build path alike, so each serves one id.
+        *self.credits.lock().unwrap_or_else(|p| p.into_inner()) = cat.served_credits().context("reading the records' credits")?;
         Ok(())
     }
 
@@ -723,6 +947,11 @@ impl Library {
     /// The release types found on MusicBrainz and Discogs (0.9.6); a change builds the library again.
     pub fn set_release_types(&self, types: HashMap<String, Kept>) {
         *self.release_types.lock().unwrap_or_else(|p| p.into_inner()) = types;
+    }
+
+    /// Whether MusicBrainz said a type of this release, as the facts keep it (Discogs' types pass, `albums_to_type`).
+    pub(crate) fn musicbrainz_typed(&self, release: &str) -> bool {
+        !release.is_empty() && self.release_types.lock().unwrap_or_else(|p| p.into_inner()).get(&format!("mb:{release}")).is_some_and(|k| k.0.is_some())
     }
 
     /// The records' facts set by hand (by record, 0.13); a change builds the library again.
@@ -897,6 +1126,9 @@ impl Library {
         };
         let roots: Vec<(i64, String)> = folders.iter().map(|f| (f.folder, f.root.clone())).collect();
         let context = context(&cat.generation(), &roots, &self.kinds(), rules)?;
+        // NAMES.25: the records this build serves under other artist ids are owed to the change log, so a synced device learns of
+        // each once (no reset). Only records served before: a library built afresh owes nothing.
+        let served_before = self.served_artists_by_record()?;
         let (whole, dirs) = if self.built_context().as_deref() != Some(context.as_str()) {
             self.build_with(&folders, rules, &covers)?;
             (true, 0)
@@ -912,7 +1144,28 @@ impl Library {
         };
         self.set_built_context(&context)?;
         self.set_built_from(print)?;
+        let changed: Vec<i64> =
+            self.served_artists_by_record()?.into_iter().filter(|(record, now)| served_before.get(record).is_some_and(|was| was != now)).map(|(record, _)| record).collect();
+        if !changed.is_empty() {
+            cat.owe_records(&changed).context("owing the records served under other artist ids")?;
+        }
         Ok((whole, dirs))
+    }
+
+    /// Each served record's artist ids, its album artists' and its songs' together (NAMES.25's change).
+    fn served_artists_by_record(&self) -> Result<BTreeMap<i64, BTreeSet<String>>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT al.record, x.artist_id FROM (SELECT album_id, artist_id FROM album_artists
+               UNION SELECT s.album_id, sa.artist_id FROM song_artists sa JOIN songs s ON s.id = sa.song_id) x
+             JOIN albums al ON al.id = x.album_id WHERE al.record IS NOT NULL",
+        )?;
+        let mut out: BTreeMap<i64, BTreeSet<String>> = BTreeMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+            let (record, artist) = row?;
+            out.entry(record).or_default().insert(artist);
+        }
+        Ok(out)
     }
 
     fn built_from(&self) -> Option<String> {
@@ -941,6 +1194,7 @@ impl Library {
             incomplete: self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             overrides: self.overrides.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             artists: self.artists.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            credits: self.credits.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             kinds: self.kinds(),
         }
     }
@@ -974,6 +1228,7 @@ impl Library {
         )?;
         write_albums(&tx, &rows, &roots, rules, &facts, covers)?;
         artists_again(&tx, None)?;
+        albums_credited_again(&tx)?;
         genres_again(&tx)?;
         tx.execute_batch("UPDATE songs SET cover = (SELECT a.cover FROM albums a WHERE a.id = songs.album_id);")?;
         // Where each catalogue folder is, so the library can be read before the catalogue is open (decision 0032).
@@ -1115,6 +1370,7 @@ impl Library {
         let (written, credited) = write_albums(&tx, &refs, roots, rules, &facts, covers)?;
         touched.extend(credited);
         artists_again(&tx, Some(&touched))?;
+        albums_credited_again(&tx)?;
         genres_again(&tx)?;
         {
             let mut cover = tx.prepare("UPDATE songs SET cover = (SELECT a.cover FROM albums a WHERE a.id = songs.album_id) WHERE album_id = ?1")?;
@@ -1462,6 +1718,7 @@ struct Facts {
     incomplete: HashMap<String, Whole>,
     overrides: HashMap<String, Overrides>,
     artists: HashMap<String, i64>,
+    credits: crate::catalogue::Credits,
     kinds: Vec<(i64, Kind)>,
 }
 
@@ -1470,6 +1727,48 @@ impl Facts {
     /// would serve someone under no id.
     fn artist(&self, name: &str) -> Result<String> {
         self.artists.get(&ids::artist_key(name)).map(|id| ids::artist(*id)).with_context(|| format!("{name} has no id"))
+    }
+
+    /// MusicBrainz ids a file gives for a field, lower case, in order: what it pairs its names with.
+    fn ids_of(row: &ServedRow, field: &str) -> Vec<String> {
+        row.all(field).flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect()
+    }
+
+    /// The artist one of an album's artist names stands for, by id (NAMES.25, NAMES.10: namesakes apart, spellings together): the
+    /// record's credited artist of that name's key (a credit by a source's id or the hand's: "Glass Mirage"); else the holder of the
+    /// MusicBrainz id its file pairs that name with (one id spelled two ways: Caribou and Manitoba); none else.
+    fn by_album_artist(&self, s: &Song, name: &str) -> Option<i64> {
+        let key = ids::artist_key(name);
+        if let Some((id, _)) = self.credits.records.get(&s.record).and_then(|credits| credits.iter().find(|(_, k)| *k == key)) {
+            return Some(*id);
+        }
+        let mbids = Self::ids_of(s.row, "musicbrainz_albumartistid");
+        let at = s.album_artists.iter().position(|n| ids::artist_key(n) == key)?;
+        (mbids.len() == s.album_artists.len()).then(|| mbids.get(at).and_then(|m| self.credits.musicbrainz.get(m)).copied()).flatten()
+    }
+
+    /// An album artist's served id (NAMES.25): its record's credit or its file's id, else the artist of its name (C55's first).
+    fn album_artist(&self, s: &Song, name: &str) -> Result<String> {
+        match self.by_album_artist(s, name) {
+            Some(id) => Ok(ids::artist(id)),
+            None => self.artist(name),
+        }
+    }
+
+    /// A track's artist's served id, MATCH.4's track rule (T-DC3-17, NAMES.25): the holder of its own MusicBrainz artist id; else, where
+    /// it is one of its file's album artists, that artist as the album's is (`by_album_artist`); else the artist whose name it is, among
+    /// namesakes C55's first. Never by a name where its file pairs the name with an id.
+    fn song_artist(&self, s: &Song, at: usize, name: &str) -> Result<String> {
+        let mbids = Self::ids_of(s.row, "musicbrainz_artistid");
+        if mbids.len() == s.artists.len()
+            && let Some(id) = mbids.get(at).and_then(|m| self.credits.musicbrainz.get(m))
+        {
+            return Ok(ids::artist(*id));
+        }
+        match self.by_album_artist(s, name) {
+            Some(id) => Ok(ids::artist(id)),
+            None => self.artist(name),
+        }
     }
 }
 
@@ -1519,7 +1818,7 @@ fn row_src(r: &ServedRow) -> String {
 fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: &Facts, covers: &Covers) -> String {
     use md5::Digest;
     let said = format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         facts.added.get(album),
         release.and_then(|m| facts.originals.get(m)),
         facts.extra_genres.get(album),
@@ -1528,6 +1827,8 @@ fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: 
         covers.get(&(folder, dir.to_string())),
         facts.incomplete.get(album),
         facts.overrides.get(album),
+        ids::record_number(album).and_then(|r| facts.credits.records.get(&r)),
+        ids::record_number(album).and_then(|r| facts.credits.titles.get(&r)),
     );
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
 }
@@ -1669,16 +1970,19 @@ pub fn artist_number_in_tests(name: &str) -> i64 {
 }
 
 /// An album's labels as its first file that names any names them (Vorbis LABEL, MP4's, ID3v2 TPUB read as "label"), several
-/// in one value split as the crates split them, the catalogue number going with the first.
+/// in one value split as the crates split them, the catalogue number going with the first. Each through the one tag rule: a site's
+/// stamp names no label (WM.5 (d)).
 fn labels_of_album(list: &[&Song]) -> Vec<(String, String)> {
-    let Some(s) = list.iter().find(|s| s.row.first("label").is_some()) else { return Vec::new() };
+    use cratarr_rules::hygiene::{Field, value};
+    let labels = |s: &Song| -> Vec<String> { s.row.all("label").filter_map(|v| value(Field::Label, v)).flat_map(|v| crate::crates::labels_of(&v)).collect() };
+    let Some(s) = list.iter().find(|s| !labels(s).is_empty()) else { return Vec::new() };
     let mut names: Vec<String> = Vec::new();
-    for l in s.row.all("label").flat_map(crate::crates::labels_of) {
+    for l in labels(s) {
         if !names.iter().any(|n| n.eq_ignore_ascii_case(&l)) {
             names.push(l);
         }
     }
-    let catno = s.row.first("catalognumber").unwrap_or_default().to_string();
+    let catno = fact(s.row, "catalognumber").unwrap_or_default();
     names.into_iter().enumerate().map(|(i, name)| (name, if i == 0 { catno.clone() } else { String::new() })).collect()
 }
 
@@ -1723,19 +2027,20 @@ pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::c
             });
             let first = list[0];
             // The file that named the album: one of a folder's that disagrees was settled to it, and its own tags say another.
-            let named = list.iter().copied().find(|s| ids::album(s.row, &s.album_artist, s.folder) == s.group).unwrap_or(first);
+            let named = list.iter().copied().find(|s| ids::album(s.row, &s.raw_album_artist, s.folder) == s.group).unwrap_or(first);
             crate::catalogue::AlbumCopy {
                 facts: RecordFacts {
                     release: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_albumid"))),
                     artist: fold(&first.album_artist),
-                    title: fold(&first.album),
+                    // A copy whose files name no album says nothing of its title (WM.5, WM.15: a stamp is no title key).
+                    title: list.iter().find(|s| s.album_named).map(|s| fold(&s.album)).unwrap_or_default(),
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
                 group: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_releasegroupid"))),
                 artists: first.album_artists.clone(),
                 artist_ids: first.row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect(),
                 labels: labels_of_album(&list),
-                title: first.album.clone(),
+                title: list.iter().find(|s| s.album_named).unwrap_or(&first).album.clone(),
                 artist: first.album_artist.clone(),
                 year: list.iter().filter_map(|s| s.row.first("date").and_then(year_of)).max(),
                 tracks: list
@@ -1753,7 +2058,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::c
                 folder: first.folder,
                 old_id: first.group.clone(),
                 old_base: first.album_base.clone(),
-                pid: ids::album_pid(named.row, &named.album_artist),
+                pid: ids::album_pid(named.row, &named.raw_album_artist),
             }
         })
         .collect();
@@ -1881,15 +2186,17 @@ fn write_albums(
             if !lead.get(&r.track.unwrap_or_default()).is_some_and(|l| std::ptr::eq(l.1, s)) {
                 continue;
             }
+            // A file that names no album shows its record's (WM.3).
+            let album = if s.album_named { s.album.as_str() } else { facts.credits.titles.get(&s.record).map_or(s.album.as_str(), String::as_str) };
             ins_song.execute(params![
                 id,
-                ids::song_pid(r, &s.album_artist),
+                ids::song_pid(r, &s.raw_album_artist),
                 s.folder,
                 r.rel,
                 s.album_id,
                 s.title,
                 s.artist_credit,
-                s.album,
+                album,
                 s.album_artist,
                 r.first("tracknumber").and_then(leading_number),
                 r.first("discnumber").and_then(leading_number),
@@ -1914,10 +2221,10 @@ fn write_albums(
                 total_of(r),
             ])?;
             let n = tx.last_insert_rowid();
-            ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
+            ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), album])?;
             ins_tri.execute(params![n, s.title])?;
             for (i, name) in s.artists.iter().enumerate() {
-                let aid = facts.artist(name)?;
+                let aid = facts.song_artist(s, i, name)?;
                 ins_artist.execute(params![id, aid, name, i as i64])?;
                 credited.insert(aid);
             }
@@ -1961,6 +2268,14 @@ fn write_albums(
     }
     for (album_id, songs) in &albums {
         let first = songs[0];
+        // Its name: the first song's that names one (a copy whose files name none, or only a site's stamp, says nothing: WM.3).
+        // None names it: the record's stored title (WM.3, WM.12: "Long Pier" by the rule), never "[Unknown Album]" for a record that has one.
+        let album_name = songs
+            .iter()
+            .find(|s| s.album_named)
+            .map(|s| s.album.as_str())
+            .or_else(|| facts.credits.titles.get(&first.record).map(String::as_str))
+            .unwrap_or(first.album.as_str());
         let copies = &records[album_id];
         let row = &copies[orders[album_id.as_str()][0]];
         // What the record is: what the copy that plays for most people says, and where it says nothing, any other's, as a record must
@@ -2006,23 +2321,28 @@ fn write_albums(
         let dir = &row.copy.dir;
         let discs = said.iter().filter_map(|s| s.row.first("discnumber").and_then(leading_number)).max().unwrap_or(1);
         let compilation = said.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
-        let artist_id = facts.artist(&first.album_artists[0])?;
+        let artist_id = facts.album_artist(first, &first.album_artists[0])?;
         // The art's id: the album's, with a fingerprint of its picture (see `art`).
         let root = roots.get(&row.copy.folder).copied().unwrap_or("");
         let first_track = row.songs.first().map(|s| Path::new(root).join(&s.row.rel));
         let cover = super::art::album_print(&Path::new(root).join(dir), first_track.as_deref()).map(|p| format!("{album_id}_{p}"));
         let duration_ms = songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>();
         let whole = facts.incomplete.get(album_id);
+        let titles: Vec<&str> = songs.iter().map(|s| s.title.as_str()).collect();
         let shape = Shape {
             tracks: songs.len(),
             duration_ms,
             longest_ms: songs.iter().filter_map(|s| s.row.duration_ms).max().unwrap_or(0),
-            name: &first.album,
+            name: album_name,
             various: first.album_artist.eq_ignore_ascii_case("Various Artists"),
+            titles: &titles,
         }
         .whole(whole);
-        let (mut kind, mut type_from, mut type_why, mut secondary) =
-            release_type_of(release.and_then(|m| facts.release_types.get(&format!("mb:{m}"))), discogs_types(facts, album_id), &shape);
+        // The files alone type a record you have (the owner, 2026-11-21, "Files only"): a service's type is its own version in the
+        // facts layer, never the answer; its secondaries join the set (`secondaries_of`).
+        let (mut kind, mut type_why) = release_type_of(&shape);
+        let mut type_from: Option<&str> = None;
+        let mut secondary = secondaries_of(release.and_then(|m| facts.release_types.get(&format!("mb:{m}"))), discogs_types(facts, album_id), shape.various);
         if let Some(k) = set.and_then(|o| o.kind.clone()) {
             (kind, type_from, type_why) = (Some(k), Some("set"), None);
         }
@@ -2031,7 +2351,7 @@ fn write_albums(
         }
         ins_album.execute(params![
             album_id,
-            first.album,
+            album_name,
             first.album_artist,
             artist_id,
             album_year,
@@ -2045,7 +2365,7 @@ fn write_albums(
             every().filter_map(|s| s.row.born).chain(facts.added.get(album_id).copied()).min(),
             release,
             compilation,
-            order_name(&first.album),
+            order_name(album_name),
             row.copy.format,
             row.copy.min_kbps,
             cover,
@@ -2059,10 +2379,10 @@ fn write_albums(
             first.record,
         ])?;
         let n = tx.last_insert_rowid();
-        ins_fts.execute(params![n, first.album, first.album_artist])?;
-        ins_tri.execute(params![n, first.album])?;
+        ins_fts.execute(params![n, album_name, first.album_artist])?;
+        ins_tri.execute(params![n, album_name])?;
         for (i, name) in first.album_artists.iter().enumerate() {
-            let aid = facts.artist(name)?;
+            let aid = facts.album_artist(first, name)?;
             let mbid = if i == 0 { first.row.first("musicbrainz_albumartistid") } else { None };
             ins_aa.execute(params![album_id, aid, name, i as i64, mbid])?;
             credited.insert(aid);
@@ -2082,6 +2402,37 @@ fn genres_of<'s, 'r: 's>(songs: impl Iterator<Item = &'s Song<'r>>) -> Vec<Strin
         }
     }
     genres
+}
+
+/// Each album's artist line, the served `albums.artist` OpenSubsonic and every list read (NAMES.24's DC1a half, NAMES.10): its
+/// album artists' served names, each its id's one name (`artists_again`), joined by the one formatter (`credit_text`), never the
+/// files' ALBUMARTIST text. Written where it changed, its search row with it.
+fn albums_credited_again(tx: &Connection) -> Result<()> {
+    let mut lines: Vec<(String, i64, String, Vec<String>)> = Vec::new();
+    {
+        let mut st = tx.prepare(
+            "SELECT al.id, al.n, al.name, ar.name FROM albums al JOIN album_artists aa ON aa.album_id = al.id JOIN artists ar ON ar.id = aa.artist_id
+             ORDER BY al.id, aa.position",
+        )?;
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+            let (album, n, title, name) = row?;
+            match lines.last_mut() {
+                Some((a, _, _, names)) if *a == album => names.push(name),
+                _ => lines.push((album, n, title, vec![name])),
+            }
+        }
+    }
+    let mut set = tx.prepare_cached("UPDATE albums SET artist = ?2 WHERE id = ?1 AND artist IS NOT ?2")?;
+    // A contentless table's row is written whole.
+    let mut fts = tx.prepare_cached("UPDATE albums_fts SET name = ?2, artist = ?3 WHERE rowid = ?1")?;
+    for (album, n, title, names) in lines {
+        let named: Vec<&str> = names.iter().map(String::as_str).collect();
+        let line = cratarr_rules::names::credit_text(&named, None);
+        if set.execute(params![album, line])? > 0 {
+            fts.execute(params![n, title, line])?;
+        }
+    }
+    Ok(())
 }
 
 /// The artists counted again from what the songs and albums credit now: all of them, or `only` these (those no longer
@@ -2192,43 +2543,56 @@ fn genres_again(tx: &Connection) -> Result<()> {
 /// a move.
 fn one_album_per_folder(songs: &mut [Song]) {
     let dir = |s: &Song| (s.folder, s.row.rel.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string()));
-    let mut votes: HashMap<(i64, String), Vec<(usize, &str)>> = HashMap::new();
+    // (real votes, files, group, stamped alone): a file whose ALBUM is a site's stamp has no vote (WM.16, T-WM-10), so it never
+    // wins a tie; a folder of nothing but stamped files votes as before, a file a vote.
+    let mut votes: HashMap<(i64, String), Vec<(usize, usize, &str, bool)>> = HashMap::new();
     let mut order: Vec<usize> = (0..songs.len()).collect();
     order.sort_by(|a, b| songs[*a].row.rel.cmp(&songs[*b].row.rel));
     for &i in &order {
         let s = &songs[i];
         let list = votes.entry(dir(s)).or_default();
-        match list.iter_mut().find(|(_, id)| *id == s.group) {
-            Some(v) => v.0 += 1,
-            None => list.push((1, s.group.as_str())),
+        let real = usize::from(!s.stamped);
+        match list.iter_mut().find(|(_, _, id, _)| *id == s.group) {
+            Some(v) => {
+                v.0 += real;
+                v.1 += 1;
+                v.3 &= s.stamped;
+            }
+            None => list.push((real, 1, s.group.as_str(), s.stamped)),
         }
     }
     let chosen: HashMap<(i64, String), (String, usize)> = votes
         .into_iter()
         .map(|(d, list)| {
-            let best = list.iter().max_by(|a, b| a.0.cmp(&b.0).then(std::cmp::Ordering::Greater)).map_or("", |v| v.1).to_string();
+            let any_real = list.iter().any(|v| !v.3);
+            let weight = |v: &(usize, usize, &str, bool)| if any_real { v.0 } else { v.1 };
+            let best = list.iter().filter(|v| !any_real || !v.3).max_by(|a, b| weight(a).cmp(&weight(b)).then(std::cmp::Ordering::Greater)).map_or("", |v| v.2).to_string();
             (d, (best, list.len()))
         })
         .collect();
     // The album's own name and artist come from a song that named it.
-    let mut lead: HashMap<String, (String, String, Vec<String>, String)> = HashMap::new();
+    type Lead = (String, bool, String, Vec<String>, String, String);
+    let mut lead: HashMap<String, Lead> = HashMap::new();
     for s in songs.iter() {
         if let Some((id, _)) = chosen.get(&dir(s))
             && *id == s.group
         {
-            lead.entry(id.clone()).or_insert_with(|| (s.album.clone(), s.album_artist.clone(), s.album_artists.clone(), s.album_base.clone()));
+            lead.entry(id.clone())
+                .or_insert_with(|| (s.album.clone(), s.album_named, s.album_artist.clone(), s.album_artists.clone(), s.album_base.clone(), s.raw_album_artist.clone()));
         }
     }
     for s in songs.iter_mut() {
         let Some((id, kinds)) = chosen.get(&dir(s)) else { continue };
         if *kinds > 1
-            && let Some((album, artist, artists, base)) = lead.get(id)
+            && let Some((album, named, artist, artists, base, raw)) = lead.get(id)
         {
             s.group = id.clone();
             s.album_base = base.clone();
             s.album = album.clone();
+            s.album_named = *named;
             s.album_artist = artist.clone();
             s.album_artists = artists.clone();
+            s.raw_album_artist = raw.clone();
         }
     }
 }
@@ -3988,6 +4352,91 @@ mod tests {
         assert_eq!(year, 2015, "the album's aggregates still count every song");
     }
 
+    /// SIM.21: one year, the record's as the library resolves it, for every reader of a song's year: the catalogue's facts and the
+    /// radio's index made of them, a crate's year condition, and Radio and Autoplay by era.
+    #[test]
+    fn similarity_reads_the_records_resolved_year() {
+        use cratarr_rules::radio::{Ask, Index, Mode, Song, choose};
+        let record = |t0: i64, name: &str, tags: &[(&str, &str)]| -> Vec<ServedRow> {
+            (0..3)
+                .map(|n| {
+                    let mut all = vec![("title", "T"), ("artist", name), ("albumartist", name), ("album", name)];
+                    all.extend_from_slice(tags);
+                    row(t0 + n, &format!("{name}/0{n} T.mp3"), &all)
+                })
+                .collect()
+        };
+        // (a) MusicBrainz's original year 1998; (b) a year set by hand, 1999; (c) its files' original date, 1994; all dated 2026.
+        // Beside them, a record of 1996 and one of 2025.
+        let mut rows = record(1, "Alpha", &[("date", "2026"), ("musicbrainz_albumid", "rel-alpha")]);
+        rows.extend(record(11, "Beta", &[("date", "2026")]));
+        rows.extend(record(21, "Gamma", &[("date", "2026"), ("originaldate", "1994-05-01")]));
+        rows.extend(record(31, "Delta", &[("date", "1996")]));
+        rows.extend(record(41, "Echo", &[("date", "2025")]));
+        let folders = vec![FolderRows { folder: 0, root: "/music".into(), rows: rows.clone() }];
+        let lib = Library::open(None).unwrap();
+        lib.set_originals([("rel-alpha".into(), 1998)].into());
+        lib.build(&folders, &FolderRules::default()).unwrap();
+        let beta: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Beta'", [], |r| r.get(0)).unwrap();
+        lib.set_overrides([(beta, Overrides { year: Some(1999), ..Overrides::default() })].into());
+        lib.build(&folders, &FolderRules::default()).unwrap();
+        let shown: Vec<(String, i64)> = {
+            let db = lib.db();
+            let mut st = db.prepare("SELECT name, year FROM albums ORDER BY name").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let years = [("Alpha", 1998), ("Beta", 1999), ("Delta", 1996), ("Echo", 2025), ("Gamma", 1994)];
+        assert_eq!(shown, years.map(|(n, y)| (n.to_string(), y)), "the library's record years");
+
+        // The catalogue's facts of each file, as `crate_facts` reads them, its year then its record's.
+        let mut facts: Vec<crate::crates::Facts> = rows
+            .iter()
+            .map(|r| {
+                let tags: BTreeMap<&str, &str> = r.tags.iter().rev().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+                crate::crates::Facts { rel: r.rel.clone(), track: r.track, folders: vec![0], year: crate::crates::year_of(&tags), ..crate::crates::Facts::default() }
+            })
+            .collect();
+        crate::catalogue::Catalogue::with_record_years(&mut facts, &lib.song_years().unwrap());
+        let of = |name: &str| -> Vec<&crate::crates::Facts> { facts.iter().filter(|f| f.rel.starts_with(name)).collect() };
+        for (name, year) in years {
+            assert!(of(name).iter().all(|f| f.year == Some(year as f64)), "{name}: {:?}", of(name).iter().map(|f| f.year).collect::<Vec<_>>());
+        }
+
+        // (1) The radio's index, made of them, as `index()` makes it.
+        let names = ["Alpha", "Beta", "Gamma", "Delta", "Echo"];
+        let songs: Vec<Song> = facts
+            .iter()
+            .map(|f| {
+                let album = &f.rel[..f.rel.find('/').unwrap()];
+                let album_n = names.iter().position(|n| *n == album).unwrap() as u32;
+                Song { id: crate::serve::ids::song(f.track.unwrap()), album_id: album.to_string(), album_n, folders: vec![0], ..Song::default() }
+            })
+            .collect();
+        let index = Index::new(songs).with_facts(&facts);
+        let year_of = |name: &str| index.songs.iter().filter(|s| s.album_id == name).map(|s| s.like.year).collect::<Vec<_>>();
+        assert_eq!((year_of("Alpha"), year_of("Beta"), year_of("Gamma")), (vec![Some(1998); 3], vec![Some(1999); 3], vec![Some(1994); 3]));
+
+        // (2) A crate's year condition (a change by design): a reissue, a year set by hand and an original date are of the 1990s.
+        let membership = HashMap::new();
+        let w = crate::crates::World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
+        let nineties = [crate::crates::Condition::new("year", false, crate::crates::Value::Range { min: Some(1990.0), max: Some(1999.0) })];
+        let mut held: Vec<&str> = crate::crates::select(&facts, &nineties, &w).into_iter().map(|r| &r[..r.find('/').unwrap()]).collect();
+        held.sort_unstable();
+        held.dedup();
+        assert_eq!(held, ["Alpha", "Beta", "Delta", "Gamma"]);
+
+        // (3) Autoplay by era, and Radio by era, after a song of (a): within five years of 1998 (a change by design).
+        let first = index.songs.iter().position(|s| s.album_id == "Alpha").unwrap();
+        let after = index.songs[first].id.clone();
+        for (mode, by) in [(Mode::Era, cratarr_rules::radio::RadioBy::Track), (Mode::Radio, cratarr_rules::radio::RadioBy::Era)] {
+            for n in 0..10 {
+                let ask = Ask { mode, by, seed: vec![after.clone()], exclude: vec![after.clone()], last: Some(after.clone()), count: Some(5), ..Ask::default() };
+                let picks = choose(&index, &ask, &HashMap::new(), None, &mut cratarr_rules::Rng::seeded(n));
+                assert!(!picks.is_empty() && picks.iter().all(|&i| index.songs[i].like.year.is_some_and(|y| y.abs_diff(1998) <= 5)), "{mode:?} {by:?}: {:?}", picks.iter().map(|&i| &index.songs[i].album_id).collect::<Vec<_>>());
+            }
+        }
+    }
+
     #[test]
     fn an_album_shows_its_original_year_from_its_files_else_musicbrainz() {
         let album = |t: i64, name: &str, tags: &[(&str, &str)]| {
@@ -4037,7 +4486,38 @@ mod tests {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })
             .unwrap();
-        assert_eq!(t, (Some("album".into()), Some("musicbrainz".into()), "live".into(), Some("tracks".into())), "found missing tracks: typed as its twelve-track release");
+        // Changed by design (the owner, 2026-11-21, "Files only"): MusicBrainz's EP goes in nowhere, so no `type_from`; its "live" joins
+        // the secondaries.
+        assert_eq!(t, (Some("album".into()), None, "live".into(), Some("tracks".into())), "found missing tracks: typed as its twelve-track release");
+        // Discogs' types pass asks the same albums as before (by the facts kept, not `type_from`): Odd, MusicBrainz-typed, not.
+        assert!(lib.albums_to_type().unwrap().iter().all(|a| a.3 != "Odd"), "a MusicBrainz-typed album isn't asked of Discogs");
+    }
+
+    /// Discogs' types pass asks the albums it asked before "Files only" (the coordinator, 2026-11-21): by the facts kept, not by
+    /// `type_from`, which names no service now. A MusicBrainz-typed album isn't asked, an untyped and a Discogs-typed one are, and a
+    /// hand-typed one isn't; so Discogs is asked no more than it was.
+    #[test]
+    fn discogs_types_pass_asks_the_albums_it_asked_before() {
+        let one = |t: i64, name: &str, release: &str| {
+            let mut tags = vec![("title", "A"), ("artist", "Ott"), ("albumartist", "Ott"), ("album", name)];
+            if !release.is_empty() {
+                tags.push(("musicbrainz_albumid", release));
+            }
+            row(t, &format!("Ott/{name}/01 A.flac"), &tags)
+        };
+        let folders = || vec![FolderRows { folder: 0, root: "/music".into(), rows: vec![one(1, "Typed", "rel-typed"), one(2, "Untyped", ""), one(3, "Discogs", "rel-dc"), one(4, "Hand", "")] }];
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&folders(), &FolderRules::default()).unwrap();
+        let id = |name: &str| -> String { lib.db().query_row("SELECT id FROM albums WHERE name = ?1", [name], |r| r.get(0)).unwrap() };
+        let (discogs, hand) = (id("Discogs"), id("Hand"));
+        lib.set_release_types(
+            [("mb:rel-typed".into(), (Some("album".into()), Vec::new())), (format!("dc:{discogs}"), (Some("ep".into()), Vec::new())), ("mb:rel-dc".into(), (None, vec!["live".into()]))].into(),
+        );
+        lib.set_overrides([(hand, Overrides { kind: Some("ep".into()), ..Overrides::default() })].into());
+        lib.build(&folders(), &FolderRules::default()).unwrap();
+        let mut asked: Vec<String> = lib.albums_to_type().unwrap().into_iter().map(|a| a.3).collect();
+        asked.sort();
+        assert_eq!(asked, ["Discogs", "Untyped"], "MusicBrainz-typed and hand-typed left out, as before");
     }
 
     #[test]
@@ -4386,6 +4866,10 @@ mod tests {
         assert_eq!(leading_number("03/12"), Some(3));
     }
 }
+
+#[cfg(test)]
+#[path = "library_wm_tests.rs"]
+mod wm_tests;
 
 /// What an album lacks of what the library requires (`Library::lacking`).
 #[derive(Debug, Clone, Default, PartialEq)]
