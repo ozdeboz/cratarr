@@ -354,10 +354,6 @@ async fn main() -> Result<()> {
     // 0.18's step, its part `facts` (VR42), once the catalogue is attached (what it and the fold read through `served`): 0.17's lists keyed by reference, its counts and years carried, once.
     let facts = app::references::step_018_facts(&served).context("cannot finish 0.18's step (facts)")?;
     tracing::info!(target: "migration", "0.18's facts: {}", serde_json::to_string(&facts.counts).unwrap_or_default());
-    // RV12 (d): the records' due read, a schedule on the runner (one record a tick, never in bulk).
-    if let Err(e) = app::references::start_due_reads() {
-        tracing::warn!(target: "library", "the records' due read: {e}");
-    }
     // Its part `wm` (WM.22), before the fold (T-WM-5): a record named by a site's stamp named again by the tag rule, 0.17's
     // expectations seeded as placements, a record made by a stamp merged into the one its placement names; the raw tags kept.
     // Its seeds: Soulseek's items 0.17 left Placed, each with its placing folder (T-WM-9), read from `soulseek.json`.
@@ -381,15 +377,13 @@ async fn main() -> Result<()> {
     served.follow();
     // Scrobbling: the plays queued for the connected listening services, sent (decision 0068).
     app::scrobble::run(served.clone());
-    // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, records fetched on a tick, once a library takes them.
-    app::soulseek::start(&app);
+    // Every loop that asks an outside source, begun in one place (LK.S1): the records' due read (RV12 (d)), Soulseek's round (0.15,
+    // LK.B4), Spotify's look, the arrivals' jobs (F53.7), retention (RT01: after Soulseek's list is read, whose items keep theirs,
+    // and the catalogue attached), the artist builder, originals, Discogs' round and harvest.
+    app::start::loops(&app);
     // The single fetches a stop cut off followed again by their batches (RN's DQ3, DQ5); the bulk queue's worker with them.
     crate::run::spawn(async { app::track_fetch::resume().await });
     app::track_intake::resume(&app);
-    // Records not had that nothing keeps and nobody saw for six months, forgotten once a day (RT01), with their kept lists and
-    // the artists left with nothing (RT01b): after Soulseek's list is read, whose items keep theirs (read sooner, an empty list
-    // would be begun and written over the kept one), and the catalogue attached.
-    app::retention::start(served.clone());
     app::requests::start(&app);
     // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
     let importer = app.clone();

@@ -41,6 +41,8 @@ mod file_words_tests;
 #[cfg(test)]
 mod gen_words_tests;
 pub mod runtime;
+// The server's start: every loop that asks an outside source, begun in one place (LK.S1).
+pub mod start;
 mod app_search;
 mod app_requests;
 // Incoming's tests that run the one path on the whole app, moved up (the app split's phase 2).
@@ -189,17 +191,12 @@ impl App {
         if let Some(served) = &served {
             crate::userdata::offline::prune_in_background(served.userdata.clone());
         }
+        // Its store opened: the loops that read the outside world (the artist builder, originals, Discogs' round, harvest, Spotify's
+        // look) begin at the server's start (`start::loops`, LK.S1), never in the boot a test makes (LK.0's harness 3).
         let artists = artists::ArtistInfo::open(cfg.data_dir.as_deref());
-        if let Some(a) = &artists {
-            a.build_slowly();
-        }
-        originals::start();
-        discogs::start();
-        // The library's words (0.9.7): MusicBrainz, Discogs and Last.fm asked in the background.
-        harvest::start();
-        // Spotify's lists (0073): read again every 6 hours, MusicBrainz asked about them.
+        // Spotify's lists (0073): its store, and Discogs' `sources` provider: the boot's setups (R-N3).
         spotify::open(cfg.data_dir.as_deref());
-        spotify::start();
+        discogs::provide();
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
         if let Some(served) = &served {

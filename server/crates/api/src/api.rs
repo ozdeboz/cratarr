@@ -331,6 +331,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/intake/waiting", get(intake_waiting))
             .route("/api/albums/{source}/{album}/references", get(album_references).put(choose_references))
             .route("/api/albums/{source}/{album}/card", get(intake_card))
+            // The "Which release" row's Confirm of a guess (F53.7 (b), (d)): the one write.
+            .route("/api/albums/{source}/{album}/card/confirm", post(confirm_card_guess))
             // A record's own Health problems (0.14): its page's and its menu's.
             .route("/api/albums/{source}/{album}/health", get(album_health))
             .route("/api/albums/{source}/{album}/release", get(album_release).post(open_album_release))
@@ -5351,7 +5353,10 @@ async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery
 
 /// A list's row opened (C56, Q33: "kept at open"; C57's Beyond too): `{ record: "al-<n>" }`, the record that holds its reference,
 /// as merged now, else one made now with it. Never by its names alone: a row with no reference is refused.
-async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn open_record(ctx: Ctx, Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiError> {
+    // The place it opens from (LK.B1: `from: "incoming"`, the Arrival section's open), beside what the record is opened by.
+    let from = body.get("from").and_then(serde_json::Value::as_str).map(str::to_string);
+    let b: crate::app::labels::Opened = serde_json::from_value(body).map_err(|e| ToggleError::Refused(format!("{e}")))?;
     let cat = ctx.app.library.catalogue();
     let by_id = b.record.is_some();
     let c = cat.clone();
@@ -5378,7 +5383,21 @@ async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Res
     // account's: one read of a record whoever opens it), followed by this account by its id (N8: `GET /api/tasks` lists it, its
     // patches reach this account's pages); none where no read was begun. What it learns reaches the page by `changed`.
     let task = ctx.account().and_then(|a| crate::runner::runner().follow(crate::app::references::READ_KIND, &crate::serve::ids::record(record), &a));
-    Ok(Json(json!({ "record": crate::serve::ids::record(record), "task": task })))
+    // LK.B1 (OQ-LK-3 (a)): an administrator's open of an arrival, from the Incoming place, begins its hearing (AcoustID, a Cratarr job
+    // keyed by the record; one running followed); a user's begins none, and a GET never does. Its task beside the record.
+    let album = crate::serve::ids::record(record);
+    if from.as_deref() == Some("incoming")
+        && crate::serve::access::administering()
+        && let Ok(served) = ctx.serve()
+    {
+        let (s, a) = (served.clone(), album.clone());
+        let at = crate::run::spawn_blocking(move || crate::app::intake_card::arrival_copy(&s, &a)).await.ok().and_then(Result::ok).flatten();
+        if crate::app::intake_card::hear_at_open(served, &album, at).await.is_some() {
+            let hearing = ctx.account().and_then(|a| crate::runner::runner().follow(crate::app::intake_card::KIND, &album, &a));
+            return Ok(Json(json!({ "record": album, "task": hearing })));
+        }
+    }
+    Ok(Json(json!({ "record": album, "task": task })))
 }
 
 /// A label About shows, opened (F9): `{ source: "discogs" | "musicbrainz", id, name }` answers `{ id: "la-<n>" }`, the label that
@@ -6014,13 +6033,17 @@ async fn spotify_disconnect(ctx: Ctx) -> Result<Json<crate::app::spotify::State>
     Ok(Json(spotify_blocking(&ctx, |a| crate::app::spotify::disconnect(&a).and_then(|()| crate::app::spotify::state(&a))).await?))
 }
 
-/// Reads the account's live lists again now; answers at once.
-async fn spotify_sync(ctx: Ctx) -> Result<Json<crate::app::spotify::State>, ApiError> {
+/// Reads the account's live lists again now, as its own job (LK.E1, OQ-LK-2 (a): the settings send it when they open connected and
+/// never read, and its Sync does); answers at once with the settings' state and the job's `task` (one running already: that one).
+async fn spotify_sync(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let account = spotify_account(&ctx)?;
-    crate::run::spawn(crate::app::spotify::read_live(account.clone()));
+    let task = crate::app::spotify::sync(&account);
     // The read marks itself running at once; a moment for it to.
     tokio::task::yield_now().await;
-    Ok(Json(spotify_blocking(&ctx, |a| crate::app::spotify::state(&a)).await?))
+    let state = spotify_blocking(&ctx, |a| crate::app::spotify::state(&a)).await?;
+    let mut answer = serde_json::to_value(state).map_err(|e| ToggleError::Refused(format!("{e}")))?;
+    answer["task"] = json!(task);
+    Ok(Json(answer))
 }
 
 /// Forgets the lists the account's Spotify export brought (its listens stay).
@@ -7474,6 +7497,31 @@ async fn intake_card(State(app): State<Arc<App>>, Path((source, album)): Path<(S
         .find_map(|s| s.albums.iter().find(waiting).map(|a| (a.copies.first().map(|c| (c.folder, c.dir.clone())), a.library.clone())))
         .unwrap_or((None, None));
     Ok(Json(crate::app::intake_card::card(&app, &album, at, library).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// The "Which release" row's Confirm (F53.7 (b), (d); OQ-F53-1 (a)): `{ source, kind, value }`, one of the row's guesses made the
+/// record's reference by hand; answered with the card as it reads then. Refused where the record holds a sure reference already (a
+/// section read before another's Confirm): 409 in GF's one refusal shape, nothing kept.
+async fn confirm_card_guess(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    Query(q): Query<NamedCopy>,
+    Json(r): Json<cratarr_domain::facts::Reference>,
+) -> Result<Json<crate::app::intake_card::Card>, ApiError> {
+    use crate::app::intake_card::Confirmed;
+    own_album(&source)?;
+    let served = app.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open".into()))?;
+    let (s, a) = (served.clone(), album.clone());
+    let done = crate::run::spawn_blocking(move || crate::app::intake_card::confirm(&s, &a, &r))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    match done {
+        Confirmed::Kept => {}
+        Confirmed::ChangedSince => return Err(ToggleError::Refused(cratarr_domain::change::said::CHANGED_SINCE.into()).into()),
+        Confirmed::NoSuchGuess => return Err(ToggleError::NotFound("That is no guess of this record's.".into()).into()),
+    }
+    intake_card(State(app), Path((source, album)), Query(q)).await
 }
 
 /// The findings Health has of one record, each with only its items, and its tracks' file problems (0.14).

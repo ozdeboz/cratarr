@@ -120,7 +120,7 @@ static READING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 /// MusicBrainz is being asked (one pass at a time).
 static ASKING: Mutex<bool> = Mutex::new(false);
 
-/// Opens the store in Cratarr's data folder. Without a data folder there is no Spotify.
+/// Opens the store in Cratarr's data folder: the boot's setup, no loop (LOOKUPS R-N3). Without a data folder there is no Spotify.
 pub fn open(data_dir: Option<&str>) {
     let Some(dir) = data_dir else { return };
     let dir = PathBuf::from(dir);
@@ -133,49 +133,74 @@ pub fn open(data_dir: Option<&str>) {
     }
 }
 
-/// The look's job kind.
+/// The look's job kind (a schedule on the runner, LK.S1), and an account's own read's (its Sync, LK.E1).
 pub const LOOK_KIND: &str = "spotify:look";
+pub const SYNC_KIND: &str = "spotify:sync";
 
-/// Tells the look to come at once.
+/// Tells the look to come at once (an export taken: MusicBrainz asked about its lists).
 pub static LOOK_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-/// Starts the background (reading live lists every 6 hours, asking MusicBrainz), where the store is open.
+/// Spotify's look (LK.S1, LK.E1): a schedule on the runner every `LOOK`, its tick a job only where an account's lists are due (read
+/// 6 hours ago or never) or MusicBrainz has questions not asked, and never while background reading is paused (O5). Started once,
+/// by the server's start; none without the store.
 pub fn start() {
     if STORE.get().is_none() {
         return;
     }
-    crate::run::spawn(async {
-        // After the catalogue has caught up.
-        tokio::time::sleep(Duration::from_secs(120)).await;
-        loop {
-            // None while the background reading is paused (O5).
-            if !crate::app::switches::background_paused() {
-                look().await;
-            }
-            tokio::time::sleep(LOOK).await;
-        }
-    });
+    if let Err(e) = crate::runner::runner().every_woken(LOOK_KIND, LOOK, crate::app::switches::background_paused, &LOOK_NOW, || async { due().await.map(|d| ("look".to_string(), d)) }, |due: Due| async move {
+        look(due).await;
+        anyhow::Ok(())
+    }) {
+        tracing::warn!("spotify: {e}");
+    }
+}
+
+/// What a look is due to do: the accounts whose lists are due, and whether MusicBrainz has questions not asked.
+#[derive(Debug, Clone, Default)]
+pub struct Due {
+    pub accounts: Vec<String>,
+    pub questions: bool,
+}
+
+/// The look's work due now, none where there is none (an idle tick writes no job).
+async fn due() -> Option<Due> {
+    let s = store().ok()?;
+    let now = crate::app::moment::now_secs();
+    crate::run::spawn_blocking(move || -> Result<Option<Due>> {
+        let accounts: Vec<String> = s.connected()?.into_iter().filter(|(_, at)| at.is_none_or(|at| now - at >= AGAIN.as_secs() as i64)).map(|(a, _)| a).collect();
+        let (lists, kept) = (s.all_lists()?, s.all_mb()?);
+        let questions = lists.iter().flat_map(marks::questions).any(|q| !kept.contains_key(&q));
+        Ok((!accounts.is_empty() || questions).then_some(Due { accounts, questions }))
+    })
+    .await
+    .ok()?
+    .ok()?
 }
 
 pub fn store() -> Result<Arc<Store>> {
     STORE.get().cloned().context("Spotify needs Cratarr's data folder")
 }
 
-/// One look: the live lists due read again, then MusicBrainz asked what it has not been.
-async fn look() {
-    let Ok(s) = store() else { return };
-    let now = crate::app::moment::now_secs();
-    match s.connected() {
-        Ok(accounts) => {
-            for (account, at) in accounts {
-                if at.is_none_or(|at| now - at >= AGAIN.as_secs() as i64) {
-                    read_live(account).await;
-                }
-            }
-        }
-        Err(e) => tracing::warn!("spotify: {e:#}"),
+/// One look, the schedule's job: the live lists due read again, then MusicBrainz asked what it has not been.
+async fn look(due: Due) {
+    for account in due.accounts {
+        read_live(account).await;
     }
     ask_musicbrainz().await;
+}
+
+/// An account's Sync (LK.E1, OQ-LK-2 (a): the Spotify settings opened connected and never read, or its Sync): its lists read and
+/// MusicBrainz asked about them, as the account's own job. One running already: that one's task, nothing new asked.
+pub fn sync(account: &str) -> Option<crate::runner::Task> {
+    let a = account.to_string();
+    match crate::runner::spawn(SYNC_KIND, account, false, move |h| async move {
+        h.step("Reading your Spotify lists", 0, None);
+        read_live(a).await;
+        anyhow::Ok(())
+    }) {
+        Ok(task) => Some(task),
+        Err(_) => crate::runner::runner().of(account).into_iter().find(|t| t.kind == SYNC_KIND && t.finished.is_none()),
+    }
 }
 
 fn reading() -> std::sync::MutexGuard<'static, Option<HashSet<String>>> {
@@ -196,7 +221,8 @@ pub async fn read_live(account: String) {
         let _ = s.synced(&account, now, result.err().map(|e| format!("{e:#}")).as_deref());
     }
     reading().get_or_insert_with(HashSet::new).remove(&account);
-    crate::run::spawn(ask_musicbrainz());
+    // Inside the job that read them (LK.E1: the sync's and the schedule's, never a bare task).
+    ask_musicbrainz().await;
 }
 
 async fn read_live_inner(account: &str) -> Result<()> {
@@ -537,11 +563,9 @@ pub async fn come_back(state: &str, code: Option<&str>, error: Option<&str>) -> 
         Ok::<_, anyhow::Error>(())
     }
     .await;
+    // The sign-in alone (LK.E1, T-LK-3): its lists are read by the Sync the settings send once they open connected (OQ-LK-2 (a)).
     match result {
-        Ok(()) => {
-            crate::run::spawn(read_live(p.account));
-            (app, None)
-        }
+        Ok(()) => (app, None),
         Err(e) => (app, Some(format!("{e:#}"))),
     }
 }
@@ -589,9 +613,8 @@ pub fn take_export(account: &str, file: &str, lists: Lists, preview: bool) -> Re
     }
     if !preview {
         s.put_lists(account, IMPORT, crate::app::moment::now_secs(), Some(file), &lists)?;
-        if let Ok(rt) = tokio::runtime::Handle::try_current() {
-            rt.spawn(ask_musicbrainz());
-        }
+        // MusicBrainz asked about them by the look, woken now (LK.E1: the schedule's, never a bare task).
+        LOOK_NOW.notify_one();
     }
     Ok(b)
 }

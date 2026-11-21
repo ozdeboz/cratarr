@@ -15,7 +15,7 @@
 
 use cratarr_rules::assign::{Fit, fit};
 
-use crate::facts::{ListVersion, Present, RefTrack, Reference, by_title, pairs_with, source_word, timed};
+use crate::facts::{ListVersion, Present, RefTrack, Reference, asked_at, by_title, pairs_with, source_word, timed};
 use crate::identity::{same_title, titled_as};
 
 /// What the row says of the copy (T-F53-2).
@@ -160,6 +160,8 @@ pub fn which_release(copy: &[Present], versions: &[ListVersion], pick: Option<&R
     if judges.is_empty() {
         let mut r = Release::bare(if guesses.is_empty() { State::Unknown } else { State::Guessed }, copy.len());
         r.guesses = guesses.to_vec();
+        // Named in the wording table's order (T-F53-1), which says only who is asked first.
+        r.guesses.sort_by(|a, b| (asked_at(&a.reference.source), &a.reference).cmp(&(asked_at(&b.reference.source), &b.reference)));
         return r;
     }
     let named = |state: State, i: usize, differ: Vec<Differs>| {

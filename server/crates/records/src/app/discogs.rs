@@ -458,11 +458,15 @@ pub async fn release_group_cover(rg: &str) -> Result<Option<String>> {
     Ok(found)
 }
 
+/// The boot's setup (LOOKUPS R-N3), no loop: Bandcamp's own hold (its bot check's day) seen in Activity while it holds (AC4): no
+/// job of its own asks Bandcamp meanwhile.
+pub fn provide() {
+    crate::runner::runner().provide("sources", std::sync::Arc::new(sources_held));
+}
+
 /// The background asker for albums whose files carry no genre (the owner: fill gaps only, files never written):
 /// their master's genres and styles, kept by album; the library is built with them (`Library::set_extra_genres`).
 pub fn start() {
-    // Bandcamp's own hold (its bot check's day) seen in Activity while it holds (AC4): no job of its own asks Bandcamp meanwhile.
-    crate::runner::runner().provide("sources", std::sync::Arc::new(sources_held));
     crate::run::spawn(async {
         tokio::time::sleep(Duration::from_secs(600)).await;
         loop {
