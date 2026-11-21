@@ -584,11 +584,7 @@ impl Library {
     /// until this start's inference decides), else none to infer, else still being learnt. Never a guess: a placing waits while
     /// it is pending, and with none to infer its plan names the default and asks.
     pub fn layout(&self, folder: i64) -> Layout {
-        // RED STUB: the base's behaviour, the saved template else the one Music follows else the default.
         let n = self.naming.read().unwrap_or_else(|p| p.into_inner());
-        if true {
-            return Layout::Inferred(n.saved.clone().or_else(|| n.inferred.get(&folder).cloned()).unwrap_or_default());
-        }
         if let Some(t) = &n.saved {
             return Layout::Saved(t.clone());
         }
@@ -626,6 +622,39 @@ impl Library {
             }
         }
         before
+    }
+
+    /// The albums of the library at catalogue folder `folder`, with the tags naming reads, from the catalogue. Blocking.
+    pub fn names_in(&self, folder: i64) -> Result<Vec<crate::naming::Album>> {
+        use crate::naming::{Album, Tags, Track};
+        let mut albums: Vec<Album> = Vec::new();
+        for (rel, tags) in self.catalogue.folder_tags(folder, &crate::naming::TAGS)? {
+            let (folder, file) = rel.rsplit_once('/').unwrap_or(("", &rel));
+            if albums.last().is_none_or(|a| a.folder != folder) {
+                albums.push(Album { folder: folder.to_string(), tracks: Vec::new() });
+            }
+            if let Some(a) = albums.last_mut() {
+                a.tracks.push(Track { file: file.to_string(), tags: Tags(tags) });
+            }
+        }
+        albums.retain(|a| !a.folder.is_empty());
+        Ok(albums)
+    }
+
+    /// [`layout`], worked out now where it is still pending though the catalogue's pass has read the library (PL1): a placing asked
+    /// after the first pass never waits for the next minute's inference. Blocking (a library's names read once a start).
+    pub fn layout_now(&self, folder: i64) -> Layout {
+        let layout = self.layout(folder);
+        if layout != Layout::Pending || !self.catalogue.passed() {
+            return layout;
+        }
+        if let Ok(albums) = self.names_in(folder)
+            && let Some(found) = crate::naming::layout_of(&albums, true)
+        {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+            self.set_layout(folder, found, now);
+        }
+        self.layout(folder)
     }
 
     /// Whether this start's inference decided the library at `folder` already.

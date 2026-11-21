@@ -151,7 +151,7 @@ async fn a_releases_tracks_are_read_by_a_job_not_its_get() {
         crate::app::switches::set_for_tests(crate::app::switches::MUSICBRAINZ, was);
         answer
     };
-    assert_eq!((status, off["error"].as_str()), (StatusCode::BAD_REQUEST, Some("MusicBrainz is switched off")), "{off}");
+    assert_eq!((status, off["error"].as_str()), (StatusCode::CONFLICT, Some("MusicBrainz is switched off")), "{off}");
     assert_eq!(asked_off.load(Ordering::SeqCst), 0, "nothing asked while it is off");
     crate::app::track_fetch::set_release_stand_in(None);
 }
@@ -172,6 +172,8 @@ fn bandcamp_page(artist: &str, title: &str) -> String {
 #[tokio::test]
 async fn a_want_reads_no_page_in_its_handler() {
     use crate::app::reach::stand_ins::{Asked, StandIns};
+    // The switches on and Bandcamp held back by nothing, as the process shares them (one test at a time that changes them).
+    let _state = crate::app::references::TestState::set().await;
     let w = Whole::open("lk-p3").await;
     let root = w.session("me");
     const TIDE: &str = "https://glassharbour.bandcamp.com/album/tide-tables";
@@ -180,7 +182,8 @@ async fn a_want_reads_no_page_in_its_handler() {
     let stand_ins = StandIns::set(Arc::new(|a: &Asked| match (a.source, a.path.as_str()) {
         ("bandcamp", "/album/tide-tables") => Some((200, bandcamp_page("Glass Harbour", "Tide Tables"))),
         ("bandcamp", "/album/lamplight") => Some((200, bandcamp_page("Kite Theory", "Lamplight"))),
-        _ => None,
+        // Anything else: no such page (never a server's error, which would hold a source back for every test in the process).
+        _ => Some((404, String::new())),
     }))
     .await;
     let page_reads = |path: &str| stand_ins.asked().iter().filter(|a| a.source == "bandcamp" && a.path == path).count();
@@ -189,10 +192,11 @@ async fn a_want_reads_no_page_in_its_handler() {
     let want = json!({ "page": TIDE, "artist": "Glass Harbour", "album": "Tide Tables" });
     let (status, wanted) = tokio::time::timeout(std::time::Duration::from_secs(10), ask(&w, &root, Method::POST, "/api/requests/want", want.clone())).await.expect("never waiting on Bandcamp");
     assert_eq!(status, StatusCode::OK, "{wanted}");
-    assert!(wanted["task"]["id"].as_u64().is_some(), "the record's read begun, its task beside the request: {wanted}");
     let cat = w.served.catalogue().clone();
     let record = cat.record_named_by(None, Some(TIDE)).unwrap().expect("the record made by its page");
     let refs = cat.references_of(&crate::serve::ids::record(record)).unwrap();
+    let rows: Vec<String> = crate::runner::runner().rows().iter().map(|r| format!("{} {:?}", r.kind, r.state)).collect();
+    assert!(wanted["task"]["id"].as_u64().is_some(), "the record's read begun, its task beside the request: {wanted}; refs {refs:?}; jobs {rows:?}; had {:?}", cat.record(record).unwrap().map(|r| r.had));
     assert!(refs.iter().any(|(r, row)| r.source == "bandcamp" && r.value == TIDE && row.how != "search"), "its page a link: {refs:?}");
     stand_ins.let_go();
     for _ in 0..400 {

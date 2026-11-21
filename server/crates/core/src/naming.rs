@@ -740,11 +740,10 @@ pub fn layout_of(albums: &[Album], read_done: bool) -> Option<Option<Template>> 
     let files: usize = albums.iter().map(|a| a.tracks.len()).sum();
     let titled = albums.iter().flat_map(|a| &a.tracks).filter(|t| t.tags.first("title").is_some()).count();
     if files == 0 || titled * 10 < files * 9 {
-        let _ = read_done;
-        return None;
+        return read_done.then_some(None);
     }
-    // RED STUB: the base's behaviour, `infer`'s answer whatever its score.
-    Some(Some(infer(albums).template))
+    let found = infer(albums);
+    Some((found.folders.total > 0 && found.folders.matched * 2 >= found.folders.total).then_some(found.template))
 }
 
 /// The first candidate whose score is within the margin of the highest.

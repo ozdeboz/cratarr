@@ -411,9 +411,10 @@ mod tests {
     #[test]
     fn every_work_limit_is_the_runners_or_named() {
         const TURNS: &str = "a service's turn (TN): the runner's resource for its calls (C.8)";
-        let inventory: [(&str, &str, &str); 20] = [
+        let inventory: [(&str, &str, &str); 21] = [
             ("crates/clients/src/acoustid.rs", "TURN", TURNS),
             ("crates/clients/src/acoustid.rs", "FAKE", "AcoustID's stand-in turn (test support)"),
+            ("crates/store/src/app/reach.rs", "ONE", "the outside stand-ins, one test's at a time (test support; LK.0's harness)"),
             ("crates/clients/src/app/musicbrainz.rs", "TURN", TURNS),
             ("crates/clients/src/bandcamp.rs", "TURN", TURNS),
             ("crates/records/src/app/discogs.rs", "TURN", TURNS),

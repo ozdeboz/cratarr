@@ -164,24 +164,8 @@ impl SettingsService {
 
     /// The albums of the library at catalogue folder `folder`, with the tags naming reads, from the catalogue.
     async fn names_in(&self, folder: i64) -> Result<Vec<crate::naming::Album>> {
-        let c = self.lib.catalogue();
-        crate::run::spawn_blocking(move || -> Result<Vec<crate::naming::Album>> {
-            use crate::naming::{Album, Tags, Track};
-            let mut albums: Vec<Album> = Vec::new();
-            for (rel, tags) in c.folder_tags(folder, &crate::naming::TAGS)? {
-                let (folder, file) = rel.rsplit_once('/').unwrap_or(("", &rel));
-                if albums.last().is_none_or(|a| a.folder != folder) {
-                    albums.push(Album { folder: folder.to_string(), tracks: Vec::new() });
-                }
-                if let Some(a) = albums.last_mut() {
-                    a.tracks.push(Track { file: file.to_string(), tags: Tags(tags) });
-                }
-            }
-            albums.retain(|a| !a.folder.is_empty());
-            Ok(albums)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?
+        let lib = self.lib.clone();
+        crate::run::spawn_blocking(move || lib.names_in(folder)).await.map_err(|e| anyhow::anyhow!("{e}"))?
     }
 
     /// Work out how each main library names its albums (PL1), once a start, while Settings saves no template: what Keep and

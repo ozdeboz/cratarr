@@ -323,45 +323,28 @@ use crate::catalogue::records::record_of_album_paged;
 async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
     let (cat, ud) = (serve.catalogue().clone(), serve.userdata.clone());
     let group = release_group.filter(|g| !g.is_empty());
-    let (page, known) = {
-        let (cat, ud, group, artist, album) = (cat.clone(), ud.clone(), group.clone(), artist.to_string(), album.to_string());
-        crate::run::spawn_blocking(move || -> Result<(Option<String>, bool)> {
-            let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
-            let page = match page.filter(|p| !p.is_empty()) {
-                Some(page) => Some(page),
-                None => match group.as_deref().map(found).transpose()?.flatten() {
-                    Some(page) => Some(page),
-                    None => found(&requested(&artist, &album))?,
-                },
-            }
-            .and_then(|p| crate::bandcamp::album_page(&p));
-            let known = cat.record_named_by(group.as_deref(), page.as_deref())?.is_some();
-            Ok((page, known))
+    // Its page by a link alone (SCENARIOS-LOOKUPS LK.P3; SCENARIOS-DC3 ENT.16): one Discover's search found by a name (its memory) is a
+    // guess, never a record's reference nor read for it, whether the card or the body sends it; Discover's memory is never read to
+    // find a record's page.
+    let page = {
+        let ud = ud.clone();
+        let page = page.filter(|p| !p.is_empty()).and_then(|p| crate::bandcamp::album_page(&p));
+        crate::run::spawn_blocking(move || -> Result<Option<String>> {
+            Ok(match page {
+                Some(p) if ud.bandcamp_found_page(&p)? => None,
+                page => page,
+            })
         })
         .await??
     };
-    let read = match &page {
-        Some(p) if !known && group.is_none() => crate::bandcamp::Bandcamp::get().album(p).await.ok(),
-        _ => None,
-    };
-    let named = crate::bandcamp::named_by_page(read.as_ref(), artist, album);
+    // Named as its page's facts are kept, else as the request sends it: the page is read by the record's own job (`record:read`, begun
+    // by the Want's open), never in the Want's handler (LK.P3; THE Bandcamp rule, 0109).
+    let kept = page.as_deref().and_then(|p| crate::bandcamp::Bandcamp::get().kept_album(p));
+    let named = crate::bandcamp::named_by_page(kept.as_ref(), artist, album);
     // Its credit split as the record pass splits a file's (W6), by the default rules: a value of no file is no library's
     // (OQ-GEN-22).
     let artists = serve.rules().install().values("albumartist", std::slice::from_ref(&named.artist));
-    crate::run::spawn_blocking(move || -> Result<i64> {
-        let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
-        let record = record_of_album_paged(&cat, group.as_deref(), named, artists, year, cover, page.clone())?;
-        if page.is_none() {
-            let refs = cat.references_of(&crate::serve::ids::record(record))?;
-            if !refs.iter().any(|(r, _)| r.source == "bandcamp" && r.kind == "album")
-                && let Some(page) = refs.iter().filter(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").find_map(|(r, _)| found(&r.value).transpose()).transpose()?
-            {
-                cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("bandcamp", "album", &page), "search")?;
-            }
-        }
-        Ok(record)
-    })
-    .await?
+    crate::run::spawn_blocking(move || record_of_album_paged(&cat, group.as_deref(), named, artists, year, cover, page)).await?
 }
 
 /// What a request asks for: a record, by its key and its artist's, and what to show of it.
@@ -2349,8 +2332,9 @@ pub mod tests {
         assert_eq!(lidarr.0.lock().unwrap()[0].0.as_deref(), Some(second));
     }
 
-    /// R22 (N2): a Want of a record Bandcamp alone lists, made since 0.17, keeps its page: the one the card sends, else the one
-    /// Discover found for it by its names, else by the release group its record holds; so Soulseek judges it by Bandcamp's list.
+    /// R22 (N2), changed by the plan (SCENARIOS-LOOKUPS LK.P3, SCENARIOS-DC3 ENT.16): a Want of a record Bandcamp alone lists keeps the
+    /// page the card sends by its link; one Discover found by its names, or by the release group its record holds, is a guess, never
+    /// kept as its reference (Discover's memory is not read to find a record's page).
     #[tokio::test]
     async fn a_bandcamp_want_made_now_is_judged_by_its_page() {
         let serve = served();
@@ -2359,12 +2343,12 @@ pub mod tests {
         assert_eq!(page_of(sent).as_deref(), Some("https://paperlantern.bandcamp.com/album/neon"), "the card's");
         serve.userdata.set_bandcamp_found(&requested("Orbit Lane", "Undertow"), 1, Some("https://orbitlane.bandcamp.com/album/undertow")).unwrap();
         let by_names = record_of_album_in(&serve, None, "Orbit Lane", "Undertow", None, None, None).await.unwrap();
-        assert_eq!(page_of(by_names).as_deref(), Some("https://orbitlane.bandcamp.com/album/undertow"), "found by its names");
+        assert_eq!(page_of(by_names), None, "one found by its names is a guess, never kept");
         let group = "00000000-0000-4000-8000-000000000210";
         let listed = record_of_album(serve.catalogue(), Some(group), "Kite Theory", "Night Walks", None, None).unwrap();
         serve.userdata.set_bandcamp_found(group, 1, Some("https://kitetheory.bandcamp.com/album/night-walks")).unwrap();
         let asked = record_of_album_in(&serve, None, "Kite Theory", "Night Walks", None, None, None).await.unwrap();
-        assert_eq!((asked, page_of(asked).as_deref()), (listed, Some("https://kitetheory.bandcamp.com/album/night-walks")), "by the group its record holds");
+        assert_eq!((asked, page_of(asked)), (listed, None), "nor one found by the group its record holds");
     }
 
     /// W1: a Want with a Bandcamp page that names no record yet is named as Bandcamp lists the album, as kept from its read: its own

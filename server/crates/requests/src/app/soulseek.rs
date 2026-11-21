@@ -797,31 +797,14 @@ pub struct View {
     pub library: Option<String>,
 }
 
-pub fn view<H: RequestsHost>(app: &Arc<H>) -> View {
-    start(app);
+/// The list as kept (SCENARIOS-LOOKUPS LK.B4: the page starts nothing; the round is the server's, begun at its start).
+pub fn view<H: RequestsHost>(_app: &Arc<H>) -> View {
     kept_view()
 }
 
-/// RED STUB: [`view`], with no host.
+/// [`view`], with no host: what is kept, and nothing begun.
 pub fn kept_view() -> View {
     View { items: kept(|k| k.items.clone()), library: library().ok().map(|p| p.display().to_string()) }
-}
-
-/// RED STUB: the round's kind.
-pub const ROUND: &str = "soulseek:round";
-const ROUND_EVERY: Duration = Duration::from_secs(5);
-
-/// RED STUB: the base's approval, a wake alone.
-pub fn approve_items(picked: &[Pick]) -> Result<View> {
-    kept(|k| approve_in(&mut k.items, picked))?;
-    wake();
-    Ok(kept_view())
-}
-
-/// RED STUB: the base's bare loop; no schedule.
-pub fn schedule_round() -> std::result::Result<(), String> {
-    let _ = ROUND_EVERY;
-    Err("not on the runner".into())
 }
 
 /// A tick (RQ01.8 (b)): an item and its folder chosen by its place (none: the best), and, from a request's story, the source it names
@@ -842,10 +825,16 @@ pub const SOURCE_GONE: &str = "That source is gone; look again";
 
 /// These records approved, each with the folder given (else the best); the queue as it is now. A tick naming a source no longer at
 /// its place is refused (`SOURCE_GONE`), and nothing is ticked.
-pub fn approve<H: RequestsHost>(app: &Arc<H>, picked: &[Pick]) -> Result<View> {
+pub fn approve<H: RequestsHost>(_app: &Arc<H>, picked: &[Pick]) -> Result<View> {
+    approve_items(picked)
+}
+
+/// [`approve`], with no host: the ticks kept, and the round begun at once as a job (LK.B4), not a bare spawn.
+pub fn approve_items(picked: &[Pick]) -> Result<View> {
     kept(|k| approve_in(&mut k.items, picked))?;
     wake();
-    Ok(view(app))
+    round_now();
+    Ok(kept_view())
 }
 
 /// [`approve`]'s, on the list's items: each Found item ticked approved with its folder (the first tick wins: one approved since is
@@ -873,10 +862,11 @@ fn approve_in(items: &mut [Item], picked: &[Pick]) -> Result<()> {
 }
 
 /// A record searched now, whatever its wait (and from the ladder's first rung).
-pub fn search_now<H: RequestsHost>(app: &Arc<H>, id: &str) -> View {
+pub fn search_now<H: RequestsHost>(_app: &Arc<H>, id: &str) -> View {
     with_item(id, search_again);
     wake();
-    view(app)
+    round_now();
+    kept_view()
 }
 
 /// An item searched again by hand (Search now): due now, its word gone, and its list read again, as its record counts now (R25,
@@ -1241,8 +1231,9 @@ fn library_in(saved: &crate::settings::Saved) -> Option<PathBuf> {
 
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-/// The searcher woken (a Request approved: taken in now, not at the next round).
+/// The searcher woken (a Request approved: taken in now, not at the next round): its approved Requests read again at once.
 pub fn wake() {
+    REQUESTS_READ.store(0, std::sync::atomic::Ordering::SeqCst);
     WAKE.notify_waiters();
     wake_starts();
 }
@@ -1258,6 +1249,66 @@ pub fn start<H: RequestsHost>(app: &Arc<H>) {
     start_on(app.clone())
 }
 
+/// Soulseek's round on the runner (SCENARIOS-LOOKUPS LK.S1, LK.B4): a schedule of this kind, each search a job of it, Activity
+/// showing it; an approval's or a Search now's round begun at once as one (one at a time, whoever asked).
+pub const ROUND: &str = "soulseek:round";
+/// The round's tick: a search at most this often (the old loop's pace between two).
+const ROUND_EVERY: Duration = Duration::from_secs(5);
+/// The approved Requests read by the round at most this often, and at once when woken (the old loop's idle minute).
+const REQUESTS_EVERY: i64 = 60;
+/// When the round last read the approved Requests (epoch s); 0: at its next tick.
+static REQUESTS_READ: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// The host the round reads the approved Requests through, set at the start.
+static HOST: std::sync::OnceLock<Arc<dyn RequestsHost>> = std::sync::OnceLock::new();
+
+/// The round's paused: never by its own switch (its lists' reads wait while background reading is paused, `listing`).
+fn never_paused() -> bool {
+    false
+}
+
+/// What the round does next, asked without a job (LK.S1): the approved Requests read where due (Cratarr's own: no service asked),
+/// then the record due its search, if any, keyed as the round. Nothing while no Incoming library takes Soulseek's records.
+async fn round_due() -> Option<(String, String)> {
+    let served = crate::serve::instance()?;
+    // Nothing searched until an Incoming library takes Soulseek's records (soularr may still be at work).
+    library().ok()?;
+    let now = now();
+    if let Some(app) = HOST.get()
+        && now - REQUESTS_READ.load(std::sync::atomic::Ordering::SeqCst) >= REQUESTS_EVERY
+    {
+        REQUESTS_READ.store(now, std::sync::atomic::Ordering::SeqCst);
+        if let Err(e) = read_requests(&served, &**app).await {
+            tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "the approved Requests not read");
+        }
+    }
+    next_search().map(|id| (ROUND.to_string(), id))
+}
+
+/// The round begun now as a job (an approval, a Search now: LK.B4), not waiting for its next tick; one running already looks again
+/// at its own next tick.
+fn round_now() {
+    REQUESTS_READ.store(0, std::sync::atomic::Ordering::SeqCst);
+    let runner = crate::runner::runner();
+    let Ok(handle) = runner.begin_keyed(ROUND, ROUND, None) else { return };
+    let begun = crate::runner::jobs::run(std::sync::Arc::new(handle), |_| async {
+        if let Some((_, id)) = round_due().await {
+            search(&id).await;
+        }
+        Ok(())
+    });
+    if let Err(e) = begun {
+        tracing::debug!(target: "soulseek", "the round not begun: {e}");
+    }
+}
+
+/// The round's schedule on the runner, once (LK.S1): a second is refused.
+pub fn schedule_round() -> std::result::Result<(), String> {
+    crate::runner::runner().every_woken(ROUND, ROUND_EVERY, never_paused, &WAKE, round_due, |id: String| async move {
+        search(&id).await;
+        Ok(())
+    })
+}
+
 /// [`start`], on its host.
 fn start_on(app: Arc<dyn RequestsHost>) {
     static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
@@ -1268,30 +1319,10 @@ fn start_on(app: Arc<dyn RequestsHost>) {
         return;
     }
     restarted();
-    let round_app = app.clone();
-    crate::run::spawn(async move {
-        let app = round_app;
-        loop {
-            // Nothing searched until an Incoming library takes Soulseek's records (soularr may still be at work).
-            if library().is_err() {
-                let _ = tokio::time::timeout(Duration::from_secs(600), WAKE.notified()).await;
-                continue;
-            }
-            // The approved Requests, read each round (they are Cratarr's own: no service asked).
-            if let Err(e) = read_requests(&served, &*app).await {
-                tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "the approved Requests not read");
-            }
-            match next_search() {
-                Some(id) => {
-                    search(&id).await;
-                    tokio::time::sleep(PACE).await;
-                }
-                None => {
-                    let _ = tokio::time::timeout(Duration::from_secs(60), WAKE.notified()).await;
-                }
-            }
-        }
-    });
+    let _ = HOST.set(app.clone());
+    if let Err(e) = schedule_round() {
+        tracing::warn!(target: "soulseek", "the round not scheduled: {e}");
+    }
     crate::run::spawn(async move {
         // Hidden folders placings left (Y12): swept once, before this start's first fetch, so none of its own is taken.
         sweep_at_start().await;

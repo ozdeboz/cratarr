@@ -70,7 +70,7 @@ impl Task {
     /// Whether `account`'s pages are told of it (the live channel's `task`, `GET /api/tasks`): its own job, or a Cratarr-owned one
     /// it follows (N8).
     pub fn told_to(&self, account: &str) -> bool {
-        !account.is_empty() && self.account == account
+        !account.is_empty() && (self.account == account || self.followers.iter().any(|f| f == account))
     }
 }
 
@@ -402,15 +402,18 @@ impl Runner {
     pub fn of_at(&self, account: &str, now: i64) -> Vec<Task> {
         let mut list = self.list();
         list.retain(|k| k.ended.is_none_or(|e| now - e < KEPT_SECS));
-        list.iter().filter(|k| !k.own && k.task.account == account).map(|k| k.task.clone()).collect()
+        // Its own jobs, and the Cratarr-owned ones it follows (N8).
+        list.iter().filter(|k| k.task.told_to(account)).map(|k| k.task.clone()).collect()
     }
 
     /// `account` follows the Cratarr-owned job of `kind` and `key` (N8, R-M1: an open several accounts may make): the one running,
     /// else the last kept its hour. Its task, to follow by its id; none where there is no such job.
     pub fn follow(&self, kind: &str, key: &str, account: &str) -> Option<Task> {
-        let _ = account;
-        let list = self.list();
-        let k = list.iter().filter(|k| k.own && k.task.kind == kind && k.key.as_deref() == Some(key)).max_by_key(|k| (k.ended.is_none(), k.task.id))?;
+        let mut list = self.list();
+        let k = list.iter_mut().filter(|k| k.own && k.task.kind == kind && k.key.as_deref() == Some(key)).max_by_key(|k| (k.ended.is_none(), k.task.id))?;
+        if !account.is_empty() && !k.task.followers.iter().any(|f| f == account) {
+            k.task.followers.push(account.to_string());
+        }
         Some(k.task.clone())
     }
 
@@ -555,7 +558,8 @@ impl Runner {
         }
         if at_once || ended || k.told.elapsed() >= EVERY {
             k.told = Instant::now();
-            if !k.own {
+            // An account's job to its pages; a Cratarr-owned one to its followers' alone (N8): none followed, none told.
+            if !k.own || !k.task.followers.is_empty() {
                 let _ = self.tell.send(k.task.clone());
             }
             let _ = self.activity.send(k.row());

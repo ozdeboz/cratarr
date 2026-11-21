@@ -1238,7 +1238,7 @@ impl IncomingService {
     /// one the library neither saved nor follows (none to infer: the default, asked); while it is pending, what a placing waits with.
     pub(super) fn placing_layout(&self, source_id: &str, target: i64) -> Result<(crate::naming::Template, bool), String> {
         use crate::app::library::Layout;
-        match self.lib.layout(target) {
+        match self.lib.layout_now(target) {
             Layout::Saved(t) | Layout::Inferred(t) => Ok((t, false)),
             Layout::NoneToInfer => Ok((crate::naming::Template::default(), true)),
             Layout::Pending => Err(crate::app::library::learning_words(&self.library_name(source_id, target))),
@@ -2260,6 +2260,8 @@ mod tests {
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
         let lib = Library::new(None, Some(music.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db, None).await.unwrap();
         lib.catalogue().set_folders(vec![music.to_path_buf(), inc.to_path_buf()]).unwrap();
+        // Music's layout known, as Settings' default (PL1): these tests place by it; PL1's own take it away (`layout_tests`).
+        lib.set_saved_template(Some(crate::naming::Template::default()));
         let shelves = Arc::new(Shelves::new(lib.clone(), None));
         IncomingService::new(lib, crate::ports::disk(), Arc::new(Journal::open(None).unwrap()), None, crate::trash::DEFAULT_KEEP_DAYS, None, shelves)
     }

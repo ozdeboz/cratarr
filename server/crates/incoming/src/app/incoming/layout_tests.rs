@@ -84,6 +84,7 @@ fn arrival(cat: &crate::catalogue::Catalogue, inc: &Path) -> Located {
 async fn a_placing_waits_until_the_librarys_layout_is_known() {
     let (music, inc) = (folder("pl1-wait-music"), folder("pl1-wait-inc"));
     let svc = Arc::new(on_disk(&music, &inc).await);
+    svc.lib.set_saved_template(None);
     let settings = settings_of(&svc);
     let cat = svc.lib.catalogue();
     music_of(&cat, &music, 40, 3);
@@ -172,6 +173,7 @@ async fn a_library_mostly_untitled_asks_rather_than_waits() {
     for (case, albums) in [("empty", 0usize), ("untitled", 40)] {
         let (music, inc) = (folder(&format!("pl1-ask-{case}-music")), folder(&format!("pl1-ask-{case}-inc")));
         let svc = Arc::new(on_disk(&music, &inc).await);
+        svc.lib.set_saved_template(None);
         let settings = settings_of(&svc);
         let cat = svc.lib.catalogue();
         music_of(&cat, &music, albums, 3);
@@ -195,6 +197,7 @@ async fn a_library_mostly_untitled_asks_rather_than_waits() {
     // A saved template places at once, pending or not.
     let (music, inc) = (folder("pl1-saved-music"), folder("pl1-saved-inc"));
     let svc = Arc::new(on_disk(&music, &inc).await);
+    svc.lib.set_saved_template(None);
     let saved: crate::naming::Template = "{albumartist}/{album}/{track:02} {title}".parse().unwrap();
     svc.lib.set_saved_template(Some(saved.clone()));
     assert_eq!(svc.lib.layout(0), Layout::Saved(saved));
