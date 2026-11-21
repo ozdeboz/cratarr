@@ -448,15 +448,35 @@ pub struct Secondary {
 /// words (its "compilation") after them, each word once, naming every source that says it. A service's word the hand's list leaves
 /// out stays in its References row, never among the record's. Never "MusicBrainz's, else Discogs'", never ranked by a source.
 pub fn secondaries(hand: Option<&[String]>, said: &[Said<Vec<String>>], rule: &[String]) -> Vec<Secondary> {
-    let _ = (hand, said, rule);
-    Vec::new()
+    let mut out: Vec<Secondary> = Vec::new();
+    let mut add = |word: &str, by: &str| {
+        let word = word.trim();
+        if word.is_empty() {
+            return;
+        }
+        match out.iter_mut().find(|s| s.word.eq_ignore_ascii_case(word)) {
+            Some(s) if s.by.iter().any(|b| b == by) => {}
+            Some(s) => s.by.push(by.to_string()),
+            None => out.push(Secondary { word: word.to_string(), by: vec![by.to_string()] }),
+        }
+    };
+    if let Some(hand) = hand {
+        hand.iter().for_each(|w| add(w, BY_HAND));
+        return out;
+    }
+    let mut heard: Vec<&Said<Vec<String>>> = said.iter().filter(|s| !s.guessed).collect();
+    heard.sort_by_key(|s| asked_at(&s.source));
+    for s in heard {
+        s.value.iter().flatten().for_each(|w| add(w, &s.source));
+    }
+    rule.iter().for_each(|w| add(w, BY_RULE));
+    out
 }
 
 /// The rule's secondary types of a record (rule 8 as SPLIT narrowed it; NAMES.20's rows 3 and 4; VR49 (b), (f)): a compilation
 /// where its album artist is Various Artists over five or more track artists; a split (one to four) is none.
 pub fn rule_secondaries(various: bool, track_artists: usize) -> Vec<String> {
-    let _ = (various, track_artists);
-    Vec::new()
+    if various && track_artists >= 5 { vec!["compilation".to_string()] } else { Vec::new() }
 }
 
 /// The tracks of a list each source keeps, by source (a test's and a report's view of `versions`).
