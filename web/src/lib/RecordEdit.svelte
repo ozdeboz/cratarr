@@ -28,6 +28,7 @@
     isSecondary,
     shownOf,
     toSend,
+    yearChoices,
     yearOf,
     type ClassicalChoice,
     type OverrideSet,
@@ -40,7 +41,18 @@
   import Item from './settings/Item.svelte';
   import { toast } from './toast.svelte';
 
-  let { source, albums, onclose }: { source: string; albums: ListedAlbum[]; onclose: () => void } = $props();
+  let {
+    source,
+    albums,
+    yearVersions = [],
+    onclose,
+  }: {
+    source: string;
+    albums: ListedAlbum[];
+    /** The year's versions while none is chosen (VR39): offered as choices in Year. */
+    yearVersions?: readonly { value: number | null; by: readonly string[] }[];
+    onclose: () => void;
+  } = $props();
 
   // One record's words read as the sheet opens (the list does not carry them); several's are not asked for: their rows
   // leave each its own until changed.
@@ -184,6 +196,9 @@
       />
     </div>
   {:else if step === 'year'}
+    {#if yearChoices(yearVersions).length}
+      <div class="step"><ChoiceList label="Year" options={yearChoices(yearVersions)} value="" onchange={(v) => ((draft.year = Number(v)), (step = 'rows'))} /></div>
+    {/if}
     <div class="step field">
       <input type="number" inputmode="numeric" placeholder="Year" aria-label="Year" bind:value={yearTyped} onkeydown={(e) => e.key === 'Enter' && yearOk && ((draft.year = yearOf(yearTyped)), (step = 'rows'))} />
     </div>

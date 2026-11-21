@@ -50,7 +50,7 @@ export const offeredNotHad = (e: EntryId) => NOT_HAD_ENTRIES.includes(e);
  *  artist's (ListenBrainz, Last.fm) too; another by its id as the server says it. */
 const SOURCES: Record<string, string> = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', bandcamp: 'Bandcamp', listenbrainz: 'ListenBrainz', lastfm: 'Last.fm' };
 const COUNTING_ORDER: readonly NoList['source'][] = ['musicbrainz', 'discogs', 'bandcamp'];
-const sourceName = (id: string) => SOURCES[id] ?? id;
+export const sourceName = (id: string) => SOURCES[id] ?? id;
 /** "A", "A and B", "A, B and C". */
 const names = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 

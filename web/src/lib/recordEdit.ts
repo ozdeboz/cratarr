@@ -5,6 +5,8 @@
 // (lib/RecordEdit) shows for one record or several (a value they share, or mixed; whether it is set by hand), and what
 // it sends: only the fields changed, a value to set, null to go back to what Cratarr finds.
 
+import { sourceName } from './recordNotHad';
+
 export const RECORD_TYPES = ['album', 'ep', 'single', 'broadcast', 'other'] as const;
 export type RecordType = (typeof RECORD_TYPES)[number];
 export const TYPE_LABEL: Record<RecordType, string> = { album: 'Album', ep: 'EP', single: 'Single', broadcast: 'Broadcast', other: 'Other' };
@@ -141,3 +143,8 @@ export function yearOf(typed: string): number | null {
   const n = Number(typed.trim());
   return Number.isInteger(n) && n >= 1000 && n <= 2999 ? n : null;
 }
+
+/** A year's versions as Edit's Year offers them while none is chosen (VR39, OQ-VR-9 (c)): each by the sources that give it,
+ *  "2014 · MusicBrainz, Bandcamp"; a choice is the hand's year. */
+export const yearChoices = (versions: readonly { value: number | null; by: readonly string[] }[]): { value: string; label: string }[] =>
+  versions.filter((v) => v.value !== null).map((v) => ({ value: String(v.value), label: `${v.value} · ${v.by.map(sourceName).join(', ')}` }));

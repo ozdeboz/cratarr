@@ -606,7 +606,7 @@
 {#if missingOpen}
   <ReplaceTrackSheet source={OWN} album={{ id: rid, title }} {onclose} />
 {:else if editOpen}
-  <RecordEdit source={OWN} albums={[listed]} {onclose} />
+  <RecordEdit source={OWN} albums={[listed]} yearVersions={e?.properties.year.value === null ? e.properties.year.versions : []} {onclose} />
 {:else}
   <MenuSheet
     label={title}

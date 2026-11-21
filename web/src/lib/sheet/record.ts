@@ -75,6 +75,14 @@ export function versionLines(e: RecordEntity): Line[] {
 /** The Head's state line (RS2): its words as sent, its time said by the page's one when() (RV8). */
 export const stateLine = (e: RecordEntity, say: (s: number) => string = when) => (e.state.at ? `${e.state.words} ${say(e.state.at)}` : e.state.words);
 
+/** The record's type with what it is by (VR39), as the References sheet says it: "EP · by its sources", the server's words; none
+ *  while the type has no value (none until a hand picks). */
+export function typeLine(p: RecordEntity['properties']): string | null {
+  if (!p.type.value) return null;
+  const word = recordWord(p.type.value);
+  return [word.charAt(0).toUpperCase() + word.slice(1), p.type_why].filter(Boolean).join(' · ');
+}
+
 /** The Head's chips (RS2): its artists by the one formatter (`credit`), its type's word, its year. */
 export function headChips(e: RecordEntity): string[] {
   const word = recordWord(e.properties.type.value);
