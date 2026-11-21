@@ -1253,6 +1253,16 @@ impl Library {
         Ok(out)
     }
 
+    /// Each song's record's year as the library resolves it (its original year where earlier than its release's, MusicBrainz's
+    /// where its files say none, one set by hand above all): the one year every reader of a song's year takes (SIM.21, T-SIM-17).
+    /// Songs of records of no year left out.
+    pub fn song_years(&self) -> Result<HashMap<String, u32>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT s.id, a.year FROM songs s JOIN albums a ON a.id = s.album_id WHERE a.year IS NOT NULL")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The MusicBrainz releases of the albums without an original year (0.9.5: asked of MusicBrainz), in the library's
     /// order.
     pub fn releases_without_original(&self) -> Result<Vec<String>> {

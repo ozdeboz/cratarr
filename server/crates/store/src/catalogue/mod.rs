@@ -1885,6 +1885,13 @@ impl Catalogue {
             None => Self::read_crate_facts(&self.db(), &folders, &rules, &several)?,
         };
         drop(reader);
+        // One year, the record's (SIM.21): what similarity, a crate's year and Radio's era read.
+        if let Some(s) = &served {
+            match s.library().song_years() {
+                Ok(years) => Self::with_record_years(&mut facts, &years),
+                Err(e) => tracing::warn!("crates: the records' years not read: {e:#}"),
+            }
+        }
         if let Some(s) = &served
             && let Ok(types) = s.library().song_release_types()
         {
@@ -1929,6 +1936,16 @@ impl Catalogue {
         drop(was);
         *kept = Some(KeptFacts { written, folders, rules, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
         Ok(facts)
+    }
+
+    /// Each file's year its record's, as the library resolves it (`song_years`, by song): one year for similarity, a crate's year
+    /// and Radio's era (SIM.21, T-SIM-17). A file of a song the library has no year for keeps its own.
+    pub fn with_record_years(facts: &mut [crate::crates::Facts], years: &HashMap<String, u32>) {
+        for f in facts {
+            if let Some(&y) = f.track.and_then(|t| years.get(&crate::serve::ids::song(t))) {
+                f.year = Some(f64::from(y));
+            }
+        }
     }
 
     /// One `Facts` a track: `several` holds each track with more than one file present, by the place its row copy has in the

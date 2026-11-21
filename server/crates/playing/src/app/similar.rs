@@ -26,7 +26,7 @@ async fn songs_of(crates: &CrateService, id: &str) -> Result<Vec<String>, Toggle
 pub async fn similar_playlists(playlists: &PlaylistService, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
     let Some(serve) = playlists.served() else { return Ok(Vec::new()) };
     let lists = playlists.visible_lines().await?;
-    let id = id.to_string();
+    let (id, own) = (id.to_string(), id.to_string());
     let (seed, candidates) = crate::run::spawn_blocking(move || {
         let cat = serve.catalogue();
         let songs = |lines: &[String]| lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(cat, l)).collect::<Vec<_>>();
@@ -43,7 +43,7 @@ pub async fn similar_playlists(playlists: &PlaylistService, id: &str, count: usi
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))?;
-    super::radio::similar_lists(seed, candidates, count).await
+    super::radio::similar_lists(seed, Some(own), candidates, count).await
 }
 
 /// Crates like a crate, among the asking account's, the closest first, with how alike (0 to 100).
@@ -62,7 +62,7 @@ pub async fn crates_like(crates: &CrateService, id: &str, count: usize) -> Resul
             candidates.push((c.id, songs));
         }
     }
-    super::radio::similar_lists(seed, candidates, count).await
+    super::radio::similar_lists(seed, None, candidates, count).await
 }
 
 #[cfg(test)]

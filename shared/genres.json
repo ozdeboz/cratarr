@@ -1,5 +1,5 @@
 {
-  "about": "Cratarr's genres (decision 0097, amended 2026-11-20), one list for the server, the page and a device: the rules crate compiles it in (server/rules/src/genres.rs). The 26, each with the words that mean it, compared as search reads words (case, marks and everything but letters and digits count for nothing: \"R&B\" is \"r b\", \"Hip-Hop\" is \"hip hop\"). Any other word a caller (Discogs, MusicBrainz, a file's GENRE) names a genre or a style is a style; the rest are tags. The exceptions are written forms read as the words they are, before the split on \"/\", \";\" and \",\". The links give a style the genres it counts toward, and are never shown: the approved genre set's (2026-11-21), every style of it to the genres it is listed under, the five fixed ones first; a style with no link gives no genre.",
+  "about": "Cratarr's genres (decision 0097, amended 2026-11-20), one list for the server, the page and a device: the rules crate compiles it in (server/rules/src/genres.rs). The 26, each with the words that mean it, compared as search reads words (case, marks and everything but letters and digits count for nothing: \"R&B\" is \"r b\", \"Hip-Hop\" is \"hip hop\"). Any other word a caller (Discogs, MusicBrainz, a file's GENRE) names a genre or a style is a style; the rest are tags. The exceptions are written forms read as the words they are, before the split on \"/\", \";\" and \",\". The links name the genres a style counts toward, and are never shown; only a style linked to exactly one genre gives it, a blend linked to several none (2026-11-21, GEN.64): the approved genre set's (2026-11-21), every style of it to the genres it is listed under, the five fixed ones first; a style with no link gives no genre.",
   "genres": [
     { "name": "Rock", "words": ["rock"] },
     { "name": "Pop", "words": ["pop"] },
@@ -247,7 +247,7 @@
     { "style": "Italo-Disco", "genres": ["Dance"] },
     { "style": "Italo House", "genres": ["Dance"] },
     { "style": "J-pop", "genres": ["Pop"] },
-    { "style": "Jazz-Funk", "genres": ["Jazz"] },
+    { "style": "Jazz-Funk", "genres": ["Jazz", "Funk"] },
     { "style": "Jazz Fusion", "genres": ["Jazz"] },
     { "style": "Jazz House", "genres": ["Dance"] },
     { "style": "Jazz Pop", "genres": ["Pop"] },

@@ -4180,6 +4180,91 @@ mod tests {
         assert_eq!(year, 2015, "the album's aggregates still count every song");
     }
 
+    /// SIM.21: one year, the record's as the library resolves it, for every reader of a song's year: the catalogue's facts and the
+    /// radio's index made of them, a crate's year condition, and Radio and Autoplay by era.
+    #[test]
+    fn similarity_reads_the_records_resolved_year() {
+        use cratarr_rules::radio::{Ask, Index, Mode, Song, choose};
+        let record = |t0: i64, name: &str, tags: &[(&str, &str)]| -> Vec<ServedRow> {
+            (0..3)
+                .map(|n| {
+                    let mut all = vec![("title", "T"), ("artist", name), ("albumartist", name), ("album", name)];
+                    all.extend_from_slice(tags);
+                    row(t0 + n, &format!("{name}/0{n} T.mp3"), &all)
+                })
+                .collect()
+        };
+        // (a) MusicBrainz's original year 1998; (b) a year set by hand, 1999; (c) its files' original date, 1994; all dated 2026.
+        // Beside them, a record of 1996 and one of 2025.
+        let mut rows = record(1, "Alpha", &[("date", "2026"), ("musicbrainz_albumid", "rel-alpha")]);
+        rows.extend(record(11, "Beta", &[("date", "2026")]));
+        rows.extend(record(21, "Gamma", &[("date", "2026"), ("originaldate", "1994-05-01")]));
+        rows.extend(record(31, "Delta", &[("date", "1996")]));
+        rows.extend(record(41, "Echo", &[("date", "2025")]));
+        let folders = vec![FolderRows { folder: 0, root: "/music".into(), rows: rows.clone() }];
+        let lib = Library::open(None).unwrap();
+        lib.set_originals([("rel-alpha".into(), 1998)].into());
+        lib.build(&folders, &FolderRules::default()).unwrap();
+        let beta: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Beta'", [], |r| r.get(0)).unwrap();
+        lib.set_overrides([(beta, Overrides { year: Some(1999), ..Overrides::default() })].into());
+        lib.build(&folders, &FolderRules::default()).unwrap();
+        let shown: Vec<(String, i64)> = {
+            let db = lib.db();
+            let mut st = db.prepare("SELECT name, year FROM albums ORDER BY name").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let years = [("Alpha", 1998), ("Beta", 1999), ("Delta", 1996), ("Echo", 2025), ("Gamma", 1994)];
+        assert_eq!(shown, years.map(|(n, y)| (n.to_string(), y)), "the library's record years");
+
+        // The catalogue's facts of each file, as `crate_facts` reads them, its year then its record's.
+        let mut facts: Vec<crate::crates::Facts> = rows
+            .iter()
+            .map(|r| {
+                let tags: BTreeMap<&str, &str> = r.tags.iter().rev().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+                crate::crates::Facts { rel: r.rel.clone(), track: r.track, folders: vec![0], year: crate::crates::year_of(&tags), ..crate::crates::Facts::default() }
+            })
+            .collect();
+        crate::catalogue::Catalogue::with_record_years(&mut facts, &lib.song_years().unwrap());
+        let of = |name: &str| -> Vec<&crate::crates::Facts> { facts.iter().filter(|f| f.rel.starts_with(name)).collect() };
+        for (name, year) in years {
+            assert!(of(name).iter().all(|f| f.year == Some(year as f64)), "{name}: {:?}", of(name).iter().map(|f| f.year).collect::<Vec<_>>());
+        }
+
+        // (1) The radio's index, made of them, as `index()` makes it.
+        let names = ["Alpha", "Beta", "Gamma", "Delta", "Echo"];
+        let songs: Vec<Song> = facts
+            .iter()
+            .map(|f| {
+                let album = &f.rel[..f.rel.find('/').unwrap()];
+                let album_n = names.iter().position(|n| *n == album).unwrap() as u32;
+                Song { id: crate::serve::ids::song(f.track.unwrap()), album_id: album.to_string(), album_n, folders: vec![0], ..Song::default() }
+            })
+            .collect();
+        let index = Index::new(songs).with_facts(&facts);
+        let year_of = |name: &str| index.songs.iter().filter(|s| s.album_id == name).map(|s| s.like.year).collect::<Vec<_>>();
+        assert_eq!((year_of("Alpha"), year_of("Beta"), year_of("Gamma")), (vec![Some(1998); 3], vec![Some(1999); 3], vec![Some(1994); 3]));
+
+        // (2) A crate's year condition (a change by design): a reissue, a year set by hand and an original date are of the 1990s.
+        let membership = HashMap::new();
+        let w = crate::crates::World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
+        let nineties = [crate::crates::Condition::new("year", false, crate::crates::Value::Range { min: Some(1990.0), max: Some(1999.0) })];
+        let mut held: Vec<&str> = crate::crates::select(&facts, &nineties, &w).into_iter().map(|r| &r[..r.find('/').unwrap()]).collect();
+        held.sort_unstable();
+        held.dedup();
+        assert_eq!(held, ["Alpha", "Beta", "Delta", "Gamma"]);
+
+        // (3) Autoplay by era, and Radio by era, after a song of (a): within five years of 1998 (a change by design).
+        let first = index.songs.iter().position(|s| s.album_id == "Alpha").unwrap();
+        let after = index.songs[first].id.clone();
+        for (mode, by) in [(Mode::Era, cratarr_rules::radio::RadioBy::Track), (Mode::Radio, cratarr_rules::radio::RadioBy::Era)] {
+            for n in 0..10 {
+                let ask = Ask { mode, by, seed: vec![after.clone()], exclude: vec![after.clone()], last: Some(after.clone()), count: Some(5), ..Ask::default() };
+                let picks = choose(&index, &ask, &HashMap::new(), None, &mut cratarr_rules::Rng::seeded(n));
+                assert!(!picks.is_empty() && picks.iter().all(|&i| index.songs[i].like.year.is_some_and(|y| y.abs_diff(1998) <= 5)), "{mode:?} {by:?}: {:?}", picks.iter().map(|&i| &index.songs[i].album_id).collect::<Vec<_>>());
+            }
+        }
+    }
+
     #[test]
     fn an_album_shows_its_original_year_from_its_files_else_musicbrainz() {
         let album = |t: i64, name: &str, tags: &[(&str, &str)]| {

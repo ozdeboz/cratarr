@@ -24,7 +24,7 @@
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
   import WordsPart from './WordsPart.svelte';
-  import { encodingOf, genreSeparatorsRefused, splittingLine, textOf, type SplitText } from './tagRules';
+  import { artistSeparatorsRefused, encodingOf, genreSeparatorsRefused, splittingLine, textOf, type SplitText } from './tagRules';
   import WrittenSheet from './WrittenSheet.svelte';
 
   let { thing = null }: { thing?: string | null } = $props();
@@ -478,7 +478,8 @@
     <Item
       name="Artist separators"
       line={text.artistSeps || 'None'}
-      onclick={() => (typing = { title: 'Artist separators', value: text.artistSeps, help: 'Separated by spaces', save: (v) => set('artistSeps', v) })}
+      onclick={() =>
+        (typing = { title: 'Artist separators', value: text.artistSeps, help: 'Separated by spaces', refuse: artistSeparatorsRefused, save: (v) => set('artistSeps', v) })}
     />
     <Item
       name="Genre separators"

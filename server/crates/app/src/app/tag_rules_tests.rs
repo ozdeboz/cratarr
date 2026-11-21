@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::app::library::folder_rules_of;
-use crate::catalogue::normalise::{AMPERSAND, Alias};
+use crate::catalogue::normalise::{AMPERSAND, ARTIST_PHRASE, Alias, FEATURING};
 use crate::catalogue::{Catalogue, Encoding, FolderRules, InUse, Rules};
 use crate::serve::Serve;
 use crate::serve::copies::Kind;
@@ -447,7 +447,8 @@ async fn ampersand_is_no_genre_separator() {
         let refused = saved_as(&saved.sources, drafts, &saved.tag_rules.encoding).unwrap_err();
         assert!(refused.to_string().contains(AMPERSAND), "{refused}");
     }
-    assert_eq!(Encoding { artist_separators: s(&["&"]), ..Encoding::default() }.check(), Ok(()), "an artist's separators are the artists' own rules");
+    // Changed by design (GEN.63, the credit model, 2026-11-21 14:24): "&" is a credit's printed phrase, no artist separator.
+    assert_eq!(Encoding { artist_separators: s(&["&"]), ..Encoding::default() }.check(), Err(ARTIST_PHRASE), "a credit's phrase, kept as printed");
 
     // Through the settings' save, as the page's: refused, and the rules before stay.
     let data = root.join("data");
@@ -466,5 +467,59 @@ async fn ampersand_is_no_genre_separator() {
     assert!(refused.to_string().contains(AMPERSAND), "{refused}");
     assert_eq!(app.settings.tag_rules(), before);
     assert!(!data.join("settings.json").exists(), "nothing saved");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// GEN.63 (5), the app's part (the credit model, 2026-11-21 14:24): a library's artist separators, and the default's, are
+/// list separators only, "/" and ";". A credit's printed phrases ("&", "and", "x", "with", "vs.", ",") and the Featuring
+/// words ("feat.", "ft.", "featuring") are refused, each with its reason, by the check and by a save; nothing is saved, and
+/// "/" and ";" are.
+#[tokio::test]
+async fn artist_separators_are_list_separators_only() {
+    let (root, all, saved) = upgraded("gen63-artist-separators");
+    let refused_as = [
+        (&["&"][..], ARTIST_PHRASE),
+        (&["and"], ARTIST_PHRASE),
+        (&["x"], ARTIST_PHRASE),
+        (&["with"], ARTIST_PHRASE),
+        (&["vs."], ARTIST_PHRASE),
+        (&[","], ARTIST_PHRASE),
+        (&["/", ";", "&"], ARTIST_PHRASE),
+        (&["feat."], FEATURING),
+        (&["ft."], FEATURING),
+        (&["featuring"], FEATURING),
+        (&["/", "Feat."], FEATURING),
+    ];
+    for (separators, why) in refused_as {
+        assert_eq!(Encoding { artist_separators: s(separators), ..Encoding::default() }.check(), Err(why), "{separators:?}");
+        let mut drafts = saved.sources.clone();
+        drafts[0].libraries.0[2].tag_rules = Some(Encoding { artist_separators: s(separators), ..install_017() });
+        let refused = saved_as(&saved.sources, drafts, &saved.tag_rules.encoding).unwrap_err();
+        assert!(refused.to_string().contains(why), "{refused}");
+    }
+    for fine in [&["/", ";"][..], &["/"], &[";"], &[]] {
+        assert_eq!(Encoding { artist_separators: s(fine), ..Encoding::default() }.check(), Ok(()), "{fine:?}: list separators");
+    }
+
+    // Through the settings' save, as the page's: the default's and a library's refused, the rules before kept; "/" and ";" saved.
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let dir = data.to_string_lossy().into_owned();
+    let cfg = crate::config::Config::from_lookup(|k| (k == "CRATARR_DATA_DIR").then(|| dir.clone())).unwrap();
+    std::fs::create_dir_all(all[0].join(crate::playlists::PLAYLIST_DIR)).unwrap();
+    let app = crate::app::App::new(cfg, settings::Saved { music_folder: Some(path(&all[0])), ..Default::default() }, settings::Origin::Env, None).await.unwrap();
+    let before = app.settings.tag_rules();
+    let with = Rules { encoding: Encoding { artist_separators: s(&["/", "x"]), ..Encoding::default() }, ..Rules::default() };
+    let refused = app.settings.save(Vec::new(), Some(with), None, None, None).await.unwrap_err();
+    assert!(refused.to_string().contains(ARTIST_PHRASE), "{refused}");
+    let mut draft = saved.sources[0].clone();
+    draft.libraries.0[0].tag_rules = Some(Encoding { artist_separators: s(&["feat."]), ..Encoding::default() });
+    let refused = app.settings.save(vec![draft], None, None, None, None).await.unwrap_err();
+    assert!(refused.to_string().contains(FEATURING), "{refused}");
+    assert_eq!(app.settings.tag_rules(), before);
+    assert!(!data.join("settings.json").exists(), "nothing saved");
+    let with = Rules { encoding: Encoding { artist_separators: s(&["/", ";"]), ..Encoding::default() }, ..Rules::default() };
+    app.settings.save(Vec::new(), Some(with), None, None, None).await.unwrap();
+    assert_eq!(app.settings.tag_rules().encoding.artist_separators, s(&["/", ";"]), "the list separators are saved");
     std::fs::remove_dir_all(&root).ok();
 }
