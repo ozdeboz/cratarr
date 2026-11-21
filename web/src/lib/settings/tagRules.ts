@@ -14,9 +14,15 @@ export const genreSeparatorsRefused = (typed: string): string | null => (typed.s
 export const ARTIST_PHRASE = 'Only "/" and ";" separate artists: "&", "x" and the like are kept as the credit prints them';
 /** Why "feat." separates no artists: it names a featured artist (the Featuring role). */
 export const FEATURING = '"feat." names a featured artist, so it can\'t separate artists';
+const FEATURING_WORDS = ['feat.', 'feat', 'ft.', 'ft', 'featuring'];
 
 /** Artist separators as typed (separated by spaces): list separators only, "/" and ";"; else the reason. */
-export function artistSeparatorsRefused(_typed: string): string | null {
+export function artistSeparatorsRefused(typed: string): string | null {
+  for (const s of typed.split(/\s+/).filter(Boolean)) {
+    const word = s.toLowerCase();
+    if (FEATURING_WORDS.includes(word)) return FEATURING;
+    if (word !== '/' && word !== ';') return ARTIST_PHRASE;
+  }
   return null;
 }
 

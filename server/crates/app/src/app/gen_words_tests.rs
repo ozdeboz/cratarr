@@ -105,15 +105,16 @@ fn only_a_records_own_bandcamp_page_keeps_its_tags() {
     }
 }
 
-/// GEN.22 (kind 6): one link function gives a kind's genres from its genre words and its style words, and the record's genres
-/// and every track's come from it; the links are read nowhere else.
+/// GEN.22 (kind 6): one link function gives a kind's genres from its genre words and its style words, each style linked to
+/// exactly one genre giving it, a blend none (GEN.64), and the record's genres and every track's come from it; the links are read
+/// nowhere else.
 #[test]
 fn one_link_function() {
     let code = super::tag_rules_tests::sources();
     const STORE: &str = "base/src/app/words/store.rs";
     let store = &code.iter().find(|(f, _)| f == STORE).unwrap_or_else(|| panic!("{STORE}")).1;
     assert_eq!(store.matches("fn with_links(").count(), 1, "one link function");
-    assert!(store.contains("fn with_links(lib: &Library, genres: KindWords, styles: &[Word]) -> KindWords"), "a kind's genres from its genre words and its style words");
+    assert!(store.contains("fn with_links(lib: &Library, genres: KindWords, styles: &[Word]) -> KindWords"), "a kind's genres from its genre words and its style words, a blend giving none (GEN.64)");
     assert_eq!(store.matches(".genres_of(").count(), 1, "the links read in it alone");
     assert_eq!(store.matches("with_links(lib, ").count(), 2, "its two callers: the record's genres and each track's");
     for (file, text) in &code {

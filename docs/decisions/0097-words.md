@@ -85,8 +85,9 @@ Blues, Soul, Funk, R&B, Hip Hop, Reggae, Latin, Folk, Country, World, Classical,
 Children's, Religious, Easy Listening, New Age. No families above them. A word some caller (Discogs, MusicBrainz, a
 file's GENRE) names a genre or style and that isn't one of the 26 is a style; any other word is a tag. Every path splits
 on "/", ";" and "," (never on "&"; a leading "&" or "and" dropped), after the owner's exceptions list ("RnB/Swing" is
-R&B and New Jack Swing; "Cut-up/DJ" is Turntablism). A style counts toward any number of the 26 through links that are
-never shown; they run after the merge, for record and track alike. A word lives where its source said it (files and
+R&B and New Jack Swing; "Cut-up/DJ" is Turntablism). A style's links name the genres it counts toward and are never
+shown; only a style linked to exactly one gives that genre, a blend linked to several none (the owner, 2026-11-21: "Blends
+give none"). They run after the merge, for record and track alike. A word lives where its source said it (files and
 AudioMuse per track; Discogs, MusicBrainz and Last.fm per record; the hand at either) and rises to the record on half the
 tracks, AudioMuse's by its average score. Write puts genres and styles into GENRE; STYLE is never written. Health lists
 the STYLE words that are no style, and old MOOD tags, to clear, each in one run with one Undo (0092).

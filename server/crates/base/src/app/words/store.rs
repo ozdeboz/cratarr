@@ -15,9 +15,9 @@
 //!   genres, a file's GENRE) names is a style; any other a tag. Digits alone are no word, and so is a word only a file's
 //!   STYLE uses that no caller knows (GEN-DESIGN §8). Mood is AudioMuse's and the hand's alone. A service's stored word is
 //!   split by that service's rule as it is read (GEN.4).
-//! - **Links** (GEN-DESIGN §5). After the merge, a record's genres and each track's are its genre words and the genres its
-//!   styles count toward (`shared/genres.json`'s links), by one function, `with_links`: never shown, naming no source, never
-//!   held to the services' three; a hand genre list final. A track's start from its record's genre words, not its record's
+//! - **Links** (GEN-DESIGN §5). After the merge, a record's genres and each track's are its genre words and the genre of each
+//!   style linked to exactly one (`shared/genres.json`'s links; a blend, linked to several, gives none: GEN.64), by one
+//!   function, `with_links`: never shown, naming no source, never held to the services' three; a hand genre list final. A track's start from its record's genre words, not its record's
 //!   link-given genres, so a track's own hand style list gives its genres alone (OQ-GEN-15).
 //! - **One spelling.** A word's key folds case, spaces and hyphens (`super::key`); a kind's aliases name the word it
 //!   is; its shown spelling is the 26's name, the alias's, else the most written.
@@ -106,14 +106,15 @@ impl Source {
         })
     }
 
-    /// How far a service's word is trusted (0.9.7's): the household's as the files'; Bandcamp's as Last.fm's, both free tags
-    /// (OQ-GEN-23: no rank of its own).
+    /// How far a service's word is trusted: the household's as the files'; the curated services' genres and styles alike,
+    /// MusicBrainz's and Discogs' (the owner, 2026-11-21, "Curated equal, tags lower", GEN.66); the crowd's free tags lower:
+    /// Last.fm's, Bandcamp's (OQ-GEN-23: no rank of its own) and MusicBrainz's tags.
     fn trust(self, raw_kind: &str) -> f32 {
         match (self, raw_kind) {
             (Source::Hand | Source::Files | Source::Audiomuse | Source::Household, _) => 1.0,
             (Source::Musicbrainz, "tag") => 0.5,
             (Source::Musicbrainz, _) => 0.9,
-            (Source::Discogs, _) => 0.8,
+            (Source::Discogs, _) => 0.9,
             (Source::Lastfm | Source::Bandcamp, _) => 0.5,
         }
     }
@@ -157,6 +158,9 @@ enum Field {
 
 /// A service's word below this merged weight is left out (0.9.7's floor).
 pub const FLOOR: f32 = 0.15;
+
+/// Two merged weights this close are one: equally weighted words, which a cap keeps together (GEN.66).
+const TIED: f32 = 1e-6;
 
 /// One track as read: its files' tags (Genre, STYLE, MOOD, Grouping) and what AudioMuse heard (its styles, and the
 /// moods it stands out on); its words set by hand (0.15's track Edit), by kind.
@@ -513,7 +517,8 @@ impl Gathered {
         }
     }
 
-    /// A kind's words kept: the firm ones, then the services' strongest above the floor, up to the kind's most.
+    /// A kind's words kept: the firm ones, then the services' strongest above the floor, up to the kind's most; a word weighed
+    /// as the last one kept is kept too, so a cap never cuts one of equally weighted words by its spelling (GEN.66).
     fn words(&self, lib: &Library, kind: Kind) -> Vec<(String, Word, f32)> {
         let mut out: Vec<(String, Word, f32, bool)> = self
             .order
@@ -531,10 +536,15 @@ impl Gathered {
             .collect();
         out.sort_by(|a, b| b.3.cmp(&a.3).then(b.2.total_cmp(&a.2)).then_with(|| a.1.word.cmp(&b.1.word)));
         let mut services = 0;
-        out.retain(|(_, _, _, firm)| {
+        let mut last = f32::INFINITY;
+        out.retain(|(_, _, weight, firm)| {
             *firm || {
                 services += 1;
-                services <= kind.most()
+                let kept = services <= kind.most() || (weight - last).abs() < TIED;
+                if kept {
+                    last = *weight;
+                }
+                kept
             }
         });
         out.into_iter().map(|(k, w, x, _)| (k, w, x)).collect()
@@ -589,15 +599,20 @@ fn by_hand(lib: &Library, kind: Kind, list: &[String]) -> KindWords {
 
 /// A kind's genres from its genre words and its style words (GEN-DESIGN §5, GEN.22): the one link function, for a record and for
 /// each of its tracks alike, after the merge. A hand genre list is final: the links add nothing to it (GEN.23, GEN.51). Else its
-/// genre words, then each style's links in the styles' order, each genre once (one its genre words hold adds nothing); never held
-/// to the services' three (R7), and naming no source and no style (C7 (c), GEN.48).
+/// genre words, then the genre of each style linked to exactly one, in the styles' order, each genre once (one its genre words
+/// hold adds nothing). A style linked to several genres, a blend, gives none (the owner, 2026-11-21, "Blends give none",
+/// GEN.64), though the map keeps its links. Never held to the services' three (R7), and naming no source and no style (C7 (c),
+/// GEN.48).
 fn with_links(lib: &Library, genres: KindWords, styles: &[Word]) -> KindWords {
     if genres.hand {
         return genres;
     }
     let mut have: HashSet<String> = genres.words.iter().map(|w| lib.key(Kind::Genre, &w.word)).collect();
     let mut words = genres.words;
-    for genre in styles.iter().flat_map(|s| lib.genres.genres_of(&s.word)) {
+    for genre in styles.iter().filter_map(|s| match lib.genres.genres_of(&s.word) {
+        [one] => Some(one),
+        _ => None,
+    }) {
         if have.insert(lib.key(Kind::Genre, genre)) {
             words.push(Word { word: genre.clone(), sources: Vec::new() });
         }

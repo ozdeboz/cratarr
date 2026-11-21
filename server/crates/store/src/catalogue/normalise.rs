@@ -50,10 +50,20 @@ impl Default for Encoding {
 }
 
 impl Encoding {
-    /// Refused (OQ-GEN-21, GEN.63): "&" among the genre separators, or in one of them.
+    /// Refused (OQ-GEN-21, GEN.63): "&" among the genre separators, or in one of them; any artist separator but a list
+    /// separator, "/" or ";" (a Featuring word with its own reason).
     pub fn check(&self) -> Result<(), &'static str> {
         if self.genre_separators.iter().any(|s| s.contains('&')) {
             return Err(AMPERSAND);
+        }
+        for s in &self.artist_separators {
+            let word = s.trim().to_lowercase();
+            if matches!(word.as_str(), "feat." | "feat" | "ft." | "ft" | "featuring") {
+                return Err(FEATURING);
+            }
+            if !LIST_SEPARATORS.contains(&word.as_str()) {
+                return Err(ARTIST_PHRASE);
+            }
         }
         Ok(())
     }
