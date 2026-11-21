@@ -12,7 +12,7 @@
 //!      separators and keep list, each service by its shipped rule ([`rules`]), a typed word whole. "&" never splits,
 //!      and a "," split drops a part's leading "&" or "and";
 //!   3. the meaning after it, shared: a word's genre, the sort, the links.
-//! - **The links** ([`Genres::links`]): the genres a style counts toward, never shown.
+//! - **The links** ([`Genres::links`], a style's by [`Genres::genres_of`]): the genres a style counts toward, never shown.
 //!
 //! Read by hand, as the matcher's JSON is ([`crate::matcher::json`]): no serde_json in the page's WebAssembly.
 
@@ -78,6 +78,8 @@ pub struct Genres {
     links: Vec<Link>,
     /// Each word's key, each name's too, to its genre's place in `genres`.
     by_key: FxHashMap<String, usize>,
+    /// Each linked style's key to its link's place in `links`.
+    by_style: FxHashMap<String, usize>,
 }
 
 /// The list Cratarr ships ([`SHIPPED`]), read once.
@@ -137,6 +139,7 @@ impl Genres {
             exceptions.push(exception);
         }
         let mut links: Vec<Link> = Vec::new();
+        let mut by_style: FxHashMap<String, usize> = FxHashMap::default();
         for l in items(&v, "links")? {
             only(l, &["style", "genres"], "a link")?;
             let link = Link { style: one(l, "style", "a link")?, genres: many(l, "genres", "a link")? };
@@ -144,15 +147,16 @@ impl Genres {
             if k.is_empty() || by_key.contains_key(&k) {
                 return Err(format!("a link from \"{}\": a link goes from a style", link.style));
             }
-            if links.iter().any(|o| key(&o.style) == k) {
+            if by_style.contains_key(&k) {
                 return Err(format!("\"{}\" is linked twice", link.style));
             }
             if let Some(g) = link.genres.iter().find(|g| !genres.iter().any(|x| &x.name == *g)) {
                 return Err(format!("a link from \"{}\" to \"{g}\": not one of the genres", link.style));
             }
+            by_style.insert(k, links.len());
             links.push(link);
         }
-        Ok(Self { genres, exceptions, links, by_key })
+        Ok(Self { genres, exceptions, links, by_key, by_style })
     }
 
     /// The genres, in the list's order.
@@ -168,6 +172,12 @@ impl Genres {
     /// The links, in the list's order.
     pub fn links(&self) -> &[Link] {
         &self.links
+    }
+
+    /// The genres a style counts toward, by its [`key`] ("deep-house" is Deep House's), in its link's order: none for a style with
+    /// no link (or with a link to none), and for any word that is no style.
+    pub fn genres_of(&self, style: &str) -> &[String] {
+        self.by_style.get(&key(style)).map_or(&[], |&at| self.links[at].genres.as_slice())
     }
 
     /// The genre a word is (one of the genres' names), by its [`key`]; none for any other word.

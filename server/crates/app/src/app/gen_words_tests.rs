@@ -1,6 +1,6 @@
 //! GEN's tests on the whole app (SCENARIOS-GEN, GEN steps 2–5): Bandcamp's tags kept from every read of a record's own Bandcamp
 //! page, never from a candidate page, never fetched for themselves (GEN.60); the services' and the typed words split by their
-//! own rules on their paths (GEN.7's two paths that GEN C1 left: GEN.4, GEN.25).
+//! own rules on their paths (GEN.7's two paths that GEN C1 left: GEN.4, GEN.25); one link function (GEN.22).
 
 use std::path::Path;
 
@@ -103,4 +103,25 @@ fn only_a_records_own_bandcamp_page_keeps_its_tags() {
     for file in ["requests/src/app/requests.rs", "records/src/app/discover.rs", "playing/src/app/radio.rs", "playing/src/app/playon.rs", "records/src/app/related.rs"] {
         assert!(!read(file).contains("keep_bandcamp"), "{file}: a candidate's or another page's read keeps nothing");
     }
+}
+
+/// GEN.22 (kind 6): one link function gives a kind's genres from its genre words and its style words, and the record's genres
+/// and every track's come from it; the links are read nowhere else.
+#[test]
+fn one_link_function() {
+    let code = super::tag_rules_tests::sources();
+    const STORE: &str = "base/src/app/words/store.rs";
+    let store = &code.iter().find(|(f, _)| f == STORE).unwrap_or_else(|| panic!("{STORE}")).1;
+    assert_eq!(store.matches("fn with_links(").count(), 1, "one link function");
+    assert!(store.contains("fn with_links(lib: &Library, genres: KindWords, styles: &[Word]) -> KindWords"), "a kind's genres from its genre words and its style words");
+    assert_eq!(store.matches(".genres_of(").count(), 1, "the links read in it alone");
+    assert_eq!(store.matches("with_links(lib, ").count(), 2, "its two callers: the record's genres and each track's");
+    for (file, text) in &code {
+        if file != STORE {
+            assert!(!text.contains(".genres_of(") && !text.contains("shipped().links()"), "{file} reads the links itself");
+        }
+    }
+    // The rules crate looks a style's link up by its key, once.
+    let genres = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/src/genres.rs")).unwrap();
+    assert_eq!(genres.matches("pub fn genres_of(&self, style: &str) -> &[String]").count(), 1);
 }

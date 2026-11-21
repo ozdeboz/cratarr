@@ -265,7 +265,7 @@ fn the_rule_fix_splits_by_its_librarys_rules() {
 }
 
 /// The server's sources outside its tests, each with its path from the crates' folder.
-fn sources() -> Vec<(String, String)> {
+pub(super) fn sources() -> Vec<(String, String)> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap() {
             let p = e.unwrap().path();

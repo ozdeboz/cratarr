@@ -1,7 +1,8 @@
 {
-  "about": "Decision 0097's one reader test: one record's words as every reader must see them. `library` is what the rest of the library says (another record's file genres; each kind's aliases), `record` the record's inputs by layer (each track's files' tags and AudioMuse's styles with their scores; the services' words; what is set by hand), `expect.words` the album view's `words`, `expect.crates` the tracks each word's crate holds. The server's words store and the page's tests check theirs against it. Sorted as GEN sorts (amended 0097): a word of the 26 is a genre, a word a caller names a genre or style (another file's GENRE here) a style, the rest tags; AudioMuse's style rises to the record by its average score over the heard tracks. The links' genres (Dub's) come with the owner's map.",
+  "about": "Decision 0097's one reader test: one record's words as every reader must see them. `library` is what the rest of the library says (another record's file genres; each kind's aliases), `record` the record's inputs by layer (each track's files' tags and AudioMuse's styles with their scores; the services' words; what is set by hand), `expect.words` the album view's `words`, `expect.crates` the tracks each word's crate holds. The server's words store and the page's tests check theirs against it. Sorted as GEN sorts (amended 0097): a word of the 26 is a genre, a word a caller names a genre or style (another file's GENRE here) a style, the rest tags; AudioMuse's style rises to the record by its average score over the heard tracks. A style's links give the genres it counts toward, after the merge, at the record and each track, naming no source: `library.genres_file` is the map they are read by (the scenarios' fixture map), so an edit of the shipped links changes nothing here.",
   "library": {
     "genres": ["Techno", "Dub Techno"],
+    "genres_file": "server/rules/tests/genres-fixture.json",
     "aliases": { "genre": [{ "to": "Hip Hop", "from": ["rap", "hiphop"] }] }
   },
   "record": {
@@ -22,14 +23,14 @@
   "expect": {
     "words": {
       "kinds": [
-        { "kind": "genre", "hand": false, "words": [{ "word": "Religious", "sources": ["discogs"] }] },
+        { "kind": "genre", "hand": false, "words": [{ "word": "Religious", "sources": ["discogs"] }, { "word": "Electronic", "sources": [] }, { "word": "Reggae", "sources": [] }, { "word": "Dance", "sources": [] }] },
         { "kind": "style", "hand": false, "words": [{ "word": "Dub", "sources": ["files", "discogs"] }, { "word": "dub techno", "sources": ["audiomuse"] }] },
         { "kind": "mood", "hand": false, "words": [{ "word": "relaxed", "sources": ["audiomuse"] }] },
         { "kind": "tag", "hand": false, "words": [{ "word": "dark", "sources": ["lastfm"] }] }
       ],
       "tracks": [
         { "id": "t1", "kinds": [{ "kind": "tag", "hand": false, "words": [{ "word": "dark", "sources": ["lastfm"] }, { "word": "melancholic", "sources": ["files"] }] }] },
-        { "id": "t2", "kinds": [{ "kind": "genre", "hand": false, "words": [{ "word": "Religious", "sources": ["discogs"] }, { "word": "Hip Hop", "sources": ["files"] }] }] },
+        { "id": "t2", "kinds": [{ "kind": "genre", "hand": false, "words": [{ "word": "Religious", "sources": ["discogs"] }, { "word": "Hip Hop", "sources": ["files"] }, { "word": "Electronic", "sources": [] }, { "word": "Reggae", "sources": [] }, { "word": "Dance", "sources": [] }] }] },
         {
           "id": "t3",
           "kinds": [
@@ -43,6 +44,9 @@
       "genre:religious": ["t1", "t2", "t3"],
       "genre:hip hop": ["t2"],
       "genre:dub": [],
+      "genre:electronic": ["t1", "t2", "t3"],
+      "genre:reggae": ["t1", "t2", "t3"],
+      "genre:dance": ["t1", "t2", "t3"],
       "style:dub": ["t1", "t2", "t3"],
       "style:dub techno": ["t1", "t2", "t3"],
       "tag:ambient dub": ["t3"],

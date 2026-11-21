@@ -279,8 +279,44 @@ mod tests {
     fn the_sheet_lists_every_kind_and_mood_says_only_audiomuse_and_the_hand() {
         assert_eq!(ALL, ["type", "year", "genre", "style", "mood", "tag"]);
         assert_eq!(sources_of(Kind::Mood), &[Source::Hand, Source::Audiomuse]);
-        assert!(sources_of(Kind::Genre).contains(&Source::Files) && !sources_of(Kind::Genre).contains(&Source::Audiomuse));
+        assert!(sources_of(Kind::Genre).contains(&Source::Files));
         assert!(kind_name("colour").is_err());
+    }
+
+    /// The coordinator's ruling, by coherence (2026-11-21): GEN made AudioMuse a source of genres, styles and tags by its scores
+    /// (each word sorted by the word), so it is among the Catalogue sheet's sources of every kind it feeds, after the files, and
+    /// switchable per kind like Bandcamp: switched off for a kind there, its words leave that kind, and come back when it is on.
+    /// Mood stays AudioMuse's and the hand's.
+    #[test]
+    fn audiomuse_is_a_source_switchable_per_kind() {
+        use super::super::store::{KINDS, Library, RecordIn, TrackIn, record};
+        for k in KINDS {
+            assert!(sources_of(k).contains(&Source::Audiomuse), "{}", k.name());
+        }
+        for k in [Kind::Genre, Kind::Style, Kind::Tag] {
+            assert_eq!(&sources_of(k)[..3], &[Source::Hand, Source::Files, Source::Audiomuse], "{}: strongest first", k.name());
+        }
+        assert_eq!(sources_of(Kind::Mood), &[Source::Hand, Source::Audiomuse], "mood: AudioMuse's and the hand's");
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let on = |kind: &str| super::row(&serve, kind).unwrap().sources.iter().find(|s| s.id == "audiomuse").map(|s| (s.name, s.on));
+        let switch = |kind: &str, on: bool| set_kind(&serve, kind, None, Some(&HashMap::from([("audiomuse".to_string(), on)])));
+        for kind in ["genre", "style", "mood", "tag"] {
+            assert_eq!(on(kind), Some(("AudioMuse", true)), "{kind}");
+        }
+        switch("genre", false).unwrap();
+        assert_eq!((on("genre"), on("style"), on("mood"), on("tag")), (Some(("AudioMuse", false)), Some(("AudioMuse", true)), Some(("AudioMuse", true)), Some(("AudioMuse", true))), "off for genres alone");
+        // A heard track: AudioMuse's "electronic" a genre, "night drive" a tag (no caller says it), "calm" its mood.
+        let heard = TrackIn { id: "t1".into(), heard: true, heard_styles: vec![("electronic".into(), 0.6), ("night drive".into(), 0.6)], heard_moods: vec!["calm".into()], ..TrackIn::default() };
+        let r = RecordIn { id: "r".into(), tracks: vec![heard], ..RecordIn::default() };
+        let words = |serve: &crate::serve::Serve| {
+            let lib = Library::of(std::slice::from_ref(&r), &HashMap::new()).with_off(off(serve));
+            let w = record(&lib, &r);
+            KINDS.map(|k| w.kinds.iter().filter(|x| x.kind == k).flat_map(|x| x.words.iter().map(|w| w.word.clone())).collect::<Vec<_>>())
+        };
+        assert_eq!(words(&serve), [vec![], vec![], vec!["calm".to_string()], vec!["night drive".to_string()]], "off: its genre leaves the kind, its tag and mood stay");
+        switch("genre", true).unwrap();
+        assert_eq!(on("genre"), Some(("AudioMuse", true)));
+        assert_eq!(words(&serve)[0], ["Electronic"], "on again: back");
     }
 
     /// GEN.59 (OQ-GEN-25): Bandcamp among the Catalogue sheet's sources of Genre, Style and Tag, never Mood; switched off for a

@@ -336,3 +336,72 @@ fn each_library_splits_its_files_by_its_own_rules_and_each_service_by_its_own() 
         assert_eq!(list.genre_of(word), None, "{word}");
     }
 }
+
+/// GEN's links (GEN-DESIGN §5): the shipped map is GENRE-SET-DRAFT.md's links as the owner approved them (2026-11-21 02:58,
+/// "The draft is entirely okay."): every style of its "By genre" lists to the genres it is listed under, the five fixed links
+/// among them; "Instrumental" with no link (the owner's point, as proposed); the unlinked styles and the words that are no
+/// style with none. A style is found by its key.
+#[test]
+fn the_shipped_links_are_the_approved_genre_set() {
+    let list = genres::shipped();
+    assert_eq!(list.links().len(), 407, "the 402 styles the set links, besides \"Instrumental\", and the five fixed");
+    let approved: &[(&str, &[&str])] = &[
+        ("Deep House", &["Dance"]),
+        ("deep-house", &["Dance"]),
+        ("DUB", &["Electronic", "Reggae"]),
+        ("Downtempo", &["Electronic"]),
+        ("Acid Jazz", &["Electronic", "Jazz", "Soul", "Funk", "Hip Hop"]),
+        ("Psychedelic", &["Electronic", "Soul", "Funk"]),
+        ("Pop Rock", &["Rock", "Pop"]),
+        ("Neo Soul", &["Soul", "R&B"]),
+        ("Ambient Dub", &["Ambient", "Reggae"]),
+        ("Latin Jazz", &["Jazz", "Latin"]),
+        ("Drill And Bass", &["Electronic", "Dance"]),
+        ("Ragga HipHop", &["Hip Hop", "Reggae"]),
+        ("Jazz-Funk", &["Jazz"]),
+        ("Leftfield", &["Electronic"]),
+        ("Modern Classical", &["Classical"]),
+        ("Contemporary", &["Classical"]),
+        ("Gospel", &["Religious"]),
+        ("Lounge", &["Easy Listening"]),
+        ("Score", &["Soundtrack"]),
+        ("Poetry", &["Spoken Word"]),
+        ("Afrobeat", &["Funk"]),
+        ("African", &["World"]),
+        ("Neofolk", &["Folk"]),
+        ("Americana", &["Country"]),
+        ("Funeral Doom Metal", &["Metal"]),
+        ("Piano Blues", &["Blues"]),
+        ("Drone", &["Ambient"]),
+        ("Field Recording", &["Experimental"]),
+        ("Contemporary R&B", &["R&B"]),
+        ("Reggaeton", &["Latin"]),
+        ("Bossanova", &["Latin"]),
+        ("Bossa Nova", &["Jazz"]),
+        // The five fixed (GEN-DESIGN §3, §5).
+        ("New Jack Swing", &["R&B"]),
+        ("Turntablism", &["Hip Hop", "Electronic"]),
+        ("Stage & Screen", &["Soundtrack"]),
+        ("Non-Music", &["Spoken Word"]),
+        ("Brass & Military", &[]),
+    ];
+    for (style, want) in approved {
+        assert_eq!(list.genres_of(style), *want, "{style}");
+    }
+    // No link: Instrumental (the owner's point); the styles nobody gave one of the 26; the words that are no style (Health's); a
+    // genre's own word; an exception's written form (read as its words first).
+    let none = [
+        "Instrumental", "chillout", "Progressive", "Cut-up", "DJ", "Rock Pop", "alternative", "Singer-Songwriter", "Électronique", "Afro", "Darkwave",
+        "Down House", "Dub & Reggae", "french indie pop", "Future", "Hauntology", "Improv", "Ragtime", "Chamber", "op. 108", "In a Silent Way", "Dance",
+        "Cut-up/DJ", "RnB/Swing",
+    ];
+    for word in none {
+        assert!(list.genres_of(word).is_empty(), "{word}: {:?}", list.genres_of(word));
+        assert!(list.links().iter().all(|l| genres::key(&l.style) != genres::key(word)), "{word} is in the map");
+    }
+    // Every genre with styles in the set has some linked to it; Punk, Children's and New Age have none there.
+    for g in list.genres() {
+        let linked = list.links().iter().filter(|l| l.genres.contains(&g.name)).count();
+        assert_eq!(linked == 0, ["Punk", "Children's", "New Age"].contains(&g.name.as_str()), "{}: {linked} styles", g.name);
+    }
+}

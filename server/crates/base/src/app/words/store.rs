@@ -222,6 +222,18 @@ impl Default for Library {
 /// heard tracks reaches it. Until the rehearsal on production's copy sets it (GEN.29), the scenarios' 0.25.
 pub const RISE: f32 = 0.25;
 
+/// The scenarios' fixture map (SCENARIOS-GEN, "The fixture map": `server/rules/tests/genres-fixture.json`): GEN's tests read
+/// it, never the shipped links, so an edit of the owner's map changes no scenario.
+#[cfg(test)]
+pub(crate) const FIXTURE: &str = include_str!("../../../../../rules/tests/genres-fixture.json");
+
+/// [`FIXTURE`], read once.
+#[cfg(test)]
+pub(crate) fn fixture() -> &'static Genres {
+    static MAP: std::sync::OnceLock<Genres> = std::sync::OnceLock::new();
+    MAP.get_or_init(|| Genres::from_json(FIXTURE).unwrap_or_else(|e| panic!("genres-fixture.json: {e}")))
+}
+
 /// A record's or a track's hand lists as an Edit makes them (GEN.25): each `None` where that row is left as it is.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Routed {
@@ -329,6 +341,13 @@ impl Library {
     /// AudioMuse's threshold ([`RISE`] unless set: the scenarios pass theirs).
     pub fn with_rise(mut self, rise: f32) -> Self {
         self.rise = rise;
+        self
+    }
+
+    /// The genres, their words and their links as another list has them (the shipped one, `shared/genres.json`, unless set:
+    /// the scenarios pass their fixture map, and an edit of the map is another list).
+    pub fn with_genres(mut self, genres: &'static Genres) -> Self {
+        self.genres = genres;
         self
     }
 
@@ -673,6 +692,14 @@ mod tests {
         TrackIn { id: id.into(), ..TrackIn::default() }
     }
 
+    /// A link-given genre's sources: none (C7 (c), the owner: a link-given genre shows no source).
+    const LINKED: &[Source] = &[];
+
+    /// A library of these records, read under the scenarios' fixture map ([`fixture`]): no test reads the shipped links.
+    fn of(records: &[RecordIn], aliases: &HashMap<Kind, Vec<(String, Vec<String>)>>) -> Library {
+        Library::of(records, aliases).with_genres(fixture())
+    }
+
     fn said(source: Source, word: &str, raw_kind: &str, weight: f32) -> Said {
         Said { source, word: word.into(), raw_kind: raw_kind.into(), weight }
     }
@@ -693,10 +720,11 @@ mod tests {
         let mut b = track("b");
         b.genre = vec!["techno".into()];
         let other = RecordIn { id: "o".into(), tracks: vec![b], ..RecordIn::default() };
-        let lib = Library::of(&[r.clone(), other], &HashMap::new());
+        let lib = of(&[r.clone(), other], &HashMap::new());
         let w = record(&lib, &r);
-        // GEN's sort, by design: "religious" is the genre Religious, whoever says it; Techno a style.
-        assert_eq!(kind(&w, Kind::Genre), [("Religious", &[Source::Files, Source::Discogs][..])], "one of the 26, named as the list names it");
+        // GEN's sort, by design: "religious" is the genre Religious, whoever says it; Techno a style, whose link gives Dance (the
+        // fixture map), naming no source (C7 (c)).
+        assert_eq!(kind(&w, Kind::Genre), [("Religious", &[Source::Files, Source::Discogs][..]), ("Dance", LINKED)], "one of the 26, named as the list names it");
         assert_eq!(kind(&w, Kind::Style), [("Techno", &[Source::Files][..])], "one spelling, the library's");
         assert_eq!(kind(&w, Kind::Mood), [("sad", &[Source::Audiomuse][..])], "mood measured only");
         let tags: Vec<&str> = kind(&w, Kind::Tag).into_iter().map(|(w, _)| w).collect();
@@ -715,18 +743,19 @@ mod tests {
         ts[0].genre.push("Hip-Hop".into());
         ts[3].heard_moods = vec!["aggressive".into()];
         let r = RecordIn { id: "r".into(), tracks: ts, ..RecordIn::default() };
-        let lib = Library::of(std::slice::from_ref(&r), &HashMap::new());
+        let lib = of(std::slice::from_ref(&r), &HashMap::new());
         let w = record(&lib, &r);
         // GEN's sort, by design: Dub, a file's GENRE and none of the 26, is a style; the record's genres are its links' (Electronic,
-        // Reggae by the fixture map), which come with the links (GEN step 3).
+        // Reggae by the fixture map), naming no source.
         assert_eq!(kind(&w, Kind::Style), [("Dub", &[Source::Files][..])], "Dub on every track: the record's");
-        assert!(kind(&w, Kind::Genre).is_empty(), "Hip-Hop is one track's");
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", LINKED), ("Reggae", LINKED)], "Dub's links; Hip-Hop is one track's");
         assert_eq!(kind(&w, Kind::Mood), [("relaxed", &[Source::Audiomuse][..])]);
         let t0: Vec<&str> = w.of_track("t0", Kind::Genre).iter().map(|w| w.word.as_str()).collect();
-        assert_eq!(t0, ["Hip Hop"], "its own, one of the 26, named as the list names it");
+        assert_eq!(t0, ["Hip Hop", "Electronic", "Reggae"], "its own, one of the 26, named as the list names it, then its styles' links");
         let t3: Vec<&str> = w.of_track("t3", Kind::Mood).iter().map(|w| w.word.as_str()).collect();
         assert_eq!(t3, ["aggressive"], "a heard track's mood is its own measure");
-        assert_eq!(w.of_track("t1", Kind::Genre).len(), 0, "a track like its record reads its record's");
+        let t1: Vec<&str> = w.of_track("t1", Kind::Genre).iter().map(|w| w.word.as_str()).collect();
+        assert_eq!(t1, ["Electronic", "Reggae"], "a track like its record reads its record's");
         assert_eq!(w.tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t0", "t3"]);
     }
 
@@ -739,7 +768,7 @@ mod tests {
         a.tag = vec!["night".into()];
         let r = RecordIn { id: "r".into(), tracks: vec![a], said: vec![said(Source::Lastfm, "driving", "tag", 1.0)], ..RecordIn::default() };
         let off = HashMap::from([(Kind::Tag, HashSet::from([Source::Lastfm])), (Kind::Mood, HashSet::from([Source::Audiomuse, Source::Hand]))]);
-        let lib = Library::of(std::slice::from_ref(&r), &HashMap::new()).with_off(off);
+        let lib = of(std::slice::from_ref(&r), &HashMap::new()).with_off(off);
         let w = record(&lib, &r);
         assert_eq!(kind(&w, Kind::Tag), [("night", &[Source::Files][..])], "Last.fm's tag out, the files' kept");
         assert!(kind(&w, Kind::Mood).is_empty(), "AudioMuse's mood out");
@@ -754,7 +783,7 @@ mod tests {
         a.genre = vec!["hip hop".into(), "Hip-Hop".into()];
         let mut r = RecordIn { id: "r".into(), tracks: vec![a], said: vec![said(Source::Musicbrainz, "HIP HOP", "genre", 1.0)], ..RecordIn::default() };
         let aliases = HashMap::from([(Kind::Genre, vec![("Hip Hop".to_string(), vec!["rap".to_string()])])]);
-        let lib = Library::of(std::slice::from_ref(&r), &aliases);
+        let lib = of(std::slice::from_ref(&r), &aliases);
         let w = record(&lib, &r);
         assert_eq!(kind(&w, Kind::Genre), [("Hip Hop", &[Source::Files, Source::Musicbrainz][..])], "folded into the alias's word");
         r.hand.insert(Kind::Genre, vec!["Rap".into(), "Soul".into()]);
@@ -807,7 +836,9 @@ mod tests {
             .iter()
             .map(|(k, v)| (Kind::of(k).unwrap(), v.as_array().unwrap().iter().map(|a| (a["to"].as_str().unwrap().to_string(), list(&a["from"]))).collect()))
             .collect();
-        let lib = Library::of(&[record_in.clone(), other], &aliases);
+        // Its genres file: the scenarios' fixture map, whose links give Dub's and Dub Techno's genres.
+        assert_eq!(fixture["library"]["genres_file"], "server/rules/tests/genres-fixture.json");
+        let lib = of(&[record_in.clone(), other], &aliases);
         let words = record(&lib, &record_in);
         assert_eq!(serde_json::to_value(&words).unwrap(), fixture["expect"]["words"]);
         // Each word's crate: the tracks whose words of its kind hold it.
@@ -824,14 +855,14 @@ mod tests {
         let mut said_: Vec<Said> = (0..9).map(|i| said(Source::Lastfm, &format!("tag {i}"), "tag", 0.9 - i as f32 * 0.05)).collect();
         said_.push(said(Source::Lastfm, "jazzy", "tag", 0.2));
         let r = RecordIn { id: "r".into(), tracks: vec![track("a")], said: said_, ..RecordIn::default() };
-        let lib = Library::of(std::slice::from_ref(&r), &HashMap::new());
+        let lib = of(std::slice::from_ref(&r), &HashMap::new());
         let words = record(&lib, &r);
         let tags: Vec<&str> = kind(&words, Kind::Tag).into_iter().map(|(w, _)| w).collect();
         assert_eq!(tags, ["tag 0", "tag 1", "tag 2", "tag 3", "tag 4"]);
     }
 
-    // ---- GEN steps 2–5 (SCENARIOS-GEN): the sort, the hand, AudioMuse's weight, Bandcamp's words. The links (GEN step 3's
-    // GEN.16–GEN.22, GEN.24, GEN.51) wait for the owner's map: where a scenario's Then names a link-given genre, it comes with them.
+    // ---- GEN steps 2–5 (SCENARIOS-GEN): the sort, the links, the hand, AudioMuse's weight, Bandcamp's words; every test read under
+    // the scenarios' fixture map (`of`).
 
     fn tracks(n: usize) -> Vec<TrackIn> {
         (1..=n).map(|i| track(&format!("t{i}"))).collect()
@@ -871,14 +902,22 @@ mod tests {
         // Funk Stack (al-114): Discogs' master as the harvest stores it. Signal Path (al-115): MusicBrainz's group's.
         let funk = rec("al-114", vec![track("t1")], vec![said(Source::Discogs, "Funk / Soul", "genre", 1.0), said(Source::Discogs, "RnB/Swing", "style", 1.0), said(Source::Discogs, "Cut-up/DJ", "style", 1.0)]);
         let signal = rec("al-115", vec![track("t1")], vec![said(Source::Musicbrainz, "deep house", "genre", 1.0), said(Source::Musicbrainz, "r&b/hip-hop", "tag", 0.67)]);
-        let lib = Library::of(&[funk.clone(), signal.clone()], &HashMap::new());
+        let lib = of(&[funk.clone(), signal.clone()], &HashMap::new());
         let w = record(&lib, &funk);
-        assert_eq!(kind(&w, Kind::Genre), [("Funk", &[Source::Discogs][..]), ("R&B", &[Source::Discogs][..]), ("Soul", &[Source::Discogs][..])], "the services' three, Discogs' 0.8 each");
+        // The services' three, Discogs' 0.8 each; after the merge, the links: Turntablism's Hip Hop and Electronic, New Jack Swing's
+        // R&B once, none naming a source.
+        assert_eq!(
+            kind(&w, Kind::Genre),
+            [("Funk", &[Source::Discogs][..]), ("R&B", &[Source::Discogs][..]), ("Soul", &[Source::Discogs][..]), ("Hip Hop", LINKED), ("Electronic", LINKED)]
+        );
         assert_eq!(kind(&w, Kind::Style), [("New Jack Swing", &[Source::Discogs][..]), ("Turntablism", &[Source::Discogs][..])]);
-        // Turntablism's links (Hip Hop, Electronic) come with the links.
         let s = record(&lib, &signal);
         assert_eq!(kind(&s, Kind::Style), [("deep house", &[Source::Musicbrainz][..])]);
-        assert_eq!(kind(&s, Kind::Genre), [("Hip Hop", &[Source::Musicbrainz][..]), ("R&B", &[Source::Musicbrainz][..])], "MusicBrainz's \"/\": 0.67 × 0.5, above the floor");
+        assert_eq!(
+            kind(&s, Kind::Genre),
+            [("Hip Hop", &[Source::Musicbrainz][..]), ("R&B", &[Source::Musicbrainz][..]), ("Dance", LINKED)],
+            "MusicBrainz's \"/\": 0.67 × 0.5, above the floor; Dance by deep house's link"
+        );
         // Never: a compound, or a word an exception's form holds, as one word anywhere; a stored row rewritten.
         for (r, w) in [(&funk, &w), (&signal, &s)] {
             for whole in ["Funk / Soul", "RnB/Swing", "Cut-up/DJ", "r&b/hip-hop", "Swing", "DJ", "Cut-up"] {
@@ -915,17 +954,18 @@ mod tests {
         e.hand.insert(Kind::Style, strings(&["Wonky"]));
         let f = rec("f", vec![track("t1")], ["chillwave", "witch house", "glitch hop", "wonky"].iter().map(|t| said(Source::Lastfm, t, "tag", 1.0)).collect());
         let all = [a.clone(), b.clone(), c.clone(), d.clone(), e.clone(), f.clone()];
-        let lib = Library::of(&all, &HashMap::new());
+        let lib = of(&all, &HashMap::new());
         let w = record(&lib, &d);
         assert_eq!(keys(&w, Kind::Style), ["deep house", "hauntology", "female vocalists", "dub"]);
         assert_eq!(keys(&w, Kind::Tag), ["seen live", "melancholic"]);
-        assert!(keys(&w, Kind::Genre).is_empty(), "only the links' (Dance; Electronic, Reggae), which come with the links");
+        assert_eq!(kind(&w, Kind::Genre), [("Dance", LINKED), ("Electronic", LINKED), ("Reggae", LINKED)], "only the links': deep house's, dub's");
         assert_eq!(keys(&record(&lib, &f), Kind::Tag), ["chillwave", "glitch hop", "witch house", "wonky"], "no style made for others");
         assert!(keys(&record(&lib, &f), Kind::Style).is_empty());
         // B gone, nobody calls "hauntology" any more: a tag at the next build. Nothing stored changes.
-        let lib = Library::of(&[a, c, d.clone(), e, f], &HashMap::new());
+        let lib = of(&[a, c, d.clone(), e, f], &HashMap::new());
         let w = record(&lib, &d);
         assert!(keys(&w, Kind::Tag).contains(&"hauntology".to_string()) && !keys(&w, Kind::Style).contains(&"hauntology".to_string()));
+        assert_eq!(keys(&w, Kind::Genre), ["dance", "electronic", "reggae"], "its styles' links as before");
         assert_eq!(d.said.len(), 6);
     }
 
@@ -944,7 +984,7 @@ mod tests {
         t1.heard_styles = vec![("electronic".into(), 0.608), ("house".into(), 0.561), ("indie".into(), 0.540), ("chillout".into(), 0.512), ("hip-hop".into(), 0.497)];
         lantern.tracks[1].heard = true;
         lantern.tracks[1].heard_styles = vec![("80s".into(), 0.5)];
-        let lib = Library::of(&[elsewhere, chill, lantern.clone()], &HashMap::new()).with_rise(0.25);
+        let lib = of(&[elsewhere, chill, lantern.clone()], &HashMap::new()).with_rise(0.25);
         let w = record(&lib, &lantern);
         let table = [
             ("t1", "Jazz", Kind::Genre),
@@ -975,12 +1015,14 @@ mod tests {
         let a116 = rec("al-116", tracks(1), vec![said(Source::Discogs, "Stage & Screen", "genre", 1.0), said(Source::Discogs, "Non-Music", "genre", 1.0), said(Source::Discogs, "Brass & Military", "genre", 1.0), said(Source::Discogs, "Score", "style", 1.0)]);
         let a117 = rec("al-117", tracks(1), vec![said(Source::Discogs, "Electronic", "genre", 1.0), said(Source::Discogs, "Ambient", "style", 1.0), said(Source::Discogs, "Experimental", "style", 1.0)]);
         let a118 = rec("al-118", tracks(1), vec![said(Source::Musicbrainz, "edm", "genre", 1.0), said(Source::Musicbrainz, "deep house", "genre", 0.5), said(Source::Musicbrainz, "dance", "tag", 0.75)]);
-        let lib = Library::of(&[a116.clone(), a117.clone(), a118.clone()], &HashMap::new());
+        let lib = of(&[a116.clone(), a117.clone(), a118.clone()], &HashMap::new());
         let w = record(&lib, &a116);
         let mut styles = keys(&w, Kind::Style);
         styles.sort();
         assert_eq!(styles, ["brass military", "non music", "score", "stage screen"]);
-        assert!(keys(&w, Kind::Genre).is_empty(), "Soundtrack and Spoken Word by their links, which come with the links");
+        let mut genres = kind(&w, Kind::Genre);
+        genres.sort();
+        assert_eq!(genres, [("Soundtrack", LINKED), ("Spoken Word", LINKED)], "by their links: Stage & Screen's and Score's, Non-Music's; Brass & Military none");
         let w = record(&lib, &a117);
         let mut genres = keys(&w, Kind::Genre);
         genres.sort();
@@ -1024,9 +1066,13 @@ mod tests {
         let mut chamber = rec("chamber", tracks(1), Vec::new());
         chamber.tracks[0].style = strings(&["Chamber"]);
         let all = [callers, brahms.clone(), silent.clone(), tapes.clone(), indie.clone(), numbers.clone(), lastfm.clone(), chamber];
-        let lib = Library::of(&all, &HashMap::new());
+        let lib = of(&all, &HashMap::new());
         let w = record(&lib, &tapes);
-        assert_eq!((keys(&w, Kind::Genre), keys(&w, Kind::Style), keys(&w, Kind::Tag)), (strings(&["ambient"]), strings(&["house", "techno"]), Vec::new()), "26 Ambient, 35 House, 18 Techno");
+        assert_eq!(
+            (keys(&w, Kind::Genre), keys(&w, Kind::Style), keys(&w, Kind::Tag)),
+            (strings(&["ambient", "dance"]), strings(&["house", "techno"]), Vec::new()),
+            "26 Ambient, 35 House, 18 Techno; Dance by House's and Techno's links"
+        );
         let w = record(&lib, &numbers);
         assert_eq!(kind(&w, Kind::Genre), [("Pop", &[Source::Files][..]), ("Rock", &[Source::Files][..])], "17 and (17) Rock, 13 Pop");
         let w = record(&lib, &brahms);
@@ -1058,9 +1104,9 @@ mod tests {
         held.tracks[0].style = strings(&["Chamber"]);
         let mut arrival = rec("arrival", tracks(1), Vec::new());
         arrival.tracks[0].genre = strings(&["Chamber"]);
-        let alone = || Library::of(std::slice::from_ref(&held), &HashMap::new());
+        let alone = || of(std::slice::from_ref(&held), &HashMap::new());
         assert!(!shown_anywhere(&record(&alone(), &held), "Chamber"), "no caller: no word");
-        let with = Library::of(&[held.clone(), arrival], &HashMap::new());
+        let with = of(&[held.clone(), arrival], &HashMap::new());
         assert_eq!(keys(&record(&with, &held), Kind::Style), ["chamber"], "while the arrival's GENRE says it");
         assert!(!shown_anywhere(&record(&alone(), &held), "Chamber"), "the arrival gone: no word again");
     }
@@ -1071,15 +1117,225 @@ mod tests {
         let aliases = HashMap::from([(Kind::Genre, vec![("Electronic".to_string(), strings(&["Electronica", "Electronic Music"])), ("Drum & Bass".to_string(), strings(&["dnb", "Drum n Bass"]))])]);
         let mut r = rec("r", tracks(1), Vec::new());
         r.tracks[0].genre = strings(&["Electronica", "DnB"]);
-        let lib = Library::of(std::slice::from_ref(&r), &aliases);
+        let lib = of(std::slice::from_ref(&r), &aliases);
         let w = record(&lib, &r);
         assert_eq!(kind(&w, Kind::Genre), [("Electronic", &[Source::Files][..])]);
         assert_eq!(kind(&w, Kind::Style), [("Drum & Bass", &[Source::Files][..])], "renamed, then sorted: a file's GENRE names it, so a style");
         assert!(!shown_anywhere(&w, "DnB") && !shows(&w, Kind::Genre, "Drum & Bass"));
     }
 
-    /// GEN.23 (a5's call): a hand genre list is final, at either level; the styles still shown. No links exist yet: written first
-    /// so they land under it.
+    // ---- Set 3: the links at record and track (GEN.16–GEN.22), never shown, after the merge, one function per level.
+
+    /// A record of `n` tracks, each with these files' genres.
+    fn on_every(id: &str, n: usize, genre: &[&str]) -> RecordIn {
+        let mut r = rec(id, tracks(n), Vec::new());
+        for t in &mut r.tracks {
+            t.genre = strings(genre);
+        }
+        r
+    }
+
+    /// Lantern Rooms (al-101): 10 tracks, all heard; t1–t5 GENRE Electronic and Deep House, t6–t10 Electronic.
+    fn lantern_rooms() -> RecordIn {
+        let mut r = on_every("al-101", 10, &["Electronic"]);
+        for (i, t) in r.tracks.iter_mut().enumerate() {
+            t.heard = true;
+            if i < 5 {
+                t.genre.push("Deep House".into());
+            }
+        }
+        r
+    }
+
+    /// Night Shift (al-102): 10 tracks of Electronic; t3 and t7 Deep House too.
+    fn night_shift() -> RecordIn {
+        let mut r = on_every("al-102", 10, &["Electronic"]);
+        for i in [2, 6] {
+            r.tracks[i].genre.push("Deep House".into());
+        }
+        r
+    }
+
+    /// Pale Dock (al-110): six Discogs styles, each 1.0.
+    fn pale_dock() -> RecordIn {
+        rec("al-110", tracks(4), ["Abstract", "Deep House", "Dub", "Electro", "Glitch", "Samba"].iter().map(|w| said(Source::Discogs, w, "style", 1.0)).collect())
+    }
+
+    /// al-116 (GEN.11): Discogs' three genres outside the 26, and Score.
+    fn al_116() -> RecordIn {
+        rec("al-116", tracks(1), vec![said(Source::Discogs, "Stage & Screen", "genre", 1.0), said(Source::Discogs, "Non-Music", "genre", 1.0), said(Source::Discogs, "Brass & Military", "genre", 1.0), said(Source::Discogs, "Score", "style", 1.0)])
+    }
+
+    /// The fixture map as an edit of its links makes it (GEN.21, GEN.51): a list of its own.
+    fn map(edit: impl FnOnce(&mut Vec<serde_json::Value>)) -> &'static Genres {
+        let mut v: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        edit(v["links"].as_array_mut().unwrap());
+        Box::leak(Box::new(Genres::from_json(&v.to_string()).unwrap()))
+    }
+
+    /// A library of these records read under a map.
+    fn under(records: &[RecordIn], genres: &'static Genres) -> Library {
+        Library::of(records, &HashMap::new()).with_genres(genres)
+    }
+
+    /// Whether a record's genres, at the record and every track, name a style anywhere in their JSON (a link shown).
+    fn names_a_style(w: &Words, style: &str) -> bool {
+        let genres: Vec<&KindWords> = w.kinds.iter().chain(w.tracks.iter().flat_map(|t| t.kinds.iter())).filter(|k| k.kind == Kind::Genre).collect();
+        serde_json::to_string(&genres).unwrap().to_lowercase().contains(&style.to_lowercase())
+    }
+
+    /// GEN.16: Deep House on half the tracks gives the record Dance, after the merge; every track reads it, down.
+    #[test]
+    fn half_the_tracks_style_gives_the_record_its_links() {
+        let lantern = lantern_rooms();
+        let lib = of(std::slice::from_ref(&lantern), &HashMap::new());
+        let w = record(&lib, &lantern);
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", &[Source::Files][..]), ("Dance", LINKED)], "Dance by the link, naming no source");
+        assert_eq!(kind(&w, Kind::Style), [("Deep House", &[Source::Files][..])]);
+        assert!(w.tracks.is_empty(), "no track differs");
+        for t in &lantern.tracks {
+            assert_eq!((keys_of(&w, &t.id, Kind::Genre), keys_of(&w, &t.id, Kind::Style)), (strings(&["electronic", "dance"]), strings(&["deep house"])), "{}", t.id);
+        }
+        // Never: Deep House in a genre row; Dance shown with Deep House as its reason.
+        assert!(!shows(&w, Kind::Genre, "Deep House") && !names_a_style(&w, "Deep House"));
+    }
+
+    /// GEN.17: a track's own Deep House gives that track Dance; never the record, from two tracks of ten.
+    #[test]
+    fn a_tracks_own_style_gives_that_track_its_links() {
+        let night = night_shift();
+        let lib = of(std::slice::from_ref(&night), &HashMap::new());
+        let w = record(&lib, &night);
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", &[Source::Files][..])], "never Dance from two tracks of ten");
+        assert!(kind(&w, Kind::Style).is_empty());
+        for t in &night.tracks {
+            let own = t.id == "t3" || t.id == "t7";
+            let (genres, styles) = if own { (strings(&["electronic", "dance"]), strings(&["deep house"])) } else { (strings(&["electronic"]), Vec::new()) };
+            assert_eq!((keys_of(&w, &t.id, Kind::Genre), keys_of(&w, &t.id, Kind::Style)), (genres, styles), "{}", t.id);
+        }
+        assert_eq!(w.tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t3", "t7"], "the others read the record's");
+        assert!(!names_a_style(&w, "Deep House"));
+    }
+
+    /// GEN.18 (R7): Jazz-Funk gives Jazz and Funk; Acid Jazz five, never held to the services' three: a union after the merge.
+    #[test]
+    fn a_style_counts_toward_any_number_of_the_26() {
+        let saturday = on_every("al-103", 8, &["Jazz-Funk"]);
+        let moss = on_every("al-105", 8, &["Acid Jazz"]);
+        let lib = of(&[saturday.clone(), moss.clone()], &HashMap::new());
+        let w = record(&lib, &saturday);
+        assert_eq!(kind(&w, Kind::Genre), [("Jazz", LINKED), ("Funk", LINKED)]);
+        assert_eq!(kind(&w, Kind::Style), [("Jazz-Funk", &[Source::Files][..])]);
+        let w = record(&lib, &moss);
+        assert_eq!(kind(&w, Kind::Genre).into_iter().map(|(g, _)| g).collect::<Vec<_>>(), ["Jazz", "Electronic", "Funk", "Hip Hop", "Soul"], "five, by Acid Jazz's link");
+        assert_eq!(kind(&w, Kind::Style), [("Acid Jazz", &[Source::Files][..])]);
+        // A services' style's links too: Discogs' Acid Jazz gives all five beside Discogs' three genres.
+        let said_ = ["Rock", "Pop", "Blues", "Latin"].iter().map(|g| said(Source::Discogs, g, "genre", 1.0)).chain([said(Source::Discogs, "Acid Jazz", "style", 1.0)]).collect();
+        let r = rec("services", tracks(1), said_);
+        let lib = of(std::slice::from_ref(&r), &HashMap::new());
+        assert_eq!(keys(&record(&lib, &r), Kind::Genre), ["blues", "latin", "pop", "jazz", "electronic", "funk", "hip hop", "soul"], "the services' three, then the links' five");
+    }
+
+    /// GEN.19: an unlinked style gives nothing, and no genre is guessed from a style's name; Discogs' three fixed.
+    #[test]
+    fn a_style_without_a_link_gives_no_genre() {
+        let grey = on_every("al-104", 6, &["Hauntology"]);
+        let a116 = al_116();
+        let mut named = rec("named", tracks(2), vec![said(Source::Discogs, "Dub & Reggae", "style", 1.0), said(Source::Discogs, "Ambient Dub", "style", 1.0)]);
+        for t in &mut named.tracks {
+            t.genre = strings(&["Dub & Reggae", "Ambient Dub"]);
+        }
+        let all = [grey.clone(), a116.clone(), named.clone()];
+        let lib = of(&all, &HashMap::new());
+        let w = record(&lib, &grey);
+        assert_eq!(kind(&w, Kind::Style), [("Hauntology", &[Source::Files][..])]);
+        assert!(!w.kinds.iter().any(|k| k.kind == Kind::Genre) && w.tracks.is_empty(), "no genre at the record or a track");
+        let mut genres = keys(&record(&lib, &a116), Kind::Genre);
+        genres.sort();
+        assert_eq!(genres, ["soundtrack", "spoken word"], "Stage & Screen's and Score's, Non-Music's; Brass & Military none");
+        // Never a genre guessed from a style's name: "Dub & Reggae" gives no Reggae, "Ambient Dub" only its links (none here; Reggae
+        // alone where the map says Reggae alone).
+        let w = record(&lib, &named);
+        assert_eq!(keys(&w, Kind::Style), ["ambient dub", "dub reggae"]);
+        assert!(!shown_anywhere(&w, "Reggae") && !shown_anywhere(&w, "Ambient") && !w.kinds.iter().any(|k| k.kind == Kind::Genre));
+        let reggae = map(|links| links.push(serde_json::json!({ "style": "Ambient Dub", "genres": ["Reggae"] })));
+        let w = record(&under(&all, reggae), &named);
+        assert_eq!(kind(&w, Kind::Genre), [("Reggae", LINKED)], "Ambient Dub's link alone: no Ambient by its name");
+    }
+
+    /// GEN.20: the links read the merged words: the services' most, a source switched off, never a link-given genre rising, one
+    /// word from two fields rising once.
+    #[test]
+    fn links_read_the_merged_words() {
+        // (a) The services' most: five of Pale Dock's six styles kept (by firm, weight, then the word); Samba's Latin not given.
+        let pale = pale_dock();
+        let lib = of(std::slice::from_ref(&pale), &HashMap::new());
+        let w = record(&lib, &pale);
+        assert_eq!(keys(&w, Kind::Style), ["abstract", "deep house", "dub", "electro", "glitch"]);
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", LINKED), ("Dance", LINKED), ("Reggae", LINKED)]);
+        assert!(!shown_anywhere(&w, "Latin") && !shown_anywhere(&w, "Samba"), "never a link read from a word the merge left out");
+        // (b) Discogs off for Style: its styles leave the kind, and their links give nothing.
+        let off = HashMap::from([(Kind::Style, HashSet::from([Source::Discogs]))]);
+        let w = record(&of(std::slice::from_ref(&pale), &HashMap::new()).with_off(off), &pale);
+        assert!(w.kinds.is_empty(), "no style, no genre: {w:?}");
+        // (c) Links don't rise: Dance on two tracks of ten, Deep House on three; the record has neither, t1–t5 each Dance.
+        let mut r = rec("c", tracks(10), Vec::new());
+        for (i, t) in r.tracks.iter_mut().enumerate() {
+            match i {
+                0 | 1 => t.genre = strings(&["Dance"]),
+                2..=4 => t.genre = strings(&["Deep House"]),
+                _ => {}
+            }
+        }
+        let lib = of(std::slice::from_ref(&r), &HashMap::new());
+        let w = record(&lib, &r);
+        assert!(w.kinds.is_empty(), "never a link-given genre counted toward the half: {w:?}");
+        for (i, t) in r.tracks.iter().enumerate() {
+            assert_eq!(keys_of(&w, &t.id, Kind::Genre), if i < 5 { strings(&["dance"]) } else { Vec::new() }, "{}", t.id);
+        }
+        // (d) One word from two fields rises once: GENRE Techno on t1–t3, STYLE Techno on t4–t5, so style Techno on five of ten,
+        // and Dance.
+        let mut r = rec("d", tracks(10), Vec::new());
+        for (i, t) in r.tracks.iter_mut().enumerate() {
+            match i {
+                0..=2 => t.genre = strings(&["Techno"]),
+                3 | 4 => t.style = strings(&["Techno"]),
+                _ => {}
+            }
+        }
+        let lib = of(std::slice::from_ref(&r), &HashMap::new());
+        let w = record(&lib, &r);
+        assert_eq!((kind(&w, Kind::Style), kind(&w, Kind::Genre)), (vec![("Techno", &[Source::Files][..])], vec![("Dance", LINKED)]));
+    }
+
+    /// GEN.21 (kind 3): an edit of the map changes the genres at the next build, with no step and nothing stored. (Its "even after
+    /// a Write put Dance into GENRE" is the read-back's, GEN.53, GEN step 6.)
+    #[test]
+    fn an_edit_of_the_map_needs_no_step() {
+        let grey = on_every("al-104", 6, &["Hauntology"]);
+        let lantern = lantern_rooms();
+        // Floor Notes (al-124): Dance and Deep House in its files' GENRE, every track.
+        let floor = on_every("al-124", 4, &["Dance", "Deep House"]);
+        let all = [grey.clone(), lantern.clone(), floor.clone()];
+        let stored = format!("{all:?}");
+        let before = under(&all, fixture());
+        assert!(!record(&before, &grey).kinds.iter().any(|k| k.kind == Kind::Genre));
+        assert_eq!(keys(&record(&before, &lantern), Kind::Genre), ["electronic", "dance"]);
+        let gains = map(|links| links.push(serde_json::json!({ "style": "Hauntology", "genres": ["Electronic"] })));
+        assert_eq!(kind(&record(&under(&all, gains), &grey), Kind::Genre), [("Electronic", LINKED)], "Hauntology's new link");
+        let loses = map(|links| {
+            for l in links.iter_mut().filter(|l| l["style"] == "Deep House") {
+                l["genres"] = serde_json::json!([]);
+            }
+        });
+        let lib = under(&all, loses);
+        assert_eq!(kind(&record(&lib, &lantern), Kind::Genre), [("Electronic", &[Source::Files][..])], "Deep House no longer gives Dance");
+        assert!(!shown_anywhere(&record(&lib, &lantern), "Dance"));
+        assert_eq!(kind(&record(&lib, &floor), Kind::Genre), [("Dance", &[Source::Files][..])], "a Dance the files hold on their own stays");
+        assert_eq!(format!("{all:?}"), stored, "nothing stored changes");
+    }
+
+    /// GEN.23 (a5's call): a hand genre list is final, at either level; the styles still shown, and their links add nothing to it.
     #[test]
     fn a_hand_genre_list_is_final() {
         let mut lantern = rec("al-101", tracks(10), Vec::new());
@@ -1098,7 +1354,7 @@ mod tests {
         }
         moss.tracks[3].genre.push("Deep House".into());
         moss.hand.insert(Kind::Genre, strings(&["Jazz"]));
-        let lib = Library::of(&[lantern.clone(), night.clone(), moss.clone()], &HashMap::new());
+        let lib = of(&[lantern.clone(), night.clone(), moss.clone()], &HashMap::new());
         let w = record(&lib, &lantern);
         let genre = w.kinds.iter().find(|k| k.kind == Kind::Genre).unwrap();
         assert!(genre.hand && keys(&w, Kind::Genre) == ["electronic"], "the hand's, marked so");
@@ -1109,9 +1365,53 @@ mod tests {
         let w = record(&lib, &moss);
         assert_eq!((keys(&w, Kind::Genre), keys_of(&w, "t4", Kind::Genre)), (strings(&["jazz"]), strings(&["jazz"])), "a record's hand kind is every track's");
         assert_eq!(keys_of(&w, "t4", Kind::Style), ["acid jazz", "deep house"]);
-        for r in [&lantern, &night, &moss] {
-            assert!(!shown_anywhere(&record(&lib, r), "Dance"), "{}: never a link-given genre beside a hand list", r.id);
+        // Never a link-given genre added to a hand list, at either level: none on Lantern Rooms or Moss Garden (a record's list,
+        // every track's), none on Night Shift's t3 (its own list); t7, with no hand list, has Deep House's Dance (GEN.17).
+        for (r, hand) in [(&lantern, "electronic"), (&moss, "jazz")] {
+            let w = record(&lib, r);
+            for t in &r.tracks {
+                assert_eq!(keys_of(&w, &t.id, Kind::Genre), [hand], "{} {}: never a link-given genre beside a hand list", r.id, t.id);
+            }
+            assert_eq!(keys(&w, Kind::Genre), [hand], "{}", r.id);
         }
+        let w = record(&lib, &night);
+        assert!(!keys_of(&w, "t3", Kind::Genre).contains(&"dance".to_string()), "t3: its own list");
+        assert_eq!(keys_of(&w, "t7", Kind::Genre), ["electronic", "dance"], "t7: no hand list, its Deep House's link");
+    }
+
+    /// Tin Harbour (al-111): every track GENRE Jazz and Dub; the hand's styles Deep House and Jazz-Funk.
+    fn tin_harbour() -> RecordIn {
+        let mut r = on_every("al-111", 4, &["Jazz", "Dub"]);
+        r.hand.insert(Kind::Style, strings(&["Deep House", "Jazz-Funk"]));
+        r
+    }
+
+    /// GEN.24 (OQ-GEN-15): a hand style list's links give genres where the genre kind has no hand list; a hand genre list stays
+    /// final; a track's hand style list gives its genres by its own styles alone, one function per level.
+    #[test]
+    fn a_hand_style_lists_links_give_genres() {
+        let tin = tin_harbour();
+        let mut twin = on_every("al-111-twin", 4, &["Jazz", "Dub"]);
+        twin.hand.insert(Kind::Genre, strings(&["Soul"]));
+        twin.hand.insert(Kind::Style, strings(&["Deep House"]));
+        let mut saturday = on_every("al-103", 8, &["Jazz-Funk"]);
+        saturday.tracks[1].hand.insert(Kind::Style, strings(&["Turntablism"]));
+        let lib = of(&[tin.clone(), twin.clone(), saturday.clone()], &HashMap::new());
+        let w = record(&lib, &tin);
+        assert_eq!(kind(&w, Kind::Genre), [("Jazz", &[Source::Files][..]), ("Dance", LINKED), ("Funk", LINKED)], "the files' Jazz, once; the hand's styles' Dance and Funk");
+        let styles = w.kinds.iter().find(|k| k.kind == Kind::Style).unwrap();
+        assert!(styles.hand && keys(&w, Kind::Style) == ["deep house", "jazz funk"], "the hand's, final");
+        // Never: a link read from a style the hand's list left out: the files' Dub gives no Electronic or Reggae, at any level.
+        assert!(!shown_anywhere(&w, "Electronic") && !shown_anywhere(&w, "Reggae") && !shown_anywhere(&w, "Dub"));
+        assert!(w.tracks.is_empty(), "every track reads the record's");
+        let w = record(&lib, &twin);
+        assert_eq!(kind(&w, Kind::Genre), [("Soul", &[Source::Hand][..])], "a hand genre list is final");
+        assert!(!shown_anywhere(&w, "Dance") && !shown_anywhere(&w, "Jazz"));
+        // Saturday Band's t2: its genre words (none: the record's Jazz and Funk are link-given) and its own styles' links alone.
+        let w = record(&lib, &saturday);
+        assert_eq!(keys(&w, Kind::Genre), ["jazz", "funk"]);
+        assert_eq!((keys_of(&w, "t2", Kind::Genre), keys_of(&w, "t2", Kind::Style)), (strings(&["hip hop", "electronic"]), strings(&["turntablism"])));
+        assert_eq!(keys_of(&w, "t1", Kind::Genre), ["jazz", "funk"], "a track without a hand list reads the record's");
     }
 
     /// GEN.25 (C6, OQ-GEN-16, C12, R9): a typed word is routed by the word and edits its own kind's row as that row is shown;
@@ -1169,12 +1469,17 @@ mod tests {
                 t.heard_styles.push(("downtempo".into(), 0.40));
             }
         }
-        let lib = Library::of(&[elsewhere, r.clone()], &HashMap::new()).with_rise(0.25);
+        let lib = of(&[elsewhere, r.clone()], &HashMap::new()).with_rise(0.25);
         let w = record(&lib, &r);
-        assert_eq!(keys(&w, Kind::Style), ["dub techno"], "0.26 on average: the record's (its link's Dance comes with the links)");
+        assert_eq!(keys(&w, Kind::Style), ["dub techno"], "0.26 on average: the record's");
+        assert_eq!(kind(&w, Kind::Genre), [("Dance", LINKED)], "Dub Techno's link");
         for t in 1..=10 {
-            assert_eq!(keys_of(&w, &format!("t{t}"), Kind::Style).contains(&"downtempo".to_string()), t <= 6, "t{t}: downtempo, 0.24 on average, the six tracks' own");
+            let t_ = format!("t{t}");
+            assert_eq!(keys_of(&w, &t_, Kind::Style).contains(&"downtempo".to_string()), t <= 6, "t{t}: downtempo, 0.24 on average, the six tracks' own");
+            let want: &[&str] = if t <= 6 { &["dance", "electronic"] } else { &["dance"] };
+            assert_eq!(keys_of(&w, &t_, Kind::Genre), want, "t{t}: the record's Dance, and its own downtempo's Electronic");
         }
+        assert!(!keys(&w, Kind::Genre).contains(&"electronic".to_string()), "never downtempo's by the record's count of tracks");
     }
 
     /// GEN.28: the edge: the average over the heard tracks alone, a heard track without the word counting 0, reaching T.
@@ -1189,7 +1494,7 @@ mod tests {
                 t.heard_styles.push(("ambient".into(), 0.49));
             }
         }
-        let lib = Library::of(std::slice::from_ref(&r), &HashMap::new()).with_rise(0.25);
+        let lib = of(std::slice::from_ref(&r), &HashMap::new()).with_rise(0.25);
         let w = record(&lib, &r);
         assert_eq!(kind(&w, Kind::Genre), [("Electronic", &[Source::Audiomuse][..])], "0.25 over the eight heard: the record's");
         for t in 1..=12 {
@@ -1202,27 +1507,27 @@ mod tests {
     fn bandcamps_tags_are_a_records_words_sorted_by_the_word() {
         let quay = rec("al-129", tracks(6), ["electronic", "downtempo", "Paris"].iter().map(|t| said(Source::Bandcamp, t, "tag", 1.0)).collect());
         let discogs = rec("x", tracks(1), vec![said(Source::Discogs, "Downtempo", "style", 1.0)]);
-        let lib = Library::of(&[quay.clone(), discogs.clone()], &HashMap::new());
+        let lib = of(&[quay.clone(), discogs.clone()], &HashMap::new());
         let w = record(&lib, &quay);
-        assert_eq!(kind(&w, Kind::Genre), [("Electronic", &[Source::Bandcamp][..])]);
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", &[Source::Bandcamp][..])], "Bandcamp's own; Downtempo's link adds no second Electronic and no source");
         assert_eq!(kind(&w, Kind::Style), [("Downtempo", &[Source::Bandcamp][..])], "a caller (Discogs) knows the word");
         assert_eq!(kind(&w, Kind::Tag), [("Paris", &[Source::Bandcamp][..])]);
         assert!(kind(&w, Kind::Mood).is_empty() && w.tracks.is_empty(), "every track reads the three, down");
         // Never a caller: with Discogs' record gone, "downtempo" is a tag; Paris is a style nowhere.
-        let lib = Library::of(std::slice::from_ref(&quay), &HashMap::new());
+        let lib = of(std::slice::from_ref(&quay), &HashMap::new());
         let w = record(&lib, &quay);
         assert_eq!((keys(&w, Kind::Genre), keys(&w, Kind::Style)), (strings(&["electronic"]), Vec::new()));
         assert_eq!(keys(&w, Kind::Tag), ["paris", "downtempo"], "0.5 each, by the word");
         // Last.fm's trust, no rank of its own: at the floor's edge each is kept or left out alike.
         for source in [Source::Bandcamp, Source::Lastfm] {
             let r = rec("edge", tracks(1), vec![said(source, "kept", "tag", 0.3), said(source, "left", "tag", 0.29)]);
-            let lib = Library::of(std::slice::from_ref(&r), &HashMap::new());
+            let lib = of(std::slice::from_ref(&r), &HashMap::new());
             assert_eq!(keys(&record(&lib, &r), Kind::Tag), ["kept"], "{}", source.name());
         }
         assert_eq!((Source::of("bandcamp"), Source::Bandcamp.name()), (Some(Source::Bandcamp), "bandcamp"));
         // A Bandcamp tag is one value: no split, the exceptions first.
         let r = rec("split", tracks(1), ["hip-hop/rap", "drum & bass", "RnB/Swing"].iter().map(|t| said(Source::Bandcamp, t, "tag", 1.0)).collect());
-        let lib = Library::of(std::slice::from_ref(&r), &HashMap::new());
+        let lib = of(std::slice::from_ref(&r), &HashMap::new());
         let w = record(&lib, &r);
         assert!(keys(&w, Kind::Tag).contains(&"hip hop rap".to_string()) && keys(&w, Kind::Tag).contains(&"drum bass".to_string()));
         assert_eq!(keys(&w, Kind::Genre), ["r b"], "RnB/Swing: R&B and New Jack Swing");
@@ -1238,16 +1543,120 @@ mod tests {
             t.heard = true;
             t.heard_moods = strings(&["calm"]);
         }
-        let lib = Library::of(std::slice::from_ref(&rue), &HashMap::new());
+        let lib = of(std::slice::from_ref(&rue), &HashMap::new());
         let w = record(&lib, &rue);
         assert_eq!(kind(&w, Kind::Tag), [("melancholic", &[Source::Lastfm, Source::Bandcamp][..]), ("Paris", &[Source::Bandcamp][..]), ("chillwave", &[Source::Bandcamp][..])], "0.7 first, then 0.5 each by the word");
         assert_eq!(kind(&w, Kind::Mood), [("calm", &[Source::Audiomuse][..])]);
         assert_eq!(w.kinds.iter().map(|k| k.kind).collect::<Vec<_>>(), [Kind::Mood, Kind::Tag], "no genre or style by what a word means");
         // A Discogs style "Chillwave" elsewhere: chillwave a style; Paris and melancholic stay tags. The stored rows as they were.
         let other = rec("x", tracks(1), vec![said(Source::Discogs, "Chillwave", "style", 1.0)]);
-        let lib = Library::of(&[rue.clone(), other], &HashMap::new());
+        let lib = of(&[rue.clone(), other], &HashMap::new());
         let w = record(&lib, &rue);
         assert_eq!((keys(&w, Kind::Style), keys(&w, Kind::Tag)), (strings(&["chillwave"]), strings(&["melancholic", "paris"])));
         assert_eq!(rue.said.len(), 4);
+    }
+
+    /// GEN.51 (Never 4): no map changes a hand list. Every hand list of sets 4 and 8, at record and track, reads exactly as
+    /// `by_hand` gives it, marked by hand, under the fixture map, the empty map and one linking every style to all 26.
+    #[test]
+    fn no_map_changes_a_hand_list() {
+        let hand = |r: &mut RecordIn, kind: Kind, words: &[&str]| {
+            r.hand.insert(kind, strings(words));
+        };
+        let mut records: Vec<RecordIn> = Vec::new();
+        // Set 4: GEN.23, GEN.24 and GEN.25's lists.
+        let mut lantern = lantern_rooms();
+        hand(&mut lantern, Kind::Genre, &["Electronic"]);
+        let mut night = night_shift();
+        night.tracks[2].hand.insert(Kind::Genre, strings(&["Jazz"]));
+        let mut moss = on_every("al-105", 8, &["Acid Jazz"]);
+        moss.tracks[3].genre.push("Deep House".into());
+        hand(&mut moss, Kind::Genre, &["Jazz"]);
+        let mut twin = on_every("al-111-twin", 4, &["Jazz", "Dub"]);
+        hand(&mut twin, Kind::Genre, &["Soul"]);
+        hand(&mut twin, Kind::Style, &["Deep House"]);
+        let mut saturday = on_every("al-103", 8, &["Jazz-Funk"]);
+        saturday.tracks[1].hand.insert(Kind::Style, strings(&["Turntablism"]));
+        let mut routed = lantern_rooms();
+        routed.id = "al-101-routed".into();
+        hand(&mut routed, Kind::Genre, &["Electronic", "Dance", "Jazz"]);
+        hand(&mut routed, Kind::Style, &["Deep House", "Wonky Jazz"]);
+        let mut grey = on_every("al-104", 6, &["Hauntology"]);
+        hand(&mut grey, Kind::Style, &["Hauntology", "Leftfield"]);
+        let mut pale = pale_dock();
+        hand(&mut pale, Kind::Genre, &["Electronic", "Dance", "Reggae"]);
+        records.extend([lantern, night, moss, tin_harbour(), twin, saturday, routed, grey, pale]);
+        // Set 8: GEN.43's lists, before the step and after it.
+        let mut kept = rec("al-109", tracks(2), vec![said(Source::Discogs, "Modern Classical", "style", 1.0), said(Source::Discogs, "Drone", "style", 1.0)]);
+        hand(&mut kept, Kind::Genre, &["Contemporary", "Experimental", "Leftfield", "Neo-Classical"]);
+        let mut r122 = rec("al-122", tracks(2), Vec::new());
+        hand(&mut r122, Kind::Genre, &["Rap", "Soul"]);
+        hand(&mut r122, Kind::Style, &["Neo Soul"]);
+        let mut r123 = rec("al-123", tracks(2), Vec::new());
+        hand(&mut r123, Kind::Genre, &["Leftfield", "Jazz"]);
+        hand(&mut r123, Kind::Style, &["Modern Classical"]);
+        let mut r125 = on_every("al-125", 3, &["Electronic"]);
+        hand(&mut r125, Kind::Style, &["Jazz", "Deep House"]);
+        let mut r126 = on_every("al-126", 3, &["Downtempo"]);
+        hand(&mut r126, Kind::Genre, &["Leftfield"]);
+        r126.tracks[1].hand = HashMap::from([(Kind::Genre, strings(&["Deep House"])), (Kind::Style, strings(&["Soul"]))]);
+        let mut r127 = on_every("al-127", 3, &["Electronic"]);
+        hand(&mut r127, Kind::Genre, &["Hauntology"]);
+        let mut after = Vec::new();
+        for (r, genres, styles) in [
+            (&kept, Some(&["Experimental", "Classical", "Electronic"][..]), &["Modern Classical", "Drone", "Contemporary", "Leftfield", "Neo-Classical"][..]),
+            (&r123, Some(&["Jazz", "Electronic"][..]), &["Modern Classical", "Leftfield"][..]),
+            (&r125, Some(&["Electronic", "Dance", "Jazz"][..]), &["Deep House"][..]),
+            (&r126, Some(&["Electronic"][..]), &["Downtempo", "Leftfield"][..]),
+            (&r127, None, &["Hauntology"][..]),
+        ] {
+            let mut a = r.clone();
+            a.id = format!("{}-after", r.id);
+            a.hand.remove(&Kind::Genre);
+            if let Some(g) = genres {
+                hand(&mut a, Kind::Genre, g);
+            }
+            hand(&mut a, Kind::Style, styles);
+            if a.id == "al-126-after" {
+                a.tracks[1].hand = HashMap::from([(Kind::Genre, strings(&["Dance", "Soul"])), (Kind::Style, strings(&["Deep House"]))]);
+            }
+            after.push(a);
+        }
+        records.extend([kept, r122, r123, r125, r126, r127]);
+        records.extend(after);
+        // The three maps: the fixture's, none, and every style of these records linked to all 26.
+        let every: Vec<serde_json::Value> = {
+            let list = fixture();
+            let all26: Vec<&str> = list.genres().iter().map(|g| g.name.as_str()).collect();
+            let mut seen = HashSet::new();
+            let words = records.iter().flat_map(|r| {
+                let files = r.tracks.iter().flat_map(|t| t.genre.iter().chain(&t.style).chain(t.hand.values().flatten()));
+                files.chain(r.said.iter().map(|s| &s.word)).chain(r.hand.values().flatten()).cloned().collect::<Vec<_>>()
+            });
+            words.filter(|w| list.genre_of(w).is_none() && seen.insert(super::super::key(w))).map(|w| serde_json::json!({ "style": w, "genres": all26 })).collect()
+        };
+        assert!(every.len() > 15, "{every:?}");
+        let maps = [fixture(), map(|links| links.clear()), map(|links| *links = every)];
+        for genres in maps {
+            let lib = under(&records, genres);
+            for r in &records {
+                let w = record(&lib, r);
+                for (kind, list) in &r.hand {
+                    let want = by_hand(&lib, *kind, list);
+                    let got = w.kinds.iter().find(|k| k.kind == *kind);
+                    assert_eq!(got, Some(&want), "{}: the record's {} list", r.id, kind.name());
+                    for t in r.tracks.iter().filter(|t| !t.hand.contains_key(kind)) {
+                        assert_eq!(w.of_track(&t.id, *kind), want.words.as_slice(), "{} {}: the record's {} list covers it", r.id, t.id, kind.name());
+                    }
+                }
+                for t in &r.tracks {
+                    for (kind, list) in &t.hand {
+                        let want = by_hand(&lib, *kind, list);
+                        let got = w.tracks.iter().find(|x| x.id == t.id).and_then(|x| x.kinds.iter().find(|k| k.kind == *kind));
+                        assert_eq!(got, Some(&want), "{} {}: its own {} list", r.id, t.id, kind.name());
+                    }
+                }
+            }
+        }
     }
 }

@@ -386,11 +386,12 @@ mod tests {
     fn an_edits_typed_word_is_kept_in_its_own_rows_list() {
         use super::store::{RecordIn, Said, Source, TrackIn};
         let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
-        // Lantern Rooms shows the genre Electronic and the style Deep House; Pale Dock Discogs' five styles (no genre until links).
+        // Lantern Rooms shows the genres Electronic and Dance (Deep House's link) and the style Deep House; Pale Dock Discogs' five
+        // styles, and their links' Electronic, Dance and Reggae (the scenarios' fixture map).
         let lantern = RecordIn { id: "al-1".into(), tracks: vec![TrackIn { id: "t1".into(), genre: vec!["Electronic".into(), "Deep House".into()], ..TrackIn::default() }], ..RecordIn::default() };
         let said = ["Abstract", "Deep House", "Dub", "Electro", "Glitch"].iter().map(|w| Said { source: Source::Discogs, word: w.to_string(), raw_kind: "style".into(), weight: 1.0 }).collect();
         let pale = RecordIn { id: "al-2".into(), tracks: vec![TrackIn { id: "t2".into(), ..TrackIn::default() }], said, ..RecordIn::default() };
-        let lib = store::Library::of(&[lantern.clone(), pale.clone()], &HashMap::new());
+        let lib = store::Library::of(&[lantern.clone(), pale.clone()], &HashMap::new()).with_genres(store::fixture());
         let stored = Stored { records: HashMap::from([("al-1".to_string(), store::record(&lib, &lantern)), ("al-2".to_string(), store::record(&lib, &pale))]), words: HashMap::new() };
         let edit = |album: &str, field: &str, words: &[&str]| {
             let facts = record_by_hand(&stored, album, &[(field.to_string(), Some(serde_json::json!(words)))]);
@@ -399,12 +400,13 @@ mod tests {
         };
         let s = |w: &[&str]| Some(w.iter().map(|x| x.to_string()).collect::<Vec<String>>());
         let o = edit("al-1", "styles", &["Deep House", "Jazz", "Wonky Jazz"]);
-        assert_eq!((o.genres, o.styles), (s(&["Electronic", "Jazz"]), s(&["Deep House", "Wonky Jazz"])), "Jazz edits the genre row as shown");
+        assert_eq!((o.genres, o.styles), (s(&["Electronic", "Dance", "Jazz"]), s(&["Deep House", "Wonky Jazz"])), "Jazz edits the genre row as shown: Dance stays");
         let o = edit("al-2", "styles", &["Abstract", "Deep House", "Dub", "Electro", "Glitch", "Dance"]);
-        assert_eq!((o.genres, o.styles), (s(&["Dance"]), None), "the style row gained and lost no style: no hand list");
+        assert_eq!((o.genres, o.styles), (s(&["Electronic", "Dance", "Reggae"]), None), "the genre row as shown; the style row gained and lost no style: no hand list");
         assert_eq!(record_by_hand(&stored, "al-1", &[("genres".to_string(), None)]), [("genres".to_string(), None)], "a reset stays one");
-        // A track's Edit, by the rows the track shows: Leftfield typed into its genre row edits its style row alone.
-        let set = track_by_hand(&stored, Some("al-1"), "t1", vec![("genre".into(), s(&["Electronic", "Leftfield"]))]);
+        // A track's Edit, by the rows the track shows: Leftfield typed into its genre row (sent as shown, plus the word) edits its
+        // style row alone.
+        let set = track_by_hand(&stored, Some("al-1"), "t1", vec![("genre".into(), s(&["Electronic", "Dance", "Leftfield"]))]);
         assert_eq!(set, [("style".to_string(), s(&["Deep House", "Leftfield"]))]);
     }
 }
