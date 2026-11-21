@@ -8,6 +8,9 @@
 //! changed) and link each to a file. A folder that cannot be read, or that walks to nothing where it had files, keeps its
 //! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
+mod adding;
+#[cfg(test)]
+mod adding_tests;
 mod artists;
 pub mod covers;
 pub use artists::Credits;
@@ -22,6 +25,8 @@ mod index_log;
 mod coupling_tests;
 #[cfg(test)]
 mod join_tests;
+#[cfg(test)]
+mod keys_tests;
 #[cfg(test)]
 mod judging_tests;
 mod provenance;

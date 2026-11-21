@@ -371,6 +371,17 @@ fn values_of<T: Clone + Ord>(said: &[Said<T>]) -> Vec<Valued<T>> {
     out
 }
 
+/// A record's year as every surface shows it (FA1, FA13, VR39): the hand's; a had record's by its files (`made`, the year it was
+/// made with); else its sources' as equals, a guess's never, none while they differ; a record no source has said a year of keeps
+/// the one it was made with. The Head's rule and adding's names (COU.15) alike.
+pub fn record_year(hand: Option<i32>, had: bool, made: Option<i32>, said: &[Said<i32>], pick: Option<&Reference>) -> Resolved<i32> {
+    let files = if had { made.map(|y| (y, "files".to_string())) } else { None };
+    if hand.is_none() && files.is_none() && !said.iter().any(|s| !s.guessed && s.value.is_some()) {
+        return Resolved { value: made, by: Vec::new(), versions: Vec::new() };
+    }
+    resolve_year(hand, files, said, pick)
+}
+
 /// The year (FA1, FA2, FA13; VR39; OQ-VR-9 (c)): the hand's; else the deciding copy's files' (`files`), with every service that
 /// says the same; else the services as equals, each release's year on its reference (H4): one value they all say, or the picked
 /// reference's, else none with its versions until a hand picks. A guess's year never counts (M4); "asked, none" says nothing.

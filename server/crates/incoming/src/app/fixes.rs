@@ -8,58 +8,13 @@
 //! - **Album artist, MusicBrainz ids**: from a match with MusicBrainz's releases (`app::matching`), certain where every
 //!   track is within 2 s and has its title.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 pub use super::fixes_base::{Choice, Fix};
 pub(crate) use super::fixes_base::values;
 use super::incoming_host::IncomingHost;
-
-/// The tags a fix may write, by their names as the tag reader names them.
-fn item_key(name: &str) -> Option<lofty::tag::ItemKey> {
-    use lofty::tag::ItemKey;
-    Some(match name {
-        "date" => ItemKey::RecordingDate,
-        "genre" => ItemKey::Genre,
-        "albumartist" => ItemKey::AlbumArtist,
-        "musicbrainz_albumid" => ItemKey::MusicBrainzReleaseId,
-        "musicbrainz_releasegroupid" => ItemKey::MusicBrainzReleaseGroupId,
-        "musicbrainz_albumartistid" => ItemKey::MusicBrainzReleaseArtistId,
-        "musicbrainz_artistid" => ItemKey::MusicBrainzArtistId,
-        "musicbrainz_trackid" => ItemKey::MusicBrainzRecordingId,
-        "tracknumber" => ItemKey::TrackNumber,
-        "discnumber" => ItemKey::DiscNumber,
-        _ => return None,
-    })
-}
-
-/// Writes these values into a track (none: removes the tag), read back from the checked copy before it replaces it.
-pub(crate) fn write(track: &Path, set: &[(&'static str, Option<String>)]) -> Result<()> {
-    let names: Vec<&str> = set.iter().map(|(n, _)| *n).collect();
-    let keys: Vec<(lofty::tag::ItemKey, Option<String>)> =
-        set.iter().map(|(n, v)| Ok((item_key(n).with_context(|| format!("no tag {n}"))?, v.clone()))).collect::<Result<_>>()?;
-    crate::retag::rewrite(
-        track,
-        |tag| {
-            for (k, v) in &keys {
-                tag.remove_key(k.clone());
-                if let Some(v) = v {
-                    tag.insert_text(k.clone(), v.clone());
-                }
-            }
-        },
-        |copy| {
-            let got = values(copy, &names)?;
-            for ((n, want), got) in set.iter().zip(got) {
-                if got.as_deref().map(str::trim) != want.as_deref().map(str::trim) {
-                    bail!("{n} read back as {got:?}, not {want:?}");
-                }
-            }
-            Ok(())
-        },
-    )
-}
 
 /// The files a fix of an album writes: every copy's, or the copy `at` alone.
 fn track_paths(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Vec<PathBuf>> {
@@ -346,12 +301,5 @@ mod tests {
         assert_eq!(names(&["musicbrainz".into()]), "MusicBrainz");
         assert_eq!(names(&["musicbrainz".into(), "discogs".into(), "lastfm".into()]), "MusicBrainz, Discogs and Last.fm");
         assert_eq!(names(&[]), "");
-    }
-
-    #[test]
-    fn every_tag_a_fix_writes_has_its_key() {
-        for n in ["date", "genre", "albumartist", "musicbrainz_albumid", "musicbrainz_releasegroupid", "musicbrainz_albumartistid", "musicbrainz_artistid", "musicbrainz_trackid"] {
-            assert!(item_key(n).is_some(), "{n}");
-        }
     }
 }

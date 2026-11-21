@@ -2167,6 +2167,20 @@ fn write_albums(
     }
     let records = gather(&songs, &facts.kinds);
     let orders: HashMap<&str, Vec<usize>> = records.iter().map(|(album, copies)| (album.as_str(), row_order(copies))).collect();
+    // The album a song's persistent key reads (COU.9, T-COU-18): its folder's, as the files that speak and name one give it most, a
+    // tie to the first by path; a file naming none, or one Cratarr placed while as placed, says nothing of it (WM.5 (b), T-COU-1).
+    // Read the same way at a fresh start, where no placement is known any more.
+    let key_albums: HashMap<(i64, &str), (String, String)> = {
+        let mut by_path: Vec<&Song> = songs.iter().collect();
+        by_path.sort_by(|a, b| (a.folder, &a.row.rel).cmp(&(b.folder, &b.row.rel)));
+        let mut named: HashMap<(i64, &str), Vec<(String, String)>> = HashMap::new();
+        for s in by_path.into_iter().filter(|s| s.row.told.is_none()) {
+            let Some(album) = fact(s.row, "album") else { continue };
+            let artist = s.row.first("albumartist").or_else(|| s.row.first("artist")).unwrap_or(UNKNOWN_ARTIST).to_string();
+            named.entry((s.folder, crate::catalogue::dir_of(&s.row.rel))).or_default().push((album, artist));
+        }
+        named.into_iter().filter_map(|(at, said)| majority(said.into_iter()).map(|m| (at, m))).collect()
+    };
     // A track has one row in `songs`, whichever records its files lie in: keyed by track across the whole write, not record
     // by record, or one file moved into another album stops the library building for good. Every copy's tracks, so a copy
     // lacking a file for now takes nothing from the record's list. With each the place of its copy in `row_order`.
@@ -2231,6 +2245,13 @@ fn write_albums(
             // hand wins (COU.13 (d)).
             let album = if s.album_named && s.speaks { s.album.as_str() } else { facts.credits.titles.get(&s.record).map_or(s.album.as_str(), String::as_str) };
             let album = facts.overrides.get(&s.album_id).and_then(|o| o.title.as_deref()).unwrap_or(album);
+            // Its persistent key: its record's settled album and its paired track (COU.9, T-COU-18), never a placed file's own tags.
+            let (name_disc, name_number) = cratarr_rules::hygiene::file_place(&r.rel);
+            let at = r.place.filter(|(_, n)| n.is_some()).unwrap_or_else(|| {
+                (r.first("discnumber").and_then(leading_number).or(name_disc), r.first("tracknumber").and_then(leading_number).or(name_number))
+            });
+            let (key_album, key_artist) = key_albums.get(&(s.folder, crate::catalogue::dir_of(&r.rel))).map_or((s.album.as_str(), s.raw_album_artist.as_str()), |(a, b)| (a.as_str(), b.as_str()));
+            let _ = (key_album, key_artist, at);
             ins_song.execute(params![
                 id,
                 ids::song_pid(r, &s.raw_album_artist),

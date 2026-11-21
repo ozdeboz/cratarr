@@ -1558,12 +1558,9 @@ impl Library {
         Ok(st.exists([id])?)
     }
 
-    /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. Copies
-    /// share their tracks, so an id on two songs is two tracks tagged alike: two records, a copy that left its record among
-    /// them. It says neither, and the data stays where it is: going to the first folder's, it would leave the record that
-    /// holds it, whichever folder that happens to be. The price: a persistent id on two songs is followed nowhere, so after
-    /// a start with its ids lost, two records of one release keep what they had on dead ids, though no song holds those
-    /// (`all_song_ids`): nothing here says which of the two they were.
+    /// Every song's persistent key with the song (COU.9, T-COU-18): what the rows on a song carry, and what they follow to a rebuilt
+    /// catalogue. Copies share their tracks, so a key on two songs is two tracks alike (two records of one release): the rows on it
+    /// follow neither, and are counted (`UserData::follow_pids`); each song's rows still carry its key.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
         let mut st = db.prepare("SELECT pid, min(id) FROM songs GROUP BY pid HAVING count(*) = 1 ORDER BY pid")?;

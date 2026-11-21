@@ -524,3 +524,98 @@ fn a_records_title_by_hand() {
     assert_eq!(crate::userdata::overrides::check("title", &serde_json::json!("  Night Ferry ")), Ok(Some(serde_json::json!("Night Ferry"))));
     assert_eq!(crate::userdata::overrides::check("title", &serde_json::Value::Null), Ok(None), "Reset");
 }
+
+/// COU.3 (d), a pin: 0.17's data, N1 fetched under 0.17 and retagged then (0.17's retag gave it its neighbours' album keys), no
+/// placement known: 0.18's first pass changes nothing: "Night Ferry", credited by `gh-1`, 2014, R1, "Harbour Tapes".
+#[test]
+fn a_track_017_fetched_and_retagged_changes_nothing_at_the_upgrade() {
+    let f = Folders::new("cou3d");
+    let (r, rels) = night_ferry(&f, MUSIC);
+    let credited = f.cat.record_artists(r).unwrap();
+    let album = [("album", "Night Ferry"), ("albumartist", "Glass Harbour"), ("musicbrainz_albumartistid", GH1), ("date", "2014"), ("label", "Harbour Tapes"), ("musicbrainz_albumid", R1)];
+    retagged(&f, MUSIC, &rels[0], &tagged(&album, &[("title", "N1"), ("tracknumber", "1")]));
+    f.pass();
+    assert_eq!(f.cat.record(r).unwrap().unwrap().title, "Night Ferry");
+    assert_eq!(f.cat.record_artists(r).unwrap(), credited);
+    assert_eq!((labels_of(&f, r), releases_of(&f, r)), (vec!["Harbour Tapes".to_string()], vec![R1.to_string()]));
+    assert_eq!(served_album(&f, r), ("Night Ferry".into(), Some(2014), Some(R1.into()), Some(GH1.into())), "nothing changes at the upgrade");
+}
+
+/// COU.3 (e) (FA2): own music. "Harbour Demos" `al-371`, only in alice's own music (here catalogue folder 1), three files of 2015, its
+/// track 2 missing; root fetches it into her copy, as fetched ALBUM "Demos 2019", DATE 2019: the record keeps its title and 2015, the
+/// placed file speaking for no one.
+#[test]
+fn a_placed_file_in_own_music_speaks_for_no_one() {
+    let f = Folders::new("cou3e");
+    let own = IN;
+    let dir = "Glass Harbour/Harbour Demos";
+    let album = [("album", "Harbour Demos"), ("albumartist", "Glass Harbour"), ("date", "2015")];
+    for (n, title) in [(1, "D1"), (3, "D3")] {
+        let (rel, number) = (format!("{dir}/0{n} {title}.flac"), n.to_string());
+        f.add(own, &[(rel.as_str(), tagged(&album, &[("title", title), ("tracknumber", number.as_str())]))]);
+    }
+    f.pass();
+    let r = f.record_of(own, &format!("{dir}/01 D1.flac")).unwrap();
+    let fetched = format!("{dir}/02 D2.flac");
+    f.cat.place_file(own, &fetched, r, None, (1, 2)).unwrap();
+    f.add(own, &[(fetched.as_str(), vec![("album", "Demos 2019"), ("albumartist", "Glass Harbour"), ("date", "2019"), ("title", "D2"), ("tracknumber", "2")])]);
+    f.pass();
+    assert_eq!(f.record_of(own, &fetched), Some(r), "its record's");
+    assert_eq!(f.cat.record(r).unwrap().unwrap().title, "Harbour Demos", "its title kept");
+    let (name, year, ..) = served_album(&f, r);
+    assert_eq!((name.as_str(), year), ("Harbour Demos", Some(2015)), "2015 kept: the placed file speaks for no one");
+}
+
+/// COU.5 (d): Mumia `al-3211`, WM.10's arrival joined, each of its files the track it pairs with, named in another order (`a.mp3` T3,
+/// `b.mp3` T1, `c.mp3` T2, the fourth by the site) and numbered nowhere: the arrival's files sit at their tracks' places, T1-T4, as
+/// MUSIC's copy places them, in the one order the served library reads a copy's files by.
+#[test]
+fn an_arrivals_files_sit_at_their_tracks_places() {
+    let f = Folders::new("cou5d");
+    let r = super::wm_tests::mumia_in_music(&f);
+    f.cat.expect_record(IN, super::wm_tests::MUMIA_DIR, r).unwrap();
+    let rels = super::wm_tests::electronicfresh(&f, false);
+    f.pass();
+    // b.mp3 T1, c.mp3 T2, a.mp3 T3, the fourth T4.
+    for (rel, n) in rels.iter().zip(1..) {
+        assert_eq!(place_of(&f, IN, rel), (Some(1), Some(n)), "{rel} at T{n}'s place");
+    }
+    let lib = crate::serve::library::Library::open(None).unwrap();
+    crate::serve::library::testing::build_now(&lib, &f.cat);
+    let album = ids::record(r);
+    let order = lib.art_files(&album, IN, super::wm_tests::MUMIA_DIR).unwrap();
+    assert_eq!(order, rels, "the arrival's files in its tracks' order, never by path");
+}
+
+/// COU.13 (b)'s pick half (FA6; the credit by the reference's NAMES.20 row 2 is DC3's): "Harbour Sampler" `al-331`, twelve tracks by
+/// twelve artists, no ALBUMARTIST, no reference: root picks R331 in References › Use this: it is kept as the record's reference, chosen
+/// by hand, with Reset; its type a compilation (the rule: five or more track artists); nothing written into a file.
+#[test]
+fn a_picked_reference_is_kept_by_hand_with_reset() {
+    let f = Folders::new("cou13b");
+    let dir = "Various/Harbour Sampler";
+    let rels: Vec<String> = (1..=12).map(|n| format!("{dir}/{n:02} S{n}.flac")).collect();
+    for (n, rel) in (1..=12).zip(&rels) {
+        let (artist, title, number) = (format!("Artist {n}"), format!("S{n}"), n.to_string());
+        f.add(MUSIC, &[(rel.as_str(), vec![("album", "Harbour Sampler"), ("artist", artist.as_str()), ("title", title.as_str()), ("tracknumber", number.as_str())])]);
+    }
+    f.pass();
+    let r = f.record_of(MUSIC, &rels[0]).unwrap();
+    let tags = |f: &Folders| -> Vec<(String, String, String)> {
+        f.cat.db().prepare("SELECT rel, name, value FROM tags WHERE name IS NOT NULL ORDER BY rel, n").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+    };
+    let before = tags(&f);
+    let titles: Vec<(String, i64)> = (1..=12).map(|n| (format!("S{n}"), 200_000)).collect();
+    keep(&f.cat, r, "R331", &list(&titles.iter().map(|(t, ms)| (t.as_str(), *ms)).collect::<Vec<_>>()));
+    let r331 = f.cat.lists_kept(r).unwrap().into_iter().find(|l| l.reference.value == "R331").unwrap().reference;
+    assert!(f.cat.pick_list(r, Some(&r331)).unwrap(), "picked by hand");
+    assert_eq!(f.cat.picked(r).unwrap(), Some(r331.clone()), "R331 the record's reference, chosen by hand");
+    f.pass();
+    let lib = crate::serve::library::Library::open(None).unwrap();
+    crate::serve::library::testing::build_now(&lib, &f.cat);
+    let secondary: String = lib.db().query_row("SELECT secondary FROM albums WHERE id = ?1", [ids::record(r)], |row| row.get(0)).unwrap();
+    assert!(secondary.to_lowercase().contains("compilation"), "a compilation: {secondary}");
+    assert!(f.cat.pick_list(r, None).unwrap(), "Reset");
+    assert_eq!(f.cat.picked(r).unwrap(), None, "none chosen after Reset");
+    assert_eq!(tags(&f), before, "nothing written");
+}

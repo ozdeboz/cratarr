@@ -177,18 +177,22 @@ pub fn album_at(pid: &str, folder: i64) -> String {
     format!("{ALBUM}{at}")
 }
 
-/// A song's persistent id, Navidrome's default `musicbrainz_trackid|albumid,discnumber,tracknumber,title`.
+/// A song's persistent key (COU.9, T-COU-18): its record's album key, the album its copy settled on (its folder's album and album
+/// artist, never a placed file's own tags), and its paired track, its place and title as the record knows them (its track's place,
+/// else its file's numbers, else its name's leading number; its title, else its name's). No tag Cratarr may have written decides it,
+/// and a file with no tags has one of its own. Worked out the same way at a fresh start, so what is keyed to a song finds it again.
+/// Red: today's persistent id from the tags.
 pub fn song_pid(row: &ServedRow, album_artist: &str) -> String {
     let album_id = hash(&[&album_pid(row, album_artist)]);
     hash(&[&first_group(&[
         vec![row.first("musicbrainz_releasetrackid").unwrap_or("").to_string()],
-        vec![
-            album_id,
-            row.first("discnumber").unwrap_or("").to_string(),
-            row.first("tracknumber").unwrap_or("").to_string(),
-            row.first("title").unwrap_or("").to_string(),
-        ],
+        vec![album_id, row.first("discnumber").unwrap_or("").to_string(), row.first("tracknumber").unwrap_or("").to_string(), row.first("title").unwrap_or("").to_string()],
     ])])
+}
+
+pub fn song_key(album_artist: &str, album: &str, (disc, number): (Option<u32>, Option<u32>), title: &str) -> String {
+    let n = |v: Option<u32>| v.map(|v| v.to_string()).unwrap_or_default();
+    hash(&[&artist_hash(album_artist), &clear(&album.to_lowercase()), &n(disc.or(number.map(|_| 1))), &n(number), &clear(&title.to_lowercase())])
 }
 
 #[cfg(test)]
@@ -316,12 +320,14 @@ mod tests {
         assert_eq!(artists_named(r#"{"of":"al-4","seeds":["ar-9","ar-12x","like:ar-30@20"],"star":"bar-7"}"#).collect::<Vec<_>>(), [9, 30], "an artist's, as an id is read");
     }
 
+    /// Changed by design (COU.9, T-COU-18): a song's key is its album and its place and title on it, never a release track id from the
+    /// tags.
     #[test]
-    fn a_song_is_its_release_track_else_its_place_on_the_album() {
-        let a = row(&[("album", "X"), ("tracknumber", "1"), ("title", "One")]);
-        let b = row(&[("album", "X"), ("tracknumber", "2"), ("title", "One")]);
-        assert_ne!(song_pid(&a, "A"), song_pid(&b, "A"));
-        assert_eq!(song_pid(&a, "A"), song_pid(&a.clone(), "A"));
+    fn a_song_is_its_place_and_title_on_its_album() {
+        let a = song_key("A", "X", (None, Some(1)), "One");
+        assert_ne!(a, song_key("A", "X", (None, Some(2)), "One"), "another place");
+        assert_ne!(a, song_key("A", "Y", (None, Some(1)), "One"), "another album");
+        assert_eq!(a, song_key("A", "X", (Some(1), Some(1)), "one"), "disc 1 by default, the title folded");
         assert_eq!(track_of(&song(42)), Some(42));
         assert_eq!(track_of("al-42"), None);
         assert_eq!(record(42), "al-42");

@@ -146,11 +146,7 @@ impl RecordFacts {
     /// was made with.
     pub fn year_now(&self) -> crate::facts::Resolved<i32> {
         let hand = if self.hand.iter().any(|h| h == "year") { self.year } else { None };
-        let files = if self.had() { self.year.map(|y| (y, "files".to_string())) } else { None };
-        if hand.is_none() && files.is_none() && !self.years.iter().any(|s| !s.guessed && s.value.is_some()) {
-            return crate::facts::Resolved { value: self.year, by: Vec::new(), versions: Vec::new() };
-        }
-        crate::facts::resolve_year(hand, files, &self.years, self.pick.as_ref())
+        crate::facts::record_year(hand, self.had(), self.year, &self.years, self.pick.as_ref())
     }
 
     /// Its release type (FA13, VR39): the hand's; a had record's by the release type rule over its copy (as built); a record not

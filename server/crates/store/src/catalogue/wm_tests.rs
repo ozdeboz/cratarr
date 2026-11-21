@@ -78,7 +78,7 @@ fn paired(c: &Copies, folder: i64) -> u16 {
 }
 
 /// Mumia's list, T1-T4: 3:10, 4:20, 5:30, 6:40, more than 4 s apart.
-const MUMIA: [(&str, i64); 4] = [("T1", 190_000), ("T2", 260_000), ("T3", 330_000), ("T4", 400_000)];
+pub(super) const MUMIA: [(&str, i64); 4] = [("T1", 190_000), ("T2", 260_000), ("T3", 330_000), ("T4", 400_000)];
 
 /// Mumia `al-3211` with its list kept and MUSIC's copy, tagged; its tracks.
 fn mumia(cat: &Catalogue) -> (i64, Vec<i64>) {
@@ -351,10 +351,10 @@ impl Folders {
     }
 }
 
-const MUMIA_DIR: &str = "soulseek/Polo & Pan/Mumia (2023) 2";
+pub(super) const MUMIA_DIR: &str = "soulseek/Polo & Pan/Mumia (2023) 2";
 
 /// Mumia `al-3211` in MUSIC (folder 0): T1-T4 tagged, its list kept (`G135`, "asked"). The record.
-fn mumia_in_music(f: &Folders) -> i64 {
+pub(super) fn mumia_in_music(f: &Folders) -> i64 {
     let files: Vec<(String, Vec<(&str, String)>)> = MUMIA
         .iter()
         .zip(1..)
@@ -372,7 +372,7 @@ fn mumia_in_music(f: &Folders) -> i64 {
 
 /// `ss-140`'s folder in folder 1 (IN2 here), as the real case has it, or every tag stripped: `b.mp3` T1, `c.mp3` "T2 www.", `a.mp3`
 /// T3, and the fourth untitled, named by the site, each within a second of its track.
-fn electronicfresh(f: &Folders, stripped: bool) -> Vec<String> {
+pub(super) fn electronicfresh(f: &Folders, stripped: bool) -> Vec<String> {
     let files = [("b.mp3", Some("T1")), ("c.mp3", Some("T2 www.")), ("a.mp3", Some("T3")), ("T4 - www.electronicfresh.com.mp3", None)];
     let rels: Vec<String> = files.iter().map(|(name, _)| format!("{MUMIA_DIR}/{name}")).collect();
     for (rel, (_, title)) in rels.iter().zip(files) {

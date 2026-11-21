@@ -146,8 +146,8 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         picked: read.copies.picked,
         lists: read.lists.clone(),
         pick: read.pick.clone(),
-        years: said_of(&read, "year"),
-        types: said_of(&read, "type"),
+        years: read.said_of("year"),
+        types: read.said_of("type"),
         secondaries,
         rule_secondary: heard.map(|h| h.rule).unwrap_or_default(),
         // The release type rule over the picked list's titles and lengths (VR39, M10): the one rule the build types an album by.
@@ -166,20 +166,6 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
     };
     let _ = viewer;
     Ok(Some((rev, facts)))
-}
-
-/// Each source's value of one of a record's facts, per reference (`kind:value`, none for a fact no reference gives), each a guess's
-/// where its reference is one (VR8): what `resolve()` reads (VR39). A value that does not read as one is none.
-fn said_of<T: std::str::FromStr>(read: &crate::catalogue::holding::RecordRead, fact: &str) -> Vec<cratarr_domain::facts::Said<T>> {
-    read.said
-        .iter()
-        .filter(|s| s.fact == fact)
-        .map(|s| {
-            let reference = s.of.split_once(':').map(|(kind, value)| cratarr_domain::facts::Reference::new(&s.source, kind, value));
-            let guessed = reference.as_ref().is_some_and(|r| read.guesses.contains(r));
-            cratarr_domain::facts::Said { reference, source: s.source.clone(), value: s.value.as_deref().and_then(|v| v.parse().ok()), guessed }
-        })
-        .collect()
 }
 
 /// Each source's secondary types of a record kept in the facts layer (`secondary`, a JSON list of words), per reference, each a

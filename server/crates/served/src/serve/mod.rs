@@ -691,10 +691,13 @@ impl Serve {
         // A track away with its library is still that track: no song holds it for now, and one tagged alike is another record's.
         let mut songs: std::collections::HashSet<String> = self.library.all_song_ids()?.into_iter().collect();
         songs.extend(self.catalogue().tracks_alive()?.into_iter().map(ids::song));
-        let moved = self.userdata.follow_pids(&self.library.pids()?, &songs)?;
-        if moved > 0 {
-            tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
+        // Everything keyed to a song follows its key (COU.9, T-COU-19), and the rows on each song carry its key now (T-COU-6).
+        let keys = self.library.pids()?;
+        let followed = self.userdata.follow_pids(&keys, &songs)?;
+        if followed.moved > 0 || followed.apart > 0 {
+            tracing::info!(target: "library", moved = followed.moved, apart = followed.apart, "plays and stars followed songs to new ids; a key two songs share moved none");
         }
+        self.userdata.carry_pids(&keys)?;
         let (songs, albums, artists) = self.library.counts()?;
         if whole {
             tracing::info!(target: "library", why, songs, albums, artists, "library built");
@@ -1009,6 +1012,36 @@ impl Serve {
             }
         }
         Ok(kept.map(|k| (k.mime, k.bytes, print)))
+    }
+
+    /// A file about to go to the trash (a better copy's replaced file, T-COU-15): where it gives its record's picture now (no cover
+    /// chosen, no cover file beside, the first of its copy's files that speak with a picture inside), that picture is kept in Cratarr's
+    /// store as the record's (`kept`, by `by`), so the record never loses it with the trash. Whether it was. Blocking.
+    pub fn keep_picture_of(&self, album: &str, folder: i64, rel: &str, by: &str) -> Result<bool> {
+        let (Some(record), Some(cat)) = (ids::record_number(album), self.catalogue_cell.get()) else { return Ok(false) };
+        if cat.kept_cover(record)?.is_some_and(|k| k.chosen()) {
+            return Ok(false);
+        }
+        let Some((at, dir, _, first)) = self.library.album_art(album)? else { return Ok(false) };
+        if at != folder || self.art_at(folder, &dir, None)?.is_some() {
+            return Ok(false);
+        }
+        let placed = cat.placed_as_placed(folder)?;
+        let mut files = self.library.art_files(album, folder, &dir)?;
+        if files.is_empty() {
+            files.extend(first);
+        }
+        for f in files.into_iter().filter(|f| !placed.contains(f)) {
+            let Some((mime, bytes)) = self.art_at(folder, &dir, Some(f.clone()))? else { continue };
+            if f != rel {
+                return Ok(false);
+            }
+            let how = crate::catalogue::covers::KEPT.to_string();
+            let cover = crate::catalogue::covers::Cover { mime, bytes, source: by.to_string(), who: None, at: now(), how, run: None, change: None };
+            cat.keep_cover(record, &cover)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Whether a record shows a cover chosen in Cratarr's store (COU.11): what a track's own picture gives way to on its row and in

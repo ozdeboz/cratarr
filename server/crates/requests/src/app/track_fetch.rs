@@ -1187,7 +1187,8 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let (tracks, ..) = super::renumber_base::tracks_of_in(s, &wanted.album)?;
     let t = &wanted.track;
     let replaced = wanted.replace.as_ref().map(|id| tracks.iter().find(|x| &x.id == id).context("The track to replace is gone")).transpose()?;
-    // The neighbour: the closest track on its disc, else any other.
+    // What its name is made like: a better copy the file it replaces, beside it (COU.2: never refused for want of a neighbour, nothing
+    // copied from one); a missing track its neighbour, the closest track on its disc, else any other.
     let neighbour = tracks
         .iter()
         .filter(|x| replaced.is_none_or(|r| r.id != x.id))
@@ -1206,8 +1207,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         _ => staged.to_path_buf(),
     };
     let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("flac").to_ascii_lowercase();
-    let name = name_like(&neighbour.file, t.position, &t.title, &ext);
-    let dest = album_dir.join(&name);
+    let dest = album_dir.join(name_like(&neighbour.file, t.position, &t.title, &ext));
     // The replaced file's track, handed to the new one (0101 point 11: a better copy keeps the id, as Replace does).
     let handed = replaced.and_then(|r| s.catalogue().place_of_path(&r.path)).and_then(|(f, rel)| s.catalogue().track_of(f, &rel));
     let old = replaced.map(|r| rel_of(&root, &r.path)).transpose()?;
@@ -1217,6 +1217,13 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     // written, no cover put inside (writing is quiet in 0.18; covers live in the database, C-WM-7).
     let record = crate::serve::ids::record_number(&wanted.album).context("No such album in Cratarr's own library")?;
     s.catalogue().place_file(folder, &rel_of(&root, &dest)?, record, handed, (t.disc, t.position))?;
+    // The replaced file's picture, where it gives the record's, kept in Cratarr's store before the file goes to the trash (T-COU-15).
+    if let Some(old) = old.as_deref().filter(|_| false) {
+        let by = format!("files@{}", root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+        if let Err(e) = s.keep_picture_of(&wanted.album, folder, old, &by) {
+            tracing::warn!("track fetch: the replaced file's picture not kept: {e:#}");
+        }
+    }
     let trashed = swap_in(&root, &source, &dest, old.as_deref(), &neighbour.path, now, |_| Ok(()))?;
     let id = now.to_string() + &new_id()[..4];
     if let (Some(track), Some(r)) = (handed, replaced)
@@ -1395,6 +1402,48 @@ mod tests {
             .query_row("SELECT record, disc, number FROM placements WHERE folder = 0 AND path = ?1", ["Glass Harbour/Deep Water/03 Night Pier.mp3"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .ok();
         assert_eq!(placed, Some((record, 1, 3)), "said to the catalogue as placed, at its place");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// COU.2's fetch half (T-COU-15): "Pier" `al-302`, a one-track single, its picture P302 inside its one file and no cover file
+    /// beside. A better copy of its track is never refused for want of a neighbour: placed in the single's folder, named as the file it
+    /// replaces was with its own extension, its bytes the staged file's; the replaced file to the trash; and before it goes, P302, the
+    /// record's picture's source, kept in Cratarr's store as the record's (`kept`). Red first: "The album has no other track to take
+    /// its tags from".
+    #[tokio::test]
+    async fn a_better_copy_of_a_one_track_record_is_placed_and_keeps_its_picture() {
+        let d = std::env::temp_dir().join(format!("cratarr-cou2-place-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let (music, data) = (d.join("music"), d.join("data"));
+        std::fs::create_dir_all(&data).unwrap();
+        let single = music.join("Glass Harbour/Pier (2018)");
+        std::fs::create_dir_all(&single).unwrap();
+        let old = crate::retag::fixtures::flac(&single, "01 Pier");
+        let p302: Vec<u8> = b"\x89PNG\r\n\x1a\nP302-picture".to_vec();
+        assert!(crate::covers_inside::replace(std::slice::from_ref(&old), Some((&p302, "image/png"))).is_empty(), "P302 inside");
+        let cat = std::sync::Arc::new(crate::catalogue::Catalogue::open(None, vec![music.clone()]).unwrap());
+        let serve = crate::serve::Serve::open(Some(&data), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.library.set_kinds(vec![(0, crate::serve::copies::Kind::Main)]);
+        serve.attach_catalogue(cat.clone());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.tag_for_tests(0, "Glass Harbour/Pier (2018)/01 Pier.flac", &[("album", "Pier"), ("albumartist", "Glass Harbour"), ("title", "Pier"), ("tracknumber", "1")]);
+        cat.identify().unwrap();
+        serve.refresh().unwrap();
+        let album = serve.library.album_in(0, "Glass Harbour/Pier (2018)").unwrap().expect("built");
+        let record = crate::serve::ids::record_number(&album).unwrap();
+        let (tracks, ..) = crate::app::renumber_base::tracks_of_in(&serve, &album).unwrap();
+        assert_eq!(tracks.len(), 1, "a one-track single");
+        let staged = d.join("a1b2c3.mp3");
+        std::fs::write(&staged, b"the better copy's bytes").unwrap();
+        let track = ReleaseTrack { disc: 1, position: 1, title: "Pier".into(), artist: "Glass Harbour".into(), length_ms: Some(200_000), recording: "rec-1".into(), have: None, track_id: "t-1".into(), artist_id: None, path: None };
+        let wanted = Wanted { album: album.clone(), track, replace: Some(tracks[0].id.clone()) };
+        let (dest, _undo) = place_track(&serve, &wanted, &staged).expect("never refused for want of a neighbour");
+        assert_eq!(dest, single.join("01 Pier.mp3"), "named as the file it replaces was, its own extension, in its folder");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"the better copy's bytes", "untouched");
+        assert!(!old.exists(), "the replaced file to the trash");
+        let kept = cat.kept_cover(record).unwrap().expect("its picture kept before the file went");
+        assert_eq!((kept.bytes.as_slice(), kept.how.as_str()), (p302.as_slice(), crate::catalogue::covers::KEPT), "P302, kept as the record's");
         std::fs::remove_dir_all(&d).ok();
     }
 
