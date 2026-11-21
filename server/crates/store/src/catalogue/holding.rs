@@ -3,11 +3,15 @@
 //!
 //! - **A copy** is one catalogue folder's present files of the record's live tracks (A3.1: a file gone, trashed or in a
 //!   parked library is none). `present` counts its tracks with such a file.
-//! - **Paired** (HD2, PAIR01.18): each copy alone, its files against each list the record keeps, by `assign` (rules) with the
-//!   one title rule (the domain's, X3) and the one length rule; never two copies' files in one pairing (HD3). A copy whole by
-//!   any kept list is whole (OQ-VR-1 (b)); otherwise its pairs with the shortest list count. With no list kept, `paired` is
-//!   `present` (OQ-VR-6 (c)). A file's length is the one the library serves: its header's, or a whole decode's where the two
-//!   differ by more than 1.5 s (`served_rows`).
+//! - **Paired** (HD2, PAIR01.18): each copy alone, its files against each list that judges, by `assign` (rules) with the one
+//!   title rule (the domain's, X3) and the one length rule; never two copies' files in one pairing (HD3). Which lists judge is
+//!   the domain's `judging` (VR12 rule 1): the administrator's pick alone (VR14); else every kept list that is no guess (VR8; a
+//!   guess today's pairing confirms, a copy in a main library or own music whose files and its list pair one for one, is none:
+//!   RV-22, C15), and of those the timed alone while one is (VR21, RV-21). A copy whole by any of them is whole (OQ-VR-1 (b));
+//!   otherwise its pairs are the most it makes with any of the shortest length (VR13 (c): no tie broken by a source's name).
+//!   With no list kept, `paired` is `present` (OQ-VR-6 (c)); with only guesses kept, not known whole (VR12 rule 6). A file's
+//!   length is the one the library serves: its header's, or a whole decode's where the two differ by more than 1.5 s
+//!   (`served_rows`).
 //! - **Went** (HD8, HD9): a folder whose files all went (gone, or into a trash) is a copy of none present, with when the last
 //!   went and from where, as `went_of` reads it. A parked library's copy is none and gives none: while its files lie in a
 //!   parked library, the record is not retired (they come back with it).
@@ -16,19 +20,30 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
-use cratarr_domain::identity::titled_as;
-use cratarr_rules::assign::{Fit, Side, assign, fit};
-use cratarr_rules::holding::{CopyFacts, Library, Went};
+use cratarr_domain::facts::{List, confirms, judging, only_guesses, pairs_with};
+use cratarr_rules::holding::{CopyFacts, Kept, Library, Went};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::Catalogue;
-use super::identity::RefTrack;
 
-/// A record's copies, and the length of the shortest list it keeps (none where it keeps no list).
+/// A record's copies, and the length of the shortest list that judges them (none where none does); `only_guesses` where the only
+/// lists it keeps are guesses' (VR12 rule 6: not known whole); `picked` where an administrator's pick judges them (VR14): only
+/// then does a had record show a count (OQ-VR-3 (b), HD12).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Copies {
     pub copies: Vec<CopyFacts>,
     pub shortest: Option<u16>,
+    pub only_guesses: bool,
+    pub picked: bool,
+    /// The guesses' references today's pairing confirms (RV-22): references now, worked out at this read, never stored.
+    pub confirmed: Vec<cratarr_domain::facts::Reference>,
+}
+
+impl Copies {
+    /// What judges them whole, as the holding reads it (`holding_of`).
+    pub fn kept(&self) -> Kept {
+        if self.only_guesses { Kept::OnlyGuesses } else { Kept::of(self.shortest) }
+    }
 }
 
 /// How far a file's header may be from a whole decode's length before the decode's is the one served (`served_rows`).
@@ -41,21 +56,15 @@ fn count(n: usize) -> u16 {
     u16::try_from(n).unwrap_or(u16::MAX)
 }
 
-/// One present file of a copy, as `assign` reads it.
+/// One present file of a copy, as `assign` reads it: the domain's file (its place, key, title and served length), and its track.
 struct Present {
     track: i64,
-    rel: String,
-    disc: Option<u32>,
-    number: Option<u32>,
-    title: String,
-    ms: Option<i64>,
+    file: cratarr_domain::facts::Present,
 }
 
-/// How many of a list's tracks a copy's files pair with, one for one (`assign`, the one title rule).
-fn paired_with(list: &[RefTrack], files: &[Present]) -> usize {
-    let tracks: Vec<Side> = list.iter().map(|t| Side { disc: Some(t.disc), number: Some(t.position), key: &t.title, length_ms: t.length_ms }).collect();
-    let sides: Vec<Side> = files.iter().map(|f| Side { disc: f.disc, number: f.number, key: &f.rel, length_ms: f.ms }).collect();
-    assign(&tracks, &sides, |t, f| if titled_as(&files[f].title, &list[t].title) { fit(list[t].length_ms, files[f].ms) } else { Fit::No }).len()
+/// A copy's files as the domain's pairing reads them.
+fn sides(files: &[Present]) -> Vec<cratarr_domain::facts::Present> {
+    files.iter().map(|f| f.file.clone()).collect()
 }
 
 /// The length the library serves (`served_rows`): a whole decode's where the header says otherwise by more than 1.5 s.
@@ -85,7 +94,6 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
         super::PRESENT_F
     ))?;
     let mut tags = db.prepare_cached("SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IS NOT NULL ORDER BY n")?;
-    let mut lists_of = db.prepare_cached("SELECT tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
     let mut parked_of = db.prepare_cached(
         "SELECT EXISTS (SELECT 1 FROM files f JOIN tracks t ON t.id = f.track
            WHERE t.record = ?1 AND t.retired_at IS NULL AND f.folder < 0 AND f.gone_at IS NULL AND f.trashed IS NULL)",
@@ -93,22 +101,12 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
     let mut fileless_of =
         db.prepare_cached("SELECT count(*) FROM tracks t WHERE t.record = ?1 AND t.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)")?;
     for &(record, holder) in asked {
-        let mut lists_kept = |id: i64| -> Result<Vec<Vec<RefTrack>>> {
-            Ok(lists_of
-                .query_map([id], |r| r.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<String>>>()?
-                .into_iter()
-                .filter_map(|t| serde_json::from_str::<Vec<RefTrack>>(&t).ok())
-                .filter(|l| !l.is_empty())
-                .collect())
-        };
-        // The record's own lists; where it keeps none, its holder's (a record held by another's files: R13).
-        let mut lists = lists_kept(record)?;
-        if lists.is_empty() && holder != record {
-            lists = lists_kept(holder)?;
+        // The record's own lists and pick; where it keeps no list, its holder's (a record held by another's files: R13), a guess
+        // left out there as here (VR46).
+        let (mut lists, mut pick) = (super::lists::lists_in(db, record)?, super::lists::pick_in(db, record)?);
+        if lists.iter().all(|l| l.tracks.is_empty()) && holder != record {
+            (lists, pick) = (super::lists::lists_in(db, holder)?, super::lists::pick_in(db, holder)?);
         }
-        lists.sort_by_key(Vec::len);
-        let shortest = lists.first().map(|l| count(l.len()));
         let mut folders: BTreeMap<i64, Vec<Present>> = BTreeMap::new();
         let rows = files_of.query_map([holder], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<f64>>(4)?, r.get::<_, Option<bool>>(5)?))
@@ -118,15 +116,29 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
             let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
             let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), None);
             let ms = served_ms(header, decoded, complete);
-            folders.entry(folder).or_default().push(Present { track, rel, disc: facts.disc, number: facts.number, title: facts.title, ms });
+            folders.entry(folder).or_default().push(Present { track, file: cratarr_domain::facts::Present { disc: facts.disc, number: facts.number, key: rel, title: facts.title, ms } });
         }
+        // A guess today's pairing confirms is none (RV-22): a copy in a main library or own music, never an Incoming arrival not
+        // yet added (C15), whose files and the list pair one for one, both ways. Worked out at each read, never stored.
+        let sure = |folder: i64| matches!(library(folder), Library::Main | Library::Own(_));
+        let mut confirmed = Vec::new();
+        for list in lists.iter_mut().filter(|l| l.guessed) {
+            if folders.iter().any(|(folder, files)| sure(*folder) && confirms(&list.tracks, &sides(files))) {
+                list.guessed = false;
+                confirmed.push(list.reference.clone());
+            }
+        }
+        let judges: Vec<&List> = judging(&lists, pick.as_ref());
+        let shortest = judges.iter().map(|l| count(l.tracks.len())).min();
+        let guesses = only_guesses(&lists, pick.as_ref());
         let mut copies = Vec::new();
         for (folder, files) in &folders {
             let present = files.iter().map(|f| f.track).collect::<BTreeSet<i64>>().len();
-            let paired = match lists.first() {
+            let files = sides(files);
+            let paired = match shortest {
                 None => present,
-                Some(short) if lists.iter().any(|l| paired_with(l, files) == l.len()) => short.len(),
-                Some(short) => paired_with(short, files),
+                Some(of) if judges.iter().any(|l| pairs_with(&l.tracks, &files).len() == l.tracks.len()) => usize::from(of),
+                Some(of) => judges.iter().filter(|l| count(l.tracks.len()) == of).map(|l| pairs_with(&l.tracks, &files).len()).max().unwrap_or(0),
             };
             copies.push(CopyFacts { folder: *folder, library: library(*folder), present: count(present), paired: count(paired), went: None });
         }
@@ -151,7 +163,8 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
                 copies.push(CopyFacts { folder: FILELESS, library: Library::Main, present: n, paired: n, went: None });
             }
         }
-        out.insert(record, Copies { copies, shortest });
+        let picked = pick.as_ref().is_some_and(|p| judges.iter().any(|l| &l.reference == p));
+        out.insert(record, Copies { copies, shortest, only_guesses: guesses, picked, confirmed });
     }
     Ok(out)
 }
@@ -238,6 +251,13 @@ pub struct RecordRead {
     pub quality: HashMap<i64, Quality>,
     /// Its Bandcamp album page, where a reference names one.
     pub bandcamp: Option<String>,
+    /// Every list it keeps, by reference, each a guess's or not (VR01), and the administrator's pick among them (VR5).
+    pub lists: Vec<cratarr_domain::facts::List>,
+    pub pick: Option<cratarr_domain::facts::Reference>,
+    /// Every source's value of its facts, by fact, source and reference (FA15, VR40), and the references it holds that are guesses
+    /// (VR8: a search by name alone, unconfirmed, and today's pairing confirming none), for `resolve()` (VR39).
+    pub said: Vec<super::facts::Said>,
+    pub guesses: Vec<cratarr_domain::facts::Reference>,
 }
 
 /// `Catalogue::record_read` in the caller's transaction.
@@ -267,7 +287,19 @@ pub fn record_read_in(tx: &Connection, id: i64, library: &dyn Fn(i64) -> Library
         .prepare_cached("SELECT value FROM \"references\" WHERE subject = ?1 AND source = 'bandcamp' AND kind = 'album' ORDER BY value LIMIT 1")?
         .query_row([crate::serve::ids::record(end)], |r| r.get(0))
         .optional()?;
-    Ok(Some(RecordRead { row, artists, labels, copies, quality, bandcamp }))
+    let (lists, pick) = (super::lists::lists_in(tx, end)?, super::lists::pick_in(tx, end)?);
+    let said = tx
+        .prepare_cached("SELECT fact, source, ref, value, at FROM facts WHERE record = ?1 ORDER BY fact, source, ref")?
+        .query_map([end], |r| Ok(super::facts::Said { fact: r.get(0)?, source: r.get(1)?, of: r.get(2)?, value: r.get(3)?, at: r.get(4)? }))?
+        .collect::<rusqlite::Result<_>>()?;
+    let guesses = tx
+        .prepare_cached("SELECT source, kind, value FROM \"references\" WHERE subject = ?1 AND how = 'search' AND confirmed = 0")?
+        .query_map([crate::serve::ids::record(end)], |r| Ok(cratarr_domain::facts::Reference::new(&r.get::<_, String>(0)?, &r.get::<_, String>(1)?, &r.get::<_, String>(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|r| !copies.confirmed.contains(r))
+        .collect();
+    Ok(Some(RecordRead { row, artists, labels, copies, quality, bandcamp, lists, pick, said, guesses }))
 }
 
 #[cfg(test)]
@@ -520,14 +552,22 @@ mod tests {
         assert_eq!(held(&of(&cat, r)), Holding::Partly { has: 17, of: 18 });
     }
 
-    /// PAIR01.19: play history moves by `incoming::pair`, never by `assign` (an assignment always pairs, and a wrong pair moves
-    /// play history: DOMAIN-CORE B.2). A guard.
+    /// PAIR01.19 (as amended 2026-11-21: VR01's C13, RECHECK-DC1-VR01's N3): Replace's carry-over of play history stays
+    /// `incoming::pair`'s, never `assign`'s; the join, whose pairs move play history too (`taken_for_good`), is the one pairing for
+    /// identity: `assign` with X3's title rule deciding each verdict (`Fit::No` where it refuses); `paired_tracks_in` is gone, not
+    /// kept as dead code. A guard, re-pointed at the join's own function. Red first: the join called `paired_tracks_in` (over
+    /// `incoming::pair`) at the base.
     #[test]
     fn play_history_moves_by_incoming_pair() {
         let incoming = include_str!("../incoming.rs").replace('\r', "");
         assert!(!incoming.contains("assign"), "Replace's pairing stays incoming::pair's");
         let records = include_str!("records.rs").replace('\r', "");
-        let join = records.split("\nfn paired_tracks_in(").nth(1).and_then(|rest| rest.split("\n}\n").next()).unwrap();
-        assert!(join.contains("crate::incoming::pair(") && !join.contains("assign"), "the two-copies join stays incoming::pair's");
+        assert!(!records.contains("fn paired_tracks_in("), "paired_tracks_in deleted");
+        let body = |name: &str| records.split(&format!("\nfn {name}(")).nth(1).and_then(|rest| rest.split("\n}\n").next()).map(str::to_string);
+        let join = body("joined_tracks_in").expect("the join's own function");
+        assert!(join.contains("assign(") && join.contains("titled_as(") && join.contains("Fit::No"), "the join pairs by assign, the title rule deciding");
+        assert!(!join.contains("incoming::pair("), "the join no longer pairs by Replace's passes");
+        let joins = body("join_had_in").unwrap();
+        assert!(joins.contains("joined_tracks_in(") && joins.contains("taken_for_good("), "the join's pairs move play history");
     }
 }

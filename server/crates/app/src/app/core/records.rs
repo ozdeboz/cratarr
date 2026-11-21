@@ -96,10 +96,24 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         })
         .collect();
     let plays = copy_for(&choosing, Some(&crate::serve::copies::Viewer::default()), &on.without).map(|c| c.folder);
+    // What Replace in may put in a main library's place (RS4, RS7; the Library's rules, `copies::replace_offers` and `against`):
+    // someone's own better copy (RY01), and an arrival better than the copy that plays (RS13's `against`), by folder.
+    let mut replacing: Vec<(i64, i64)> = crate::serve::copies::replace_offers(&choosing, &on.without).into_iter().map(|(own, main)| (own.folder, main.folder)).collect();
+    for arrival in choosing.iter().filter(|c| c.kind == Kind::Incoming) {
+        if let Some((true, row)) = crate::serve::copies::against(&choosing, arrival)
+            && row.kind == Kind::Main
+        {
+            replacing.push((arrival.folder, row.folder));
+        }
+    }
+    // A had record's type is the one its copy was built with (the release type rule over its deciding copy, RF1), as the Library
+    // list and the device's index serve it: one rule for the Head, the rows and the index (VR39); else the record's own.
+    let album = crate::serve::ids::record(row.id);
+    let built = if row.had { serve.record_types(std::slice::from_ref(&album)).remove(&album).and_then(|(kind, _)| kind) } else { None };
     let facts = RecordFacts {
         id: row.id,
         title: row.title.clone(),
-        kind: row.kind.clone(),
+        kind: built.or_else(|| row.kind.clone()),
         secondary: Vec::new(),
         year: row.year,
         artists: read.artists.iter().map(|(id, name)| Named { id: crate::serve::ids::artist(*id), name: name.clone(), catno: None }).collect(),
@@ -109,16 +123,41 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         hand: Vec::new(),
         copies,
         shortest,
-        picked: row.counted_by_hand,
+        only_guesses: read.copies.only_guesses,
+        picked: read.copies.picked,
+        lists: read.lists.clone(),
+        pick: read.pick.clone(),
+        years: said_of(&read, "year"),
+        types: said_of(&read, "type"),
+        // The release type rule over the picked list's titles and lengths (VR39, M10): the one rule the build types an album by.
+        picked_kind: read.pick.as_ref().and_then(|p| read.lists.iter().find(|l| &l.reference == p)).and_then(|l| {
+            let lengths: Vec<Option<u64>> = l.tracks.iter().map(|t| t.length_ms.and_then(|ms| u64::try_from(ms).ok())).collect();
+            crate::serve::library::type_by_files(&row.title, &lengths)
+        }),
         plays,
-        preview: read.bandcamp.clone(),
+        // The preview's album as the page's Bandcamp album view asks it: its `bc.` id (PAGE3-REPORT), never the page's address.
+        preview: read.bandcamp.as_deref().map(|page| crate::bandcamp::track_id(page, 0)),
         requests: around.requests.iter().map(|(asker, n)| (asker.clone(), n.to_string())).collect(),
-        replacing: Vec::new(),
+        replacing,
         editions: around.editions.clone(),
         libraries: around.libraries.clone(),
     };
     let _ = viewer;
     Ok(Some((rev, facts)))
+}
+
+/// Each source's value of one of a record's facts, per reference (`kind:value`, none for a fact no reference gives), each a guess's
+/// where its reference is one (VR8): what `resolve()` reads (VR39). A value that does not read as one is none.
+fn said_of<T: std::str::FromStr>(read: &crate::catalogue::holding::RecordRead, fact: &str) -> Vec<cratarr_domain::facts::Said<T>> {
+    read.said
+        .iter()
+        .filter(|s| s.fact == fact)
+        .map(|s| {
+            let reference = s.of.split_once(':').map(|(kind, value)| cratarr_domain::facts::Reference::new(&s.source, kind, value));
+            let guessed = reference.as_ref().is_some_and(|r| read.guesses.contains(r));
+            cratarr_domain::facts::Said { reference, source: s.source.clone(), value: s.value.as_deref().and_then(|v| v.parse().ok()), guessed }
+        })
+        .collect()
 }
 
 /// A record's labels as its view names them (A2.5): one a label, its catalogue numbers joined.
@@ -371,6 +410,122 @@ mod tests {
         assert!(again.entities.is_empty(), "MUSIC's alone");
     }
 
+    /// A record's sources' lists and facts as a read keeps them, on its references.
+    fn tracks(n: u32, ms: i64) -> Vec<crate::catalogue::identity::RefTrack> {
+        (1..=n).map(|p| crate::catalogue::identity::RefTrack { disc: 1, position: p, title: format!("Track {p}"), length_ms: Some(ms), recording: None }).collect()
+    }
+
+    fn held(serve: &Serve, record: i64, refs: &[(&str, &str, &str, &str)]) {
+        for (source, kind, value, how) in refs {
+            serve.catalogue().set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new(source, kind, value), how).unwrap();
+        }
+    }
+
+    fn says(serve: &Serve, record: i64, fact: &str, source: &str, kind: &str, value: &str, said: &str) {
+        let of = crate::catalogue::facts::of_ref(kind, value);
+        serve.catalogue().said(record, fact, source, &of, Some(said), 1).unwrap();
+    }
+
+    /// VR39 (FA13, M10, OQ-VR-9 (c); the entity's half of the domain's `resolve_year`/`resolve_type`): Salt Lines, not had,
+    /// MusicBrainz 2014 on `G70`, Discogs 2015 on `M70`: its year two versions, none chosen, and the Head none; Bandcamp's 2014 on
+    /// `P70` joins MusicBrainz's version; a guess's year (`R70s`, found by its names) counts in nothing. Its type: none while its
+    /// sources differ ("Album" twice beside Bandcamp's "EP"), theirs once all agree, its why said (revised by the owner, 2026-11-21
+    /// 13:59: no majority). Low Ceiling, one each: no type until root picks Discogs' list
+    /// (11 tracks, 52:00), then the release type rule's over it, "by the picked list", and the picked release's year. A had record's
+    /// year is its files', its type the rule's. Red first: the year one value with no versions, the type the record's own column.
+    #[test]
+    fn a_records_year_and_type_are_resolved_none_chosen() {
+        let serve = served();
+        let salt = serve.catalogue().record_for_tests("Salt Lines", 0);
+        held(&serve, salt, &[("musicbrainz", "release-group", "G70", "link"), ("discogs", "master", "M70", "link"), ("bandcamp", "album", "P70", "link"), ("musicbrainz", "release", "R70s", "search")]);
+        says(&serve, salt, "year", "musicbrainz", "release-group", "G70", "2014");
+        says(&serve, salt, "year", "discogs", "master", "M70", "2015");
+        says(&serve, salt, "year", "musicbrainz", "release", "R70s", "1999");
+        let versions = |e: &Entity<RecordProperties>| e.properties.year.versions.iter().map(|v| (v.value, v.by.join(","))).collect::<Vec<_>>();
+        let e = answer(&serve, salt, &alice(), &Place::Search, &[]);
+        assert_eq!(e.properties.year.value, None, "the Head shows no year until a hand picks");
+        assert_eq!(versions(&e), [(Some(2014), "musicbrainz".to_string()), (Some(2015), "discogs".to_string())], "a guess's 1999 is none");
+        says(&serve, salt, "year", "bandcamp", "album", "P70", "2014");
+        let e = answer(&serve, salt, &alice(), &Place::Search, &[]);
+        assert_eq!(versions(&e), [(Some(2014), "musicbrainz,bandcamp".to_string()), (Some(2015), "discogs".to_string())]);
+        for (source, kind, value, said) in [("musicbrainz", "release-group", "G70", "Album"), ("discogs", "master", "M70", "Album"), ("bandcamp", "album", "P70", "EP")] {
+            says(&serve, salt, "type", source, kind, value, said);
+        }
+        let e = answer(&serve, salt, &alice(), &Place::Search, &[]);
+        assert_eq!((e.properties.kind.value.clone(), e.properties.type_why.as_str()), (None, ""), "Album, Album, EP: none until a hand picks");
+        says(&serve, salt, "type", "bandcamp", "album", "P70", "Album");
+        let e = answer(&serve, salt, &alice(), &Place::Search, &[]);
+        assert_eq!((e.properties.kind.value.as_deref(), e.properties.type_why.as_str()), (Some("Album"), "by its sources"), "all agree");
+        let low = serve.catalogue().record_for_tests("Low Ceiling", 0);
+        held(&serve, low, &[("musicbrainz", "release-group", "G72", "link"), ("discogs", "release", "D72", "link")]);
+        says(&serve, low, "type", "musicbrainz", "release-group", "G72", "EP");
+        says(&serve, low, "type", "discogs", "release", "D72", "Album");
+        says(&serve, low, "year", "musicbrainz", "release-group", "G72", "2015");
+        says(&serve, low, "year", "discogs", "release", "D72", "2016");
+        let e = answer(&serve, low, &alice(), &Place::Search, &[]);
+        assert_eq!((e.properties.kind.value.clone(), e.properties.type_why.as_str()), (None, ""), "one each: no tie broken by a source's name");
+        let discogs = crate::catalogue::lists::Reference::new("discogs", "release", "D72");
+        serve.catalogue().keep_list(low, &discogs, &tracks(11, 52 * 60_000 / 11), 1).unwrap();
+        serve.catalogue().pick_list(low, Some(&discogs)).unwrap();
+        let e = answer(&serve, low, &root(), &Place::Search, &[]);
+        assert_eq!((e.properties.kind.value.as_deref(), e.properties.type_why.as_str()), (Some("album"), "by the picked list"));
+        assert_eq!((e.properties.year.value, e.properties.year.versions.len()), (Some(2016), 2), "the picked release's year, the versions still said");
+        let had = night_ferry(&serve, &[(MUSIC, "FLAC", 900)]);
+        serve.catalogue().db_for_tests().execute("UPDATE records SET year = 2014, kind = 'album' WHERE id = ?1", [had]).unwrap();
+        says(&serve, had, "year", "discogs", "release", "D42", "2015");
+        let e = answer(&serve, had, &alice(), &Place::Library, &[]);
+        assert_eq!((e.properties.year.value, e.properties.year.by.first().map(String::as_str)), (Some(2014), Some("files")), "FA1: the files decide");
+        assert!(e.properties.year.versions.is_empty(), "Discogs' 2015 no version of a had record");
+        assert_eq!(e.properties.type_why, "by the release type rule");
+    }
+
+    /// VR6 and FA7 (twins, one test; the record entity's half): Answered, not had, shows MusicBrainz's 9 alone, one version, no
+    /// Versions section; (a) Bandcamp's 9 agreeing joins it, still one; (b) Discogs' 11 makes two versions, none marked; (c)
+    /// MusicBrainz's re-read of the same release gives 10, that reference's row replaced (one row a reference): three, "9 tracks ·
+    /// Bandcamp", "10 tracks · MusicBrainz", "11 tracks · Discogs"; (d) Discogs switched off: its row kept with its `at`, still a
+    /// version (the entity reads what is kept, never a source). Each step logged (LV1). Never the first list keeping its mark
+    /// because it came first. Red first: no Tracklist lines (part 1: copies and editions alone).
+    #[test]
+    fn a_later_list_joins_or_splits_the_versions() {
+        let serve = served();
+        let cat = serve.catalogue().clone();
+        let answered = cat.record_for_tests("Answered", 0);
+        let (mb, bc, dc) = (
+            crate::catalogue::lists::Reference::new("musicbrainz", "release", "R7"),
+            crate::catalogue::lists::Reference::new("bandcamp", "album", "P7"),
+            crate::catalogue::lists::Reference::new("discogs", "release", "D7"),
+        );
+        let lines = || -> Vec<(Option<u16>, String, bool)> {
+            answer(&serve, answered, &root(), &Place::Search, &[]).entities.iter().map(|v| (v.tracks, v.sources.join(", "), v.plays)).collect()
+        };
+        let logged = |before: i64| {
+            serve.refresh().unwrap();
+            let now = serve.userdata.change_rev().unwrap();
+            assert!(now > before, "each step one change row (LV1): {now} > {before}");
+            now
+        };
+        let rev = serve.userdata.change_rev().unwrap();
+        cat.keep_list(answered, &mb, &tracks(9, 200_000), 1).unwrap();
+        let rev = logged(rev);
+        assert!(lines().is_empty(), "one version: no Versions section");
+        cat.keep_list(answered, &bc, &tracks(9, 200_000), 2).unwrap();
+        let rev = logged(rev);
+        assert!(lines().is_empty(), "(a) Bandcamp's agreeing list joins it: one version");
+        cat.keep_list(answered, &dc, &tracks(11, 200_000), 3).unwrap();
+        let rev = logged(rev);
+        assert_eq!(lines(), [(Some(9), "MusicBrainz, Bandcamp".to_string(), false), (Some(11), "Discogs".to_string(), false)], "(b) two, none marked");
+        cat.keep_list(answered, &mb, &tracks(10, 200_000), 4).unwrap();
+        logged(rev);
+        let three = [(Some(9), "Bandcamp".to_string(), false), (Some(10), "MusicBrainz".to_string(), false), (Some(11), "Discogs".to_string(), false)];
+        assert_eq!(lines(), three, "(c) the release's row replaced: three");
+        assert_eq!(cat.lists_kept(answered).unwrap().iter().filter(|l| l.reference == mb).count(), 1, "(c) one row a reference");
+        let was = crate::app::switches::set_for_tests(crate::app::switches::DISCOGS, false);
+        let lines_off = lines();
+        crate::app::switches::set_for_tests(crate::app::switches::DISCOGS, was);
+        assert_eq!(lines_off, three, "(d) switched off: Discogs' list still a version");
+        assert_eq!(cat.lists_kept(answered).unwrap().iter().find(|l| l.reference == dc).map(|l| l.at), Some(3), "(d) kept with its at");
+    }
+
     /// RS4: copies and editions are one Versions list, the copy that plays first and marked, the others to play from; a record of
     /// one version has none. RS5: the list follows the place's set: with MUSIC off from the Library, MUSIC's line goes and IN's is
     /// not marked; from a playlist the same (it follows the switch since 21:37).
@@ -394,8 +549,9 @@ mod tests {
     fn the_copy_reader_is_read_once_per_list() {
         const READERS: [&str; 5] = ["catalogue().copies_of(", "cat.copies_of(", ".copies_held(", ".requested_held(", ".record_read("];
         // (file, calls): what each reads.
-        let allowed: [(&str, usize, &str); 5] = [
+        let allowed: [(&str, usize, &str); 6] = [
             ("app/src/app/core/records.rs", 1, "one record: its view, or the handler deciding (`decided`)"),
+            ("incoming/src/app/albums.rs", 1, "one record's copies judged for copying (`judged_copies`: VR28, by the holding's pairs)"),
             ("playing/src/app/device_index.rs", 1, "every record of the index at once, at its build"),
             ("requests/src/app/requests.rs", 2, "every open request's record at once (`records_held`); one request's story (`held_for`)"),
             ("requests/src/app/had_vectors.rs", 1, "the vectors' records at once (a test)"),

@@ -6,6 +6,11 @@ import type { Section } from "./Section";
 
 /**
  * One action this viewer may take now (RV10): its entry's name, words, icon and group (`words::entry`), the section it is drawn
- * in, and its address: today's handler, its copy named where it acts on one. `confirm`: the yes `decide` asks for first.
+ * in, and its address: today's handler, its copy named where it acts on one. `confirm`: the yeses `decide` asks for first, in order
+ * (RS25: a main library's Delete asks twice, decision 0034).
  */
-export type ActionView = { name: string, title: string, icon: string, group: EntryGroup, section: Section, method: Method, href: string, fields?: ActionFields, confirm?: string, };
+export type ActionView = { name: string, title: string, icon: string, group: EntryGroup, section: Section, method: Method, href: string, fields?: ActionFields, confirm?: Array<string>, 
+/**
+ * Whether it works with Cratarr away (RS8, RS17): the device offers it from its cached entity only where this is true.
+ */
+away: boolean, };

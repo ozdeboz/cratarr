@@ -441,5 +441,70 @@
         "from": 4
       }
     }
+  },
+  {
+    "about": "VR12 rule 6 (C16): only guesses' lists kept, MUSIC's copy of every file: not known whole, never Had",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": null,
+    "guessed": true,
+    "viewer": "alice",
+    "without": [],
+    "holding": "unknown"
+  },
+  {
+    "about": "VR12 rule 6: only guesses kept, MUSIC's 9: not known whole, no count, never Partly",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 9,
+        "paired": 9,
+        "went": null
+      }
+    ],
+    "shortest": null,
+    "guessed": true,
+    "viewer": "alice",
+    "without": [],
+    "holding": "unknown"
+  },
+  {
+    "about": "VR48 (f): only guesses kept, an Incoming arrival: not known whole, never Arrived",
+    "copies": [
+      {
+        "folder": 1,
+        "library": {
+          "incoming": {
+            "fetcher": "lidarr",
+            "uploader": null
+          }
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": null,
+    "guessed": true,
+    "viewer": "alice",
+    "without": [],
+    "holding": "unknown"
+  },
+  {
+    "about": "VR12 rule 6: only guesses kept and no copy: not had",
+    "copies": [],
+    "shortest": null,
+    "guessed": true,
+    "viewer": "alice",
+    "without": [],
+    "holding": "not_had"
   }
 ]

@@ -194,6 +194,17 @@ pub struct Runner {
     next: AtomicU64,
     journal: Mutex<Option<Arc<Journal>>>,
     providers: Mutex<Vec<(&'static str, Provider)>>,
+    /// Each schedule, with what holds it (`every`'s `paused`).
+    schedules: Mutex<Vec<(Schedule, fn() -> bool)>>,
+}
+
+/// A schedule on the runner (SCENARIOS-LOOKUPS LK.S1; RV12 (d)): a job kind asked for its work every `period_secs`, one loop a
+/// kind, its lookups runner jobs that Activity shows; `paused` while what holds it says so ("Pause background reading").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Schedule {
+    pub kind: String,
+    pub period_secs: u64,
+    pub paused: bool,
 }
 
 /// Cratarr's runner.
@@ -221,7 +232,63 @@ impl Runner {
             next: AtomicU64::new(0),
             journal: Mutex::new(None),
             providers: Mutex::new(Vec::new()),
+            schedules: Mutex::new(Vec::new()),
         }
+    }
+
+    /// A schedule (LK.S1): every `period` (the first a period after now, for as long as the server runs), unless `paused` says
+    /// so, `due` is asked for the work due now, without a job; only where it names some does a job of `kind` begin (Cratarr's, no
+    /// account's), keyed as `due` keys it, doing `work`. An idle or paused tick writes no job row. One job of a schedule at a time:
+    /// a tick while its last still runs asks nothing; one of that kind and key already running (an open's) is followed, not
+    /// doubled. One loop a kind: a second call for a kind already scheduled is refused, and nothing starts.
+    pub fn every<D, DF, W, WF, T>(&'static self, kind: &str, period: Duration, paused: fn() -> bool, due: D, work: W) -> Result<(), String>
+    where
+        D: Fn() -> DF + Send + Sync + 'static,
+        DF: std::future::Future<Output = Option<(String, T)>> + Send + 'static,
+        W: Fn(T) -> WF + Send + Sync + 'static,
+        WF: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+        T: Send + 'static,
+    {
+        {
+            let mut schedules = self.schedules.lock().unwrap_or_else(|e| e.into_inner());
+            if schedules.iter().any(|(s, _)| s.kind == kind) {
+                return Err(format!("{kind} is scheduled already"));
+            }
+            schedules.push((Schedule { kind: kind.to_string(), period_secs: period.as_secs(), paused: false }, paused));
+        }
+        let kind = kind.to_string();
+        let work = Arc::new(work);
+        let busy = Arc::new(AtomicBool::new(false));
+        cratarr_store::run::spawn(async move {
+            let mut every = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                every.tick().await;
+                if paused() || busy.load(Ordering::SeqCst) {
+                    continue;
+                }
+                let Some((key, item)) = due().await else { continue };
+                let Ok(handle) = self.begin_keyed(&kind, &key, None) else { continue };
+                busy.store(true, Ordering::SeqCst);
+                let (work, done) = (work.clone(), busy.clone());
+                if run(Arc::new(handle), move |_| async move {
+                    let result = work(item).await;
+                    done.store(false, Ordering::SeqCst);
+                    result
+                })
+                .is_err()
+                {
+                    busy.store(false, Ordering::SeqCst);
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// The schedules begun, each by its kind, its period and whether it is paused now (LK.S1).
+    pub fn schedules(&self) -> Vec<Schedule> {
+        let schedules = self.schedules.lock().unwrap_or_else(|e| e.into_inner());
+        schedules.iter().map(|(s, paused)| Schedule { paused: paused(), ..s.clone() }).collect()
     }
 
     fn list(&self) -> std::sync::MutexGuard<'_, Vec<Kept>> {
@@ -615,6 +682,60 @@ mod tests {
     /// A runner of the test's own (a restart is a new one on the same journal), living as long as the tests.
     fn fresh() -> &'static Runner {
         Box::leak(Box::new(Runner::new()))
+    }
+
+    /// LK.S1's shape (RV12 (d)): a schedule names its kind, period and pause in the runner's list, a second of one kind is refused;
+    /// a tick begins a job of its kind, keyed by its work, only where work is due and nothing holds it: an idle or paused minute
+    /// writes no job row. Red first: no schedules on the runner (bare `run::spawn` loops).
+    #[tokio::test(start_paused = true)]
+    async fn a_schedule_is_a_runner_job_each_tick() {
+        static PAUSED: AtomicBool = AtomicBool::new(false);
+        fn paused() -> bool {
+            PAUSED.load(Ordering::SeqCst)
+        }
+        let r = fresh();
+        let next: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+        let (asked, done) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
+        let due = {
+            let (next, asked) = (next.clone(), asked.clone());
+            move || {
+                asked.fetch_add(1, Ordering::SeqCst);
+                let item = next.lock().unwrap().take();
+                async move { item.map(|n| (format!("al-{n}"), n)) }
+            }
+        };
+        let work = {
+            let done = done.clone();
+            move |_: i64| {
+                done.fetch_add(1, Ordering::SeqCst);
+                async { Ok(()) }
+            }
+        };
+        r.every("record:read", Duration::from_secs(60), paused, due, work).unwrap();
+        let none = || async { None::<(String, i64)> };
+        assert!(r.every("record:read", Duration::from_secs(600), paused, none, |_| async { Ok(()) }).is_err(), "one loop a kind");
+        assert_eq!(r.schedules(), [Schedule { kind: "record:read".into(), period_secs: 60, paused: false }]);
+        let jobs = |key: &str| r.list().iter().filter(|k| k.task.kind == "record:read" && k.key.as_deref() == Some(key)).count();
+        let minute = |secs: u64| async move {
+            tokio::time::sleep(Duration::from_secs(secs)).await;
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+        };
+        minute(61).await;
+        assert_eq!((asked.load(Ordering::SeqCst), done.load(Ordering::SeqCst)), (1, 0), "nothing due: asked, no work");
+        assert!(r.list().iter().all(|k| k.task.kind != "record:read"), "an idle minute writes no job row");
+        *next.lock().unwrap() = Some(7);
+        minute(60).await;
+        assert_eq!((done.load(Ordering::SeqCst), jobs("al-7")), (1, 1), "work due: one job of its kind, keyed by its work");
+        PAUSED.store(true, Ordering::SeqCst);
+        *next.lock().unwrap() = Some(8);
+        minute(60).await;
+        assert_eq!((asked.load(Ordering::SeqCst), done.load(Ordering::SeqCst), jobs("al-8")), (2, 1, 0), "a paused minute asks nothing and writes no job row");
+        assert!(r.schedules()[0].paused, "the schedule shows its pause");
+        PAUSED.store(false, Ordering::SeqCst);
+        minute(60).await;
+        assert_eq!((done.load(Ordering::SeqCst), jobs("al-8")), (2, 1), "on again: the work due is done");
     }
 
     // ---- tasks.rs' three, moved with their assertions (SCENARIOS-RN's equivalence pins)

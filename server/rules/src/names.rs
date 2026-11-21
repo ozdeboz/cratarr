@@ -126,9 +126,80 @@ pub fn credit_text(names: &[&str], phrase: Option<&str>) -> String {
     }
 }
 
+/// A track's title as every surface names it (OBJ5, OB2: one name for a track): its name, else its file's name without its
+/// extension, never a "…" for an empty one.
+pub fn track_title(name: Option<&str>, file: &str) -> String {
+    if let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) {
+        return name.to_string();
+    }
+    let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
+    base.rsplit_once('.').map_or(base, |(stem, _)| stem).trim().to_string()
+}
+
+/// A track's second line (OBJ5): its credit (by `credit_text`, NAMES.24), then " · " and its record's title line; either alone where
+/// the other is none. Rows, cards, the player, the queue, the notification and OpenSubsonic say it by this one rule.
+pub fn track_line(credit: &str, record: &str) -> String {
+    match (credit.trim(), record.trim()) {
+        ("", r) => r.to_string(),
+        (c, "") => c.to_string(),
+        (c, r) => format!("{c} · {r}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// OBJ5 (DC1b's OB2, moved): a track's words are one rule, its title (its name, else its file's) and its second line (its
+    /// credit by the one formatter, then its record's title line), written to shared/track-names.json for the page's, the app's and
+    /// the device's tests. Red first: no rule (the title built five ways, "…" for an empty name on one surface, the file's name on
+    /// another; "artist · album" joined in place; the file's ARTIST sent raw).
+    #[test]
+    fn a_tracks_words_are_one_rule() {
+        #[derive(serde::Serialize)]
+        struct Case {
+            name: Option<&'static str>,
+            file: &'static str,
+            artists: Vec<&'static str>,
+            record: &'static str,
+            title: String,
+            line: String,
+        }
+        let case = |name: Option<&'static str>, file: &'static str, artists: Vec<&'static str>, record: &'static str| {
+            let title = track_title(name, file);
+            let line = track_line(&credit_text(&artists, None), record);
+            Case { name, file, artists, record, title, line }
+        };
+        let cases = vec![
+            case(Some("Pier"), "Glass Harbour/Night Ferry/01 Pier.flac", vec!["Glass Harbour"], "Night Ferry"),
+            case(Some("Hydra"), "Deep Harbour/01 Hydra.flac", vec!["Commodo", "Alfa Mist"], "Deep Harbour"),
+            case(Some("Echo"), "Deep Harbour/03 Echo.flac", vec!["Anz", "Commodo", "Alfa Mist"], "Deep Harbour"),
+            case(None, "Kite Theory/Answered/02 Lamplight.mp3", vec!["Kite Theory"], "Answered"),
+            case(Some("  "), "Kite Theory/Answered/03 Morning.mp3", vec![], "Answered"),
+            case(Some("Interlude"), "loose/Interlude.flac", vec!["Kite Theory"], ""),
+        ];
+        assert_eq!(cases[1].line, "Commodo & Alfa Mist · Deep Harbour", "never the file's raw \"Commodo / Alfa Mist\"");
+        assert_eq!(cases[2].line, "Anz, Commodo & Alfa Mist · Deep Harbour");
+        assert_eq!(cases[3].title, "02 Lamplight", "no name: the file's, never \"…\"");
+        assert_eq!((cases[4].title.as_str(), cases[4].line.as_str()), ("03 Morning", "Answered"), "an empty name is none; no credit, the record alone");
+        assert_eq!(cases[5].line, "Kite Theory", "no record: the credit alone");
+        #[derive(serde::Serialize)]
+        struct Table {
+            about: &'static str,
+            cases: Vec<Case>,
+        }
+        let table = Table {
+            about: "A track's words (SCENARIOS-DC1 OBJ5), written by the rules crate's tests: its title (its name, else its file's) and its second line (its credit by credit_text, then ' · ' and its record's title line), one rule for the page, the app and the device.",
+            cases,
+        };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shared/track-names.json");
+        let json = serde_json::to_string_pretty(&table).unwrap() + "\n";
+        let kept = std::fs::read_to_string(&path).unwrap_or_default().replace('\r', "");
+        if kept != json {
+            std::fs::write(&path, &json).unwrap();
+            panic!("shared/track-names.json was not the table's written form: written now, commit it");
+        }
+    }
 
     /// NAMES.24's formatter (its rules half; the surfaces are DC3's SPLIT): every artist named, "A & B", "A, B & C", one alone, a
     /// confirming source's own phrase as it gives it. Red first: a card names the album artist alone (records.rs's artist line).

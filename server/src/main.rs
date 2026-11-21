@@ -348,6 +348,19 @@ async fn main() -> Result<()> {
     // The OpenSubsonic API (decision 0030), kept in step with the catalogue in the background. Opened before the app
     // (above), so the built-in Cratarr source can answer while the app starts (decision 0032).
     served.attach_catalogue(app.library.catalogue());
+    // 0.18's step, its part `facts` (VR42), once the catalogue is attached (what it and the fold read through `served`): 0.17's lists keyed by reference, its counts and years carried, once.
+    let facts = app::references::step_018_facts(&served).context("cannot finish 0.18's step (facts)")?;
+    tracing::info!(target: "migration", "0.18's facts: {}", serde_json::to_string(&facts.counts).unwrap_or_default());
+    // RV12 (d): the records' due read, a schedule on the runner (one record a tick, never in bulk).
+    if let Err(e) = app::references::start_due_reads() {
+        tracing::warn!(target: "library", "the records' due read: {e}");
+    }
+    // Its part `fold` (FA22): F40's pairs, one tracklist one record, joined once; each merge said for the HA session.
+    if let Some(folded) = served.catalogue().fold_018(&served.library.kinds(), &|| Ok(())).context("cannot finish 0.18's step (fold)")? {
+        for (from, into) in folded {
+            tracing::info!(target: "migration", "0.18's fold: al-{from} into al-{into}");
+        }
+    }
     served.set_playlists(app.crates.clone());
     // Who is still in the directory's group, every hour (decision 0051).
     serve::accounts::watch_directory(served.clone());

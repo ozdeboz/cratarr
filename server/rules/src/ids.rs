@@ -5,6 +5,16 @@ pub const SONG: &str = "tr-";
 pub const ALBUM: &str = "al-";
 pub const ARTIST: &str = "ar-";
 
+/// A record's picture as every answer sends it (OBJ5's one resolver for a record and its tracks): the address a source's kept
+/// picture has where one is, else the server's own cover of the record (`/api/cover/cratarr/al-<n>`), which resolves the chosen
+/// cover (the files', or a source's; COU.11's store from DC1a part 3). Never worked out on the page.
+pub fn record_picture(album_id: &str, kept: Option<&str>) -> String {
+    match kept.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(k) => k.to_string(),
+        None => format!("/api/cover/cratarr/{album_id}"),
+    }
+}
+
 /// A song's id from its Cratarr track id.
 pub fn song(track: i64) -> String {
     format!("{SONG}{track}")

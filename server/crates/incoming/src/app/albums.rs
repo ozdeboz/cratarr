@@ -411,6 +411,18 @@ fn judged_copies(served: &crate::serve::Serve, album: &str, record: i64) -> anyh
     let cat = served.catalogue();
     let list = cat.requested(&[record])?.get(&record).and_then(|q| q.list);
     let whole = served.library.whole_of(album);
+    // VR28 (VR17: one place judges whole): while the record keeps a list, each copy is short by the holding's pairs (`held_in`),
+    // never by a count or its files' totals; only guesses kept, not known whole, never whole for copying (VR12 rule 6). With no
+    // list kept, the files' totals still speak (S.1, OQ-Q (b); T8).
+    let places = super::room::Places::of(&served.library.kinds(), &cat.folders());
+    let held = cat.copies_of(&[record], &super::requests::library_of(&served.library.kinds(), &places))?.remove(&record).unwrap_or_default();
+    let by_pairs = |folder: i64| -> Option<bool> {
+        if held.only_guesses {
+            return Some(true);
+        }
+        let of = held.shortest?;
+        held.copies.iter().find(|c| c.folder == folder).map(|c| c.paired < of)
+    };
     served
         .library
         .copies_of(album)?
@@ -420,7 +432,7 @@ fn judged_copies(served: &crate::serve::Serve, album: &str, record: i64) -> anyh
             let tracks = files.iter().filter_map(|(t, _)| *t).collect::<std::collections::BTreeSet<i64>>().len();
             let judged = Judged {
                 fewer_than_its_copies: c.short,
-                short_of_list: list.map(|n| tracks < n),
+                short_of_list: by_pairs(c.folder).or(list.map(|n| tracks < n)),
                 checked: whole.map(|w| Missing { has: tracks as u32, of: w.tracks as u32 }),
                 files: files.into_iter().map(|(_, n)| n).collect(),
             };

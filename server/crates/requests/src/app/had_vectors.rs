@@ -89,7 +89,7 @@ fn said(h: Holding) -> String {
         Holding::Elsewhere => "elsewhere".into(),
         Holding::Arrived => "arrived".into(),
         Holding::Partly { has, of } => format!("partly {has} of {of}"),
-        Holding::NotHad | Holding::Retired { .. } => "none".into(),
+        Holding::NotHad | Holding::Retired { .. } | Holding::Unknown => "none".into(),
     }
 }
 
@@ -139,7 +139,6 @@ fn the_record_had_rules_agree_with_holding_but_the_named_rows() {
         let record = cat.record_for_tests(&name, 0);
         if listed {
             cat.set_reference_tracks(record, "musicbrainz", &list).unwrap();
-            cat.set_counting(record, Some("musicbrainz"), false).unwrap();
         }
         let mut tracks = std::collections::BTreeMap::new();
         for (folder, places, extra) in copies {

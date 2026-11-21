@@ -39,13 +39,14 @@ function entity(more: Partial<Entity> = {}): Entity {
     rev: 100,
     epoch: 'alice|User|Full|request|',
     properties: {
-      type: { value: 'EP', by: [] },
-      title: { value: 'Night Ferry', by: [] },
-      artists: { value: [{ id: 'ar-1', name: 'Glass Harbour' }], by: [] },
+      type: { value: 'EP', by: [], versions: [] },
+      type_why: '',
+      title: { value: 'Night Ferry', by: [], versions: [] },
+      artists: { value: [{ id: 'ar-1', name: 'Glass Harbour' }], by: [], versions: [] },
       credit: 'Glass Harbour',
-      year: { value: 2019, by: [] },
-      labels: { value: [], by: [] },
-      cover: { value: null, by: [] },
+      year: { value: 2019, by: [], versions: [] },
+      labels: { value: [], by: [], versions: [] },
+      cover: { value: null, by: [], versions: [] },
     },
     state: { is: 'had', words: 'In your library' },
     actions: [],
@@ -65,7 +66,7 @@ test('the Head draws the state as sent', () => {
   const retired = entity({ state: { is: 'retired', words: 'Was in MORE until', at } });
   assert.equal(stateLine(retired, when), `Was in MORE until ${when(at)}`, 'its time said by the one when()');
   assert.deepEqual(headChips(entity()), ['Glass Harbour', 'EP', '2019'], 'artists by the one formatter, the type word, the year');
-  assert.deepEqual(headChips(entity({ properties: { ...entity().properties, year: { value: null, by: [] }, type: { value: null, by: [] } } })), ['Glass Harbour', 'Record']);
+  assert.deepEqual(headChips(entity({ properties: { ...entity().properties, year: { value: null, by: [], versions: [] }, type: { value: null, by: [], versions: [] } } })), ['Glass Harbour', 'Record']);
   // No state word is written in the sheet: they come with the entity.
   for (const s of shared('record-states.json').states as { words: string }[]) {
     const words = s.words.split('{')[0];

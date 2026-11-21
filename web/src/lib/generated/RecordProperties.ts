@@ -6,4 +6,9 @@ import type { Named } from "./Named";
  * A record's properties (RV1): each a fact. `type` is its release type; `credit` its artists as one text, by the one formatter
  * (rules' `credit_text`).
  */
-export type RecordProperties = { type: FactView<string | null>, title: FactView<string>, artists: FactView<Array<Named>>, credit: string, year: FactView<number | null>, labels: FactView<Array<Named>>, cover: FactView<string | null>, };
+export type RecordProperties = { type: FactView<string | null>, 
+/**
+ * What its type is by, in the server's words (VR39): "by the release type rule", "by the picked list", "by its sources",
+ * "set by you"; none where it has none.
+ */
+type_why: string, title: FactView<string>, artists: FactView<Array<Named>>, credit: string, year: FactView<number | null>, labels: FactView<Array<Named>>, cover: FactView<string | null>, };

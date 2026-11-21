@@ -31,11 +31,13 @@ CREATE TABLE IF NOT EXISTS \"references\" (
   PRIMARY KEY (source, kind, value, subject)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS references_of ON \"references\" (subject);
 CREATE UNIQUE INDEX IF NOT EXISTS references_one ON \"references\" (source, kind, value) WHERE kind IN ('release', 'album', 'artist', 'label');
--- The tracklist a record's reference gives at a source (JSON, `identity::RefTrack`), and when it was read: what judges a folder
--- and what the record's page lists.
+-- The tracklist a record's reference gives at a source (JSON, `identity::RefTrack`), and when it was read: what judges a copy
+-- whole and what the record's versions list. One row per reference (VR7 (b), H5): the release read (or the group or master read
+-- through, where the record holds no release of it); kind and value empty for a list 0.17 kept, until 0.18's step keys it.
 CREATE TABLE IF NOT EXISTS reference_tracks (
-  record INTEGER NOT NULL, source TEXT NOT NULL, tracks TEXT NOT NULL, at INTEGER NOT NULL,
-  PRIMARY KEY (record, source)) WITHOUT ROWID;
+  record INTEGER NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL DEFAULT '', value TEXT NOT NULL DEFAULT '',
+  tracks TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (record, source, kind, value)) WITHOUT ROWID;
 -- X9: the record made for the first request by its names alone whose names several live albums of the artist share (X8), by
 -- those names folded (`artist|title`): a later such request takes it, so two accounts asking for one name share one record.
 CREATE TABLE IF NOT EXISTS shared_name_records (names TEXT PRIMARY KEY, record INTEGER NOT NULL) WITHOUT ROWID;
@@ -584,12 +586,23 @@ pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<
             tx.execute("UPDATE \"references\" SET confirmed = 1 WHERE subject = ?1 AND source = ?2 AND kind = ?3 AND value = ?4", params![target, r.source, r.kind, r.value])?;
         }
     }
-    tx.execute("INSERT OR IGNORE INTO reference_tracks (record, source, tracks, at) SELECT ?2, source, tracks, at FROM reference_tracks WHERE record = ?1", params![from, into])?;
+    // One list per reference (VR41, FA16; OQ-VR-5 (b)): each moves; where both hold one reference's, the later `at` stays, whichever
+    // way the merge runs. Two releases' lists of one source are two rows, both kept. The facts move the same way.
+    tx.execute(
+        "INSERT INTO reference_tracks (record, source, kind, value, tracks, at) SELECT ?2, source, kind, value, tracks, at FROM reference_tracks WHERE record = ?1 AND true
+         ON CONFLICT (record, source, kind, value) DO UPDATE SET tracks = excluded.tracks, at = excluded.at WHERE excluded.at > reference_tracks.at",
+        params![from, into],
+    )?;
     tx.execute("DELETE FROM reference_tracks WHERE record = ?1", [from])?;
+    super::facts::merge_in(tx, from, into)?;
+    // A hand's pick alone is carried (VR10, M7): a count 0.17 worked out never becomes `into`'s.
     tx.execute(
         "UPDATE records SET
-           counted_by_hand = CASE WHEN counting IS NULL AND counted_by_hand = 0 THEN (SELECT counted_by_hand FROM records WHERE id = ?1) ELSE counted_by_hand END,
-           counting = COALESCE(counting, (SELECT counting FROM records WHERE id = ?1)),
+           counting_ref = CASE WHEN counted_by_hand = 0 AND (SELECT counted_by_hand FROM records WHERE id = ?1) = 1
+                               THEN (SELECT counting_ref FROM records WHERE id = ?1) ELSE counting_ref END,
+           counting = CASE WHEN counted_by_hand = 0 AND (SELECT counted_by_hand FROM records WHERE id = ?1) = 1
+                           THEN (SELECT counting FROM records WHERE id = ?1) ELSE counting END,
+           counted_by_hand = max(counted_by_hand, (SELECT counted_by_hand FROM records WHERE id = ?1)),
            checked_by_hand = max(checked_by_hand, (SELECT checked_by_hand FROM records WHERE id = ?1)),
            title = COALESCE(title, (SELECT title FROM records WHERE id = ?1)), artist = COALESCE(artist, (SELECT artist FROM records WHERE id = ?1)),
            year = COALESCE(year, (SELECT year FROM records WHERE id = ?1)), kind = COALESCE(kind, (SELECT kind FROM records WHERE id = ?1)),
@@ -700,7 +713,9 @@ fn sureness(how: &str) -> u8 {
     match how {
         "hand" => 3,
         "files" => 2,
-        "link" => 1,
+        // A release read through a group or master that is no guess, and a group a request was asked with by its id: no name
+        // search (VR8, H1, RV-2).
+        "link" | "group" | "asked" => 1,
         _ => 0,
     }
 }
@@ -806,17 +821,15 @@ fn let_go_list(tx: &Connection, record: i64, files: &[super::identity::Listed]) 
     if by_hand && counting.as_deref() == Some("musicbrainz") {
         return Ok(());
     }
-    if tx.execute("DELETE FROM reference_tracks WHERE record = ?1 AND source = 'musicbrainz'", [record])? == 0 || by_hand {
-        return Ok(());
-    }
-    let kept: Vec<(String, Vec<RefTrack>)> = {
-        let mut st = tx.prepare_cached("SELECT source, tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
-        let rows: Vec<(String, String)> = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        rows.into_iter().filter_map(|(source, tracks)| Some((source, serde_json::from_str(&tracks).ok()?))).collect()
-    };
-    let lists: Vec<(&str, &[RefTrack])> = kept.iter().map(|(s, l)| (s.as_str(), l.as_slice())).filter(|(_, l)| !l.is_empty()).collect();
-    let worked = if files.is_empty() { None } else { super::identity::counting(None, &lists, files) };
-    tx.execute("UPDATE records SET counting = ?2 WHERE id = ?1 AND counted_by_hand = 0", params![record, worked])?;
+    // The list of a release the record no longer holds goes (VR23 (c)); another release's stays while the record holds it, and a
+    // list 0.17 kept unkeyed (its MusicBrainz list, read for the release the files named) goes with the files' change. Nothing is
+    // counted (VR10).
+    let _ = files;
+    tx.execute(
+        "DELETE FROM reference_tracks WHERE record = ?1 AND source = 'musicbrainz' AND (kind = '' OR (kind = 'release' AND NOT EXISTS
+           (SELECT 1 FROM \"references\" r WHERE r.subject = 'al-' || ?1 AND r.source = 'musicbrainz' AND r.kind = 'release' AND r.value = reference_tracks.value)))",
+        [record],
+    )?;
     Ok(())
 }
 
@@ -825,17 +838,8 @@ fn let_go_list(tx: &Connection, record: i64, files: &[super::identity::Listed]) 
 /// came (Soulseek's search, `tracklist`, in the design's order) keeps that count only where the list agrees with the files that
 /// came; else none counts until one is chosen, the owner's rule for a record with files (`identity::counting`).
 pub(super) fn recount_in(tx: &Connection, record: i64, files: &[super::identity::Listed]) -> Result<()> {
-    if files.is_empty() || tx.query_row("SELECT counted_by_hand FROM records WHERE id = ?1", [record], |r| r.get::<_, bool>(0))? {
-        return Ok(());
-    }
-    let kept: Vec<(String, Vec<RefTrack>)> = {
-        let mut st = tx.prepare_cached("SELECT source, tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
-        let rows: Vec<(String, String)> = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        rows.into_iter().filter_map(|(source, tracks)| Some((source, serde_json::from_str(&tracks).ok()?))).collect()
-    };
-    let lists: Vec<(&str, &[RefTrack])> = kept.iter().map(|(s, l)| (s.as_str(), l.as_slice())).filter(|(_, l)| !l.is_empty()).collect();
-    let worked = super::identity::counting(None, &lists, files);
-    tx.execute("UPDATE records SET counting = ?2 WHERE id = ?1 AND counted_by_hand = 0", params![record, worked])?;
+    // Nothing is worked out (VR10): a record's lists are versions, none chosen but by a hand.
+    let _ = (tx, record, files);
     Ok(())
 }
 
@@ -2601,7 +2605,7 @@ impl Catalogue {
     /// on), a record whose certain match from 0.16 waits for its list (`lists_to_read`) waits off it: what 0.16 left off the
     /// item stays off until the list is read, and goes on it only where the list does not agree. With MusicBrainz off no list
     /// comes, and it is on the item (R7). Blocking.
-    pub fn unreferenced(&self, lists_read: bool) -> Result<Vec<i64>> {
+    pub fn unreferenced(&self, lists_read: bool, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Vec<i64>> {
         let db = self.db();
         let mut st = db.prepare_cached(
             "SELECT r.id FROM records r
@@ -2612,8 +2616,17 @@ impl Catalogue {
                  AND (f.how = 'hand' OR (f.how = 'files' AND f.source = 'musicbrainz' AND f.kind = 'release')))
              ORDER BY r.id",
         )?;
-        let rows = st.query_map([lists_read], |r| r.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let rows: Vec<i64> = st.query_map([lists_read], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        // RI.1's clause (SCENARIOS-HS01; landed with VR01's VR10, which leaves no count worked out to keep a record off): a had
+        // record a kept list agrees with is referenced, by VR2's one rule; the item's two lines are HS01's.
+        let sure = |folder: i64| crate::serve::library::kind_in(kinds, folder).0 != crate::settings::LibraryKind::Incoming;
+        let mut out = Vec::with_capacity(rows.len());
+        for record in rows {
+            if !super::lists::files_agree_in(&db, record, &sure)? {
+                out.push(record);
+            }
+        }
+        Ok(out)
     }
 
     /// The subjects a reference names: one, for a release, an album page, an artist or a label; for a release group or a master,
@@ -2690,11 +2703,11 @@ impl Catalogue {
     /// worked out again. Worked out, it never takes the place of one chosen by hand: the hand comes first (0.14). Whether it was
     /// written. Blocking.
     pub fn set_counting(&self, record: i64, source: Option<&str>, by_hand: bool) -> Result<bool> {
-        let changed = if by_hand {
-            self.db().execute("UPDATE records SET counting = ?2, counted_by_hand = ?3 WHERE id = ?1", params![record, source, source.is_some()])?
-        } else {
-            self.db().execute("UPDATE records SET counting = ?2 WHERE id = ?1 AND counted_by_hand = 0", params![record, source])?
-        };
+        // Nothing is worked out (VR10): a count by anything but a hand writes nothing.
+        if !by_hand {
+            return Ok(false);
+        }
+        let changed = self.db().execute("UPDATE records SET counting = ?2, counting_ref = NULL, counted_by_hand = ?3 WHERE id = ?1", params![record, source, source.is_some()])?;
         Ok(changed > 0)
     }
 }
@@ -3968,7 +3981,7 @@ impl Catalogue {
 /// folded in turn (`fold_one_in`), the name read again after each, until none is left. One that cannot be folded (a reference the other
 /// cannot take) is left as it was, said in the log, and the rest go on. Each merge, (the record that went, the one it went into), in
 /// order.
-fn fold_in(tx: &Connection, at: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Vec<(i64, i64)>> {
+pub(super) fn fold_in(tx: &Connection, at: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Vec<(i64, i64)>> {
     use super::identity::title_key;
     let mut named: std::collections::BTreeMap<(i64, String), Vec<i64>> = std::collections::BTreeMap::new();
     {
@@ -3981,6 +3994,25 @@ fn fold_in(tx: &Connection, at: i64, kinds: &[(i64, crate::settings::LibraryKind
             let key = title_key(&title);
             if !key.is_empty() {
                 named.entry((artist, key)).or_default().push(id);
+            }
+        }
+        // A had record no artist is credited on (FA18: a second directory of one album in one library, the build crediting an album's
+        // first record alone) goes by its artist's name, where one artist alone has that name's key (`credited_or_named`).
+        let mut st = tx.prepare(
+            "SELECT r.id, COALESCE(r.title, '') FROM records r
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM record_artists a WHERE a.record = r.id)
+             ORDER BY r.id",
+        )?;
+        let uncredited: Vec<(i64, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (id, title) in uncredited {
+            let key = title_key(&title);
+            if key.is_empty() || !live_had(tx, id)? {
+                continue;
+            }
+            for artist in credited_or_named(tx, id)? {
+                let ids = named.entry((artist, key.clone())).or_default();
+                ids.push(id);
+                ids.sort_unstable();
             }
         }
     }
@@ -4094,8 +4126,8 @@ fn fold_one_in(tx: &Connection, artist: i64, from: i64, into: i64, at: i64, kind
 /// F11.1 (the owner: "One record, two copies"): the had record `from` joined to the older had record `into`, where both are live, of
 /// one title's key (`identity::title_key`) whose type agrees (RG1, `type_agrees`), credited to one artist (by id), holding no references
 /// that contradict, one kept in Incoming alone and the other with a copy in a main library, neither in an account's own music (RG2,
-/// `two_copies_in`: the one rule, at the upgrade's fold as when a copy arrives), and their copies' tracks pair one for one as Replace
-/// pairs them (`paired_tracks_in`): each of `from`'s tracks retires for good into its pair (`taken_for_good`: its files, and what names
+/// `two_copies_in`: the one rule, at the upgrade's fold as when a copy arrives), and their copies' tracks pair one for one by the one
+/// pairing for identity (`joined_tracks_in`: `assign` with X3's title rule, PAIR01.19 as amended): each of `from`'s tracks retires for good into its pair (`taken_for_good`: its files, and what names
 /// it at the first build, `track_moved`), then `from`, holding none, merges into `into` (`merge_records_in`): its references, artists
 /// and labels there, its id answering as `into`. A different tracklist stays another edition (Q8), two artist ids two records. Whether
 /// it was joined. In the caller's transaction.
@@ -4115,14 +4147,13 @@ fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64, kinds: &[(i64, cr
     if !type_agrees(&named, &other, class(into)) || !type_agrees(&other, &named, class(from)) {
         return Ok(false);
     }
-    let one_artist: bool = tx
-        .prepare_cached("SELECT EXISTS (SELECT 1 FROM record_artists a JOIN record_artists b ON b.artist = a.artist WHERE a.record = ?1 AND b.record = ?2)")?
-        .query_row(params![from, into], |r| r.get(0))?;
+    let (by_from, by_into) = (credited_or_named(tx, from)?, credited_or_named(tx, into)?);
+    let one_artist = by_from.iter().any(|a| by_into.contains(a));
     if !one_artist || contradicts(&refs_in(tx, &ids::record(from))?, &refs_in(tx, &ids::record(into))?) {
         return Ok(false);
     }
     let Some(main) = two_copies_in(tx, from, into, kinds)? else { return Ok(false) };
-    let Some(pairs) = paired_tracks_in(tx, into, from, main, kinds)? else { return Ok(false) };
+    let Some(pairs) = joined_tracks_in(tx, into, from, main, kinds)? else { return Ok(false) };
     for (goes, stays) in pairs {
         tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {} WHERE id = ?1", super::REMEMBER), params![goes, at])?;
         super::taken_for_good(tx, goes, stays)?;
@@ -4131,11 +4162,30 @@ fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64, kinds: &[(i64, cr
     Ok(true)
 }
 
-/// RG2 (one rule for two copies, at the upgrade's fold as when a copy arrives): which of two had records `a` and `b` is the main
-/// library's where they may be one record's two copies: the other kept in Incoming alone (every present copy of it there), it with a
-/// copy in a main library, and neither with a copy in an account's own music (a user's facts set by hand on their own record never
-/// come onto the house's). Each catalogue folder's library as `kinds` has it (`library::kind_in`). None where they may not. In the
-/// caller's transaction.
+/// The artists a record is credited on; where it is credited on none (a second directory of one album in one library: the build
+/// credits an album's first record alone, FA18), the one artist whose name's key is its artist's name's, as a file's name with no id
+/// credits one; none where no artist or several have that key (same-name artists, an id each). In the caller's transaction.
+fn credited_or_named(tx: &Connection, record: i64) -> Result<Vec<i64>> {
+    let credited: Vec<i64> =
+        tx.prepare_cached("SELECT artist FROM record_artists WHERE record = ?1 ORDER BY position")?.query_map([record], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    if !credited.is_empty() {
+        return Ok(credited);
+    }
+    let name: String = tx.prepare_cached("SELECT COALESCE(artist, '') FROM records WHERE id = ?1")?.query_row([record], |r| r.get(0)).optional()?.unwrap_or_default();
+    let key = ids::artist_key(&name);
+    if key.is_empty() {
+        return Ok(Vec::new());
+    }
+    let named: Vec<i64> = tx.prepare_cached("SELECT id FROM artists WHERE key = ?1 LIMIT 2")?.query_map([key], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(if named.len() == 1 { named } else { Vec::new() })
+}
+
+/// RG2 (one rule for two copies, at the upgrade's fold as when a copy arrives), RG2-wide (FA18, F40: one tracklist is one record):
+/// which of two had records `a` and `b` stays where they may be one record's two copies: any pair of copies in main or Incoming
+/// libraries (MUSIC and MORE, IN and IN2, MUSIC and IN, and a main library with itself), never one with a copy in an account's own
+/// music (a user's facts set by hand on their own record never come onto the house's). The record with a copy in a main library
+/// stays; where both or neither have one, the older (the lower id). Each catalogue folder's library as `kinds` has it
+/// (`library::kind_in`). None where they may not. In the caller's transaction.
 fn two_copies_in(tx: &Connection, a: i64, b: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Option<i64>> {
     use crate::settings::LibraryKind;
     let kinds_of = |record: i64| -> Result<Vec<LibraryKind>> {
@@ -4149,27 +4199,59 @@ fn two_copies_in(tx: &Connection, a: i64, b: i64, kinds: &[(i64, crate::settings
         Ok(folders.into_iter().map(|f| crate::serve::library::kind_in(kinds, f).0).collect())
     };
     let (of_a, of_b) = (kinds_of(a)?, kinds_of(b)?);
-    let alone = |k: &[LibraryKind]| !k.is_empty() && k.iter().all(|k| *k == LibraryKind::Incoming);
     let main = |k: &[LibraryKind]| k.contains(&LibraryKind::Main);
-    if of_a.contains(&LibraryKind::Own) || of_b.contains(&LibraryKind::Own) {
+    if of_a.is_empty() || of_b.is_empty() || of_a.contains(&LibraryKind::Own) || of_b.contains(&LibraryKind::Own) {
         return Ok(None);
     }
-    Ok(if alone(&of_a) && main(&of_b) { Some(b) } else if alone(&of_b) && main(&of_a) { Some(a) } else { None })
+    Ok(Some(match (main(&of_a), main(&of_b)) {
+        (true, false) => a,
+        (false, true) => b,
+        _ => a.min(b),
+    }))
 }
 
 /// Two had records' copies (`first_copy_in`: the main library's record's there, `main`; the other's, kept in Incoming alone) paired
-/// track for track as Replace pairs them (`incoming::pair`, RF2's rule): every track of each a pair, none left over; each pair as
-/// (`from`'s track, `into`'s track). None where they do not. In the caller's transaction.
-fn paired_tracks_in(tx: &Connection, into: i64, from: i64, main: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Option<Vec<(i64, i64)>>> {
+/// one for one for the join (PAIR01.19 as amended 2026-11-21; VR01's C13, RV-20): the one pairing for identity, `assign`, with X3's
+/// title rule both ways deciding each pair (another title, or a version word one side says and the other lacks, is `Fit::No`); a
+/// length within the slack costs its difference, and one past it, or unknown, pairs by its title alone, never refused: identity is
+/// not wholeness (the holding still judges by lengths). A place only breaks ties: a file with no number joins by its title. Every
+/// track of each a pair, none left over; each pair as (`from`'s track, `into`'s track). None where they do not. Replace's carry-over
+/// of play history stays `incoming::pair`'s. In the caller's transaction.
+fn joined_tracks_in(tx: &Connection, into: i64, from: i64, main: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Option<Vec<(i64, i64)>>> {
+    use cratarr_domain::identity::titled_as;
+    use cratarr_rules::assign::{Fit, Side, assign, fit};
     let in_main = |folder: i64| crate::serve::library::kind_in(kinds, folder).0 == crate::settings::LibraryKind::Main;
-    let copy = |r: i64| first_copy_in(tx, r, &|folder: i64| r != main || in_main(folder));
+    // The record that stays is read by its main library's copy where it has one (FA18: a main library with itself too).
+    let main_in_main = first_copy_in(tx, main, &in_main)?.is_some();
+    let copy = |r: i64| first_copy_in(tx, r, &|folder: i64| r != main || !main_in_main || in_main(folder));
     let (Some(old), Some(new)) = (copy(into)?, copy(from)?) else { return Ok(None) };
-    let facts = |copy: &[(i64, crate::incoming::TrackFacts)]| copy.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>();
-    let paired = crate::incoming::pair(&facts(&old), &facts(&new));
-    if old.is_empty() || !paired.added.is_empty() || !paired.retired.is_empty() {
+    if old.is_empty() || old.len() != new.len() {
         return Ok(None);
     }
-    Ok(Some(paired.pairs.iter().map(|(o, n)| (new[*n].0, old[*o].0)).collect()))
+    let ms = |f: &crate::incoming::TrackFacts| f.duration_ms.and_then(|ms| i64::try_from(ms).ok());
+    let keys = |copy: &[(i64, crate::incoming::TrackFacts)]| copy.iter().map(|(track, _)| format!("{track:012}")).collect::<Vec<_>>();
+    let (old_keys, new_keys) = (keys(&old), keys(&new));
+    fn sides<'k>(copy: &[(i64, crate::incoming::TrackFacts)], keys: &'k [String]) -> Vec<Side<'k>> {
+        copy.iter()
+            .zip(keys)
+            .map(|((_, f), key)| Side { disc: Some(f.disc.unwrap_or(1)), number: f.number, key, length_ms: f.duration_ms.and_then(|ms| i64::try_from(ms).ok()) })
+            .collect()
+    }
+    let (tracks, files) = (sides(&old, &old_keys), sides(&new, &new_keys));
+    let pairs = assign(&tracks, &files, |t, f| {
+        let (a, b) = (&old[t].1.title, &new[f].1.title);
+        if !titled_as(a, b) || !titled_as(b, a) {
+            return Fit::No;
+        }
+        match fit(ms(&old[t].1), ms(&new[f].1)) {
+            Fit::No => Fit::ByTitleAlone,
+            near => near,
+        }
+    });
+    if pairs.len() != old.len() {
+        return Ok(None);
+    }
+    Ok(Some(pairs.iter().map(|&(o, n)| (new[n].0, old[o].0)).collect()))
 }
 
 /// A had record's first copy as Replace reads one (RF2), in the catalogue folders `only` takes: the present files of its live tracks in
@@ -4356,7 +4438,7 @@ impl Catalogue {
             for artist in credits.query_map([record], |r| r.get::<_, i64>(0))? {
                 uncredited.insert(artist?);
             }
-            for table in ["record_labels", "reference_tracks", "lists_to_read"] {
+            for table in ["record_labels", "reference_tracks", "lists_to_read", "facts"] {
                 tx.prepare_cached(&format!("DELETE FROM {table} WHERE record = ?1"))?.execute([record])?;
             }
             tx.prepare_cached("DELETE FROM records WHERE id = ?1")?.execute([record])?;
@@ -5681,15 +5763,16 @@ mod tests {
         assert!(cat.reference_tracks(id + 1).unwrap().is_empty());
 
         let counts = || cat.record(id).unwrap().map(|r| (r.counting, r.counted_by_hand)).unwrap();
-        assert!(cat.set_counting(id, Some("musicbrainz"), false).unwrap());
-        assert_eq!(counts(), (Some("musicbrainz".to_string()), false));
+        // VR10, changed by design: nothing is worked out; a count is a hand's pick alone.
+        assert!(!cat.set_counting(id, Some("musicbrainz"), false).unwrap(), "worked out: nothing written");
+        assert_eq!(counts(), (None, false));
         assert!(cat.set_counting(id, Some("discogs"), true).unwrap());
         assert!(!cat.set_counting(id, Some("bandcamp"), false).unwrap(), "worked out, it never replaces the hand's");
         assert_eq!(counts(), (Some("discogs".to_string()), true));
         assert!(cat.set_counting(id, None, true).unwrap());
-        assert_eq!(counts(), (None, false), "taken back by hand: to be worked out again");
-        assert!(cat.set_counting(id, Some("bandcamp"), false).unwrap());
-        assert_eq!(counts(), (Some("bandcamp".to_string()), false));
+        assert_eq!(counts(), (None, false), "taken back by hand: none, nothing worked out in its place");
+        assert!(!cat.set_counting(id, Some("bandcamp"), false).unwrap());
+        assert_eq!(counts(), (None, false));
     }
 
     /// RT01's clock in the tests: now, and a month.

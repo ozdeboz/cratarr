@@ -211,6 +211,11 @@ pub struct Version {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_id: Option<String>,
+    /// Its record's type and secondary types as the Library list serves them (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     pub year: Option<u32>,
     /// Its record's performers, where MusicBrainz names them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -373,6 +378,8 @@ pub struct Index {
     aliases: HashMap<String, String>,
     /// A song's work, a work's songs, a work's title and composers, and the songs' lines.
     song_work: HashMap<String, String>,
+    /// A song's recording (MusicBrainz's), where known: one recording on two copies is no other version (FA21, F50).
+    song_recording: HashMap<String, String>,
     work_songs: HashMap<String, Vec<String>>,
     works: HashMap<String, (String, Vec<ComposerRef>)>,
     lines: HashMap<String, Line>,
@@ -417,9 +424,15 @@ impl Index {
         self.composers.iter().filter(|c| crate::search::matches(&c.name, words) || c.sort_name.as_deref().is_some_and(|s| crate::search::matches(s, words))).collect()
     }
 
-    /// Whether the library holds another track of the song's work.
+    /// Whether the library holds another track of the song's work (no copy of its own recording: FA21).
     pub fn has_versions(&self, song: &str) -> bool {
-        self.song_work.get(song).and_then(|w| self.work_songs.get(w)).is_some_and(|s| s.len() > 1)
+        self.song_work.get(song).and_then(|w| self.work_songs.get(w)).is_some_and(|s| s.iter().any(|o| self.another(song, o)))
+    }
+
+    /// Whether `other` is another version of `song`: another track, and no copy of the same recording (FA21, F50).
+    fn another(&self, song: &str, other: &str) -> bool {
+        let recording = self.song_recording.get(song);
+        other != song && (recording.is_none() || self.song_recording.get(other) != recording)
     }
 
     /// A classical record's track's composers (its work's); none for another's.
@@ -440,7 +453,9 @@ impl Index {
             .get(w)
             .into_iter()
             .flatten()
-            .filter(|s| s.as_str() != song)
+            // One recording on two copies (two records not joined, one in an account's own music) is the same track, never another
+            // version (FA21's Never).
+            .filter(|s| self.another(song, s))
             .filter_map(|s| {
                 let l = self.lines.get(s)?;
                 Some(Version {
@@ -450,11 +465,22 @@ impl Index {
                     artist: Some(l.artist.clone()).filter(|a| !a.is_empty()),
                     album: Some(l.album.clone()),
                     album_id: Some(l.album_id.clone()),
+                    album_type: None,
+                    album_secondary: Vec::new(),
                     year: l.year,
                     performers: self.performers.get(&l.album_id).cloned().unwrap_or_default(),
                 })
             })
-            .collect();
+            .collect::<Vec<Version>>();
+        // GOTO.S1, S6: each its record's type, as the Library list serves it, one read for them all.
+        let mut versions = versions;
+        let albums: Vec<String> = versions.iter().filter_map(|v| v.album_id.clone()).collect();
+        let types = crate::serve::instance().map(|s| s.record_types(&albums)).unwrap_or_default();
+        for v in &mut versions {
+            if let Some((kind, secondary)) = v.album_id.as_ref().and_then(|a| types.get(a)) {
+                (v.album_type, v.album_secondary) = (kind.clone(), secondary.clone());
+            }
+        }
         Some(Versions { work: WorkRef { mbid: w.clone(), title: title.clone() }, composers: composers.clone(), versions })
     }
 
@@ -889,6 +915,9 @@ pub fn build(i: &Inputs) -> Index {
         };
         let Some(work) = track.and_then(|t| t.works.iter().find(|x| i.works.contains_key(*x))) else { continue };
         index.song_work.insert(s.id.clone(), work.clone());
+        if let Some(recording) = s.recording.clone().or_else(|| track.and_then(|t| t.recording.clone())) {
+            index.song_recording.insert(s.id.clone(), recording);
+        }
         index.work_songs.entry(work.clone()).or_default().push(s.id.clone());
         index.lines.insert(
             s.id.clone(),
@@ -1290,9 +1319,12 @@ mod tests {
     #[test]
     fn other_versions_are_the_library_s_tracks_of_the_same_work() {
         let mut i = library();
-        // A second recording of the sonata, Zimerman's, on its own release; and a track of no work.
+        // A second recording of the sonata, Zimerman's, on its own release (its recording's id its own: FA21 keeps one recording's
+        // copies out of Other versions, and the fixture's ids were one by accident); and a track of no work.
         i.albums.push(album("al-zimerman", "Krystian Zimerman", None, &["Classical"], Some("r-zimerman")));
-        i.releases.insert("r-zimerman".into(), release(&["w-sonata"], &["Krystian Zimerman"]));
+        let mut zimerman = release(&["w-sonata"], &["Krystian Zimerman"]);
+        zimerman.tracks[0].recording = Some("rec-zimerman-sonata".into());
+        i.releases.insert("r-zimerman".into(), zimerman);
         let song = |id: &str, album: &str, recording: Option<&str>, track: u32| WorkSong {
             id: id.into(),
             album: album.into(),
@@ -1317,6 +1349,40 @@ mod tests {
         assert!(ix.versions("so-arrau-9", "cratarr").is_none());
         assert!(!ix.has_versions("so-arrau-9"));
         assert_eq!(ix.song_composers("so-arrau-1")[0].key, "a-brahms");
+    }
+
+    /// FA21 (F50): one recording on two copies is the same track: a track's Other versions lists no row of it, each row naming its
+    /// record and year. Arrau's sonata on two records (one release, two copies the join keeps apart: one in an account's own
+    /// music), Zimerman's another recording. Red first: the second copy's row was listed as another version.
+    #[test]
+    fn one_recording_on_two_copies_is_no_other_version() {
+        let mut i = library();
+        i.albums.push(album("al-arrau-own", "Claudio Arrau", Some("a-arrau"), &["Classical"], Some("r-arrau")));
+        i.albums.push(album("al-zimerman", "Krystian Zimerman", None, &["Classical"], Some("r-zimerman")));
+        let mut zimerman = release(&["w-sonata"], &["Krystian Zimerman"]);
+        zimerman.tracks[0].recording = Some("rec-zimerman-sonata".into());
+        i.releases.insert("r-zimerman".into(), zimerman);
+        let song = |id: &str, album: &str, recording: Option<&str>| WorkSong {
+            id: id.into(),
+            album: album.into(),
+            recording: recording.map(str::to_string),
+            disc: None,
+            track: Some(1),
+            title: format!("{id} title"),
+            artist: "Someone".into(),
+            year: None,
+            duration_secs: None,
+        };
+        // The copy's song names no recording of its own: its place on the one release says it (`rec-w-sonata-0`).
+        i.songs = vec![song("so-arrau-1", "al-arrau", Some("rec-w-sonata-0")), song("so-own-1", "al-arrau-own", None), song("so-zim-1", "al-zimerman", None)];
+        let ix = build(&i);
+        let rows = |id: &str| ix.versions(id, "cratarr").unwrap().versions.into_iter().map(|v| (v.id, v.album_id, v.year)).collect::<Vec<_>>();
+        assert_eq!(rows("so-arrau-1"), [("so-zim-1".to_string(), Some("al-zimerman".to_string()), Some(1990))], "never the same recording's other copy");
+        assert_eq!(rows("so-own-1"), [("so-zim-1".to_string(), Some("al-zimerman".to_string()), Some(1990))]);
+        assert_eq!(rows("so-zim-1").len(), 2, "Zimerman's: Arrau's recording on each of its copies' records, its record named on each row");
+        i.songs.pop();
+        let ix = build(&i);
+        assert!(!ix.has_versions("so-arrau-1") && !ix.has_versions("so-own-1"), "one recording's two copies alone: no Other versions");
     }
 
     /// The library of the works' tests (0.12): Arrau's record holds Brahms' first piano concerto as its three movements

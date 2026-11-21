@@ -20,13 +20,15 @@ import {
   openRecord,
   openArtist,
   notAnswered,
+  type Task,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
 import { player } from './live.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playAlbumHere, playPlaylistFrom } from './output.svelte';
 import { choosePlayer, port } from './player/port.svelte';
-import { albumSubject, artistSubject, viewOver } from './panel.svelte';
+import { albumSubject, artistMoved, artistSubject, viewOver } from './panel.svelte';
+import { tasks } from './tasks.svelte';
 import { albumIdOf, BANDCAMP } from './bandcampPreview';
 import { howToOpen, type Openable } from './openRecord';
 import { wantFailed } from './wantPath';
@@ -234,13 +236,27 @@ export async function openArtistPage(x: ArtistOpen): Promise<void> {
   if ('id' in x) return goToArtist('cratarr', x.id);
   if ('mbid' in x) {
     try {
-      const { artist } = await openArtist(x.mbid, x.name);
-      return goToArtist('cratarr', artist);
+      const { artist, task } = await openArtist(x.mbid, x.name);
+      goToArtist('cratarr', artist);
+      if (task) void decided(artist, task);
+      return;
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 403)) throw e;
     }
   }
   goToArtist('cratarr', x.name);
+}
+
+/** An open's job followed to its end (SCENARIOS-LOOKUPS LK.P1): where it decided on another artist than the open answered,
+ *  the page moves there, as to an id the server names; a job that fails leaves it on the artist answered. */
+async function decided(answered: string, task: Task) {
+  try {
+    const ended = await tasks.ended(task);
+    const to = (ended.result as { artist?: unknown } | null)?.artist;
+    if (!ended.error && typeof to === 'string' && to !== answered) artistMoved('cratarr', answered, to);
+  } catch {
+    /* gone: the page stays on the artist answered */
+  }
 }
 
 /** An album not in the library opened (W9, lib/openRecord): its record's page, made one first where no record holds it yet,
