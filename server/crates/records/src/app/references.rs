@@ -733,12 +733,13 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
 
 /// The reader of a page's and Soulseek's reads: `read_reference`, keeping what a record's own Bandcamp page says of it besides
 /// its list as it is read (GEN.60): its tags, as Bandcamp's words of the record whose reference the page is (`words::keep_bandcamp`).
-/// A page read so is the record's own reference (`main_ref`), never a candidate. Without Cratarr's own library, `read_reference`.
+/// A page read so is the record's own reference (`main_ref`), never a candidate. Read through the References door (CU15); without
+/// Cratarr's own library, the door's read alone.
 pub fn read_reference_kept(served: Option<Arc<crate::serve::Serve>>) -> impl Fn(Ref) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Read>>> + Send>> + Send + Sync + 'static {
     move |r: Ref| {
         let served = served.clone();
         Box::pin(async move {
-            let read = read_reference(r.clone()).await;
+            let read = super::references_door::read(r.clone()).await;
             if let Ok(Some((_, _, more))) = &read
                 && r.source == "bandcamp"
             {

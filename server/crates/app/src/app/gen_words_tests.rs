@@ -94,13 +94,12 @@ fn only_a_records_own_bandcamp_page_keeps_its_tags() {
         ("api/src/api.rs", 2),
         ("base/src/app/describe.rs", 1),
         ("playing/src/app/playing.rs", 1),
-        ("requests/src/app/soulseek.rs", 1),
     ] {
         let text = read(file);
         let n = text.matches("words::keep_bandcamp(").count() + text.matches("words::keep_bandcamp_read(").count() + text.matches("references::read_reference_kept(").count();
         assert!(n >= keeps, "{file}: {n} of {keeps} reads keep the record's own page's tags");
     }
-    for file in ["requests/src/app/requests.rs", "records/src/app/discover.rs", "playing/src/app/radio.rs", "playing/src/app/playon.rs", "records/src/app/related.rs"] {
+    for file in ["requests/src/app/requests.rs", "requests/src/app/soulseek.rs", "records/src/app/discover.rs", "playing/src/app/radio.rs", "playing/src/app/playon.rs", "records/src/app/related.rs"] {
         assert!(!read(file).contains("keep_bandcamp"), "{file}: a candidate's or another page's read keeps nothing");
     }
 }
