@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 
 import type { AlbumCopy, LibraryInfo } from '../src/lib/api.ts';
 
-const { copyLines, copyPlaying, dotsOf, librariesOf, mayEdit, playFromEntries, recordOn } = await import('../src/lib/copiesRule.ts');
+const { copyLines, copyPlaying, dotsOf, librariesOf, playFromEntries, recordOn } = await import('../src/lib/copiesRule.ts');
 
 const library = (id: string, kind: LibraryInfo['kind'], colour: string | null = `#${id}`) => ({ id, name: id.toUpperCase(), kind, colour }) as LibraryInfo;
 const INFO = [library('music', 'main'), library('more', 'main'), library('in', 'incoming'), library('own', 'own')];
@@ -221,23 +221,27 @@ test('a copy short of the record\'s tracks says how much of it is there, where a
   assert.deepEqual(copyLines(a, INFO, without()).map((l) => l.size), ['92 MB', '3 of 10']);
 });
 
+// Edit's right is the server's now (SCENARIOS-DC1 CN5): `decide()`, its rows in shared/policy.json, the record's one sheet offering
+// Edit only where the server sends it. The same verdicts as the page's mayEdit had, read from the table; the first own copy's
+// order (theirs came first, mine beside a main library's copy) is the domain's `edit_is_the_administrators_and_the_first_own_copys_owner`.
+const policy = JSON.parse(readFileSync(new URL('../../shared/policy.json', import.meta.url), 'utf8')) as { viewers: string[]; rows: { state: string; action: string; answers: string[] }[] };
+const edit = (state: string, viewer: string) => {
+  const row = policy.rows.find((r) => r.state === state && /\bEdit\b/.test(r.action))!;
+  return row.answers[policy.viewers.indexOf(viewer)];
+};
+
 test('an administrator may edit any record, and nobody else one in a main library or Incoming, a copy of their own beside it or not', () => {
-  const info = [library('music', 'main'), library('in', 'incoming'), { ...library('mine', 'own'), mine: true }, library('yours', 'own')];
-  assert.equal(mayEdit(copies('music'), info, true), true);
-  assert.equal(mayEdit(copies('yours'), info, true), true);
-  assert.equal(mayEdit(copies('music'), info, false), false);
-  assert.equal(mayEdit(copies('mine', 'music'), info, false), false, 'owned by the administrators');
-  assert.equal(mayEdit(copies('mine', 'in'), info, false), false);
-  assert.equal(mayEdit({}, info, false), false, 'a list that names no copies');
+  for (const admin of ['root', 'admin2']) {
+    assert.equal(edit('had, MUSIC', admin), 'yes');
+    assert.equal(edit("had only in OWN-A, alice's first", admin), 'yes');
+  }
+  for (const user of ['alice', 'bob', 'carol']) assert.equal(edit('had, MUSIC', user), 'no: right');
 });
 
-test('a record only in people\'s own music is the owner\'s of the copy added first', () => {
-  const info = [{ ...library('mine', 'own'), mine: true }, library('yours', 'own')];
-  assert.equal(mayEdit(copies('mine'), info, false), true);
-  assert.equal(mayEdit(copies('yours'), info, false), false, 'not another\'s');
-  const first = { copies: [copy('yours', { added: 200 }), copy('mine', { added: 100 })] };
-  assert.equal(mayEdit(first, info, false), true, 'mine came first');
-  assert.equal(mayEdit({ copies: [copy('yours', { added: 100 }), copy('mine', { added: 200 })] }, info, false), false, 'theirs did');
+test("a record only in people's own music is the owner's of the copy added first", () => {
+  assert.equal(edit("had only in OWN-A, alice's first", 'alice'), 'yes');
+  assert.equal(edit("had only in OWN-A, alice's first", 'bob'), 'no: right', "not another's");
+  assert.ok(!/\bmayEdit\b/.test(readFileSync(new URL('../src/lib/copiesRule.ts', import.meta.url), 'utf8')), 'the page decides it no more');
 });
 
 test('lines keep the list\'s order, which is the order the copies would play, wherever the marked one stands in it', () => {
