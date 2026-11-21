@@ -255,8 +255,6 @@ pub mod said {
     pub const KEY: &str = "This key can't change anything.";
     pub const OWNER: &str = "This is for the owner of this music.";
     pub const ASKERS: &str = "This is for administrators and whoever asked for it.";
-    /// CHECK-DC1's ruling 3 (AMENDMENTS 2026-11-20 23:59): shared data is undone by its maker or any administrator.
-    pub const UNDOER: &str = "That isn't yours to undo.";
     pub const HIDDEN: &str = "Not found.";
     pub const NOTHING_PLAYS: &str = "Nothing of it plays here.";
     pub const NOT_HAD: &str = "Not in your library";
@@ -457,25 +455,6 @@ fn controls(v: &Viewer) -> Result<(), &'static str> {
     if v.scope == Scope::Read { Err(said::KEY) } else { Ok(()) }
 }
 
-/// Where what a Change changed is kept (AMENDMENTS 2026-11-20 23:59): per account (playlists, crates, hearts, Out, Discover answers,
-/// excluded tracks, imports), or shared (the library, arrivals, requests, Soulseek, Health's runs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kept {
-    PerAccount,
-    Shared,
-}
-
-/// Who may undo a Change (the 23:59 rule, as one function GF's Change-based `may_undo` calls): what is kept per account, its account
-/// alone; shared data, whoever made the Change or any administrator. Else 403 "That isn't yours to undo."
-pub fn may_undo(v: &Viewer, maker: Option<&str>, kept: Kept) -> Result<(), &'static str> {
-    let made = maker == Some(v.account.as_str());
-    match kept {
-        Kept::PerAccount if made => Ok(()),
-        Kept::Shared if made || v.role.administers() => Ok(()),
-        Kept::PerAccount | Kept::Shared => Err(said::UNDOER),
-    }
-}
-
 /// Home Assistant's: a full key, or an administrator's control key.
 fn reviews(v: &Viewer) -> Result<(), &'static str> {
     if v.scope == Scope::Full || (v.scope == Scope::Control && v.role.administers()) { Ok(()) } else { Err(said::KEY) }
@@ -593,12 +572,12 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
             // Its asker adds it to their own music only, its default target.
             if into_own(v, to) { Ok(Decision::Allow) } else { Err(said::ADMINISTRATORS) }
         }
-        // An arrival's answer is shared data: undone by whoever gave it, or any administrator (AMENDMENTS 2026-11-20 23:59). What is
-        // kept per account (playlists, crates, hearts, Out…) is its account's alone: GF's `may_undo`, no record action yet.
+        // An arrival's answer is shared data: undone by whoever gave it, or any administrator (AMENDMENTS 2026-11-20 23:59), by the one
+        // rule of who may undo (`change::undoer`, which the one path's `may_undo` reads too).
         Action::Undo { copy } => {
             reviews(v)?;
             let by = copy_at(r, *copy)?.arrival.as_ref().and_then(|x| x.by.as_deref());
-            may_undo(v, by, Kept::Shared).map(|()| Decision::Allow)
+            crate::change::undoer(v, by, crate::change::Scope::Shared, false).map(|()| Decision::Allow)
         }
     }
 }
@@ -833,16 +812,18 @@ mod tests {
         }
     }
 
-    /// The 23:59 rule (CHECK-DC1's ruling 3), as GF will call it: what is kept per account is its account's alone, an administrator's
-    /// too; shared data is its maker's or any administrator's; the refusal says "That isn't yours to undo.".
+    /// The 23:59 rule (CHECK-DC1's ruling 3), the one rule GF's path reads (`change::undoer`): what is kept per account is its
+    /// account's alone, an administrator's too; shared data is its maker's or any administrator's; the refusal says "That isn't
+    /// yours to undo.".
     #[test]
     fn undo_is_the_makers_or_for_shared_data_any_administrators() {
+        use crate::change::{Scope as Kept, said as undo_said, undoer};
         let admin2 = Viewer::new("admin2", true, None, May::default(), None);
-        assert_eq!(may_undo(&alice(), Some("alice"), Kept::PerAccount), Ok(()));
-        assert_eq!(may_undo(&root(), Some("alice"), Kept::PerAccount), Err(said::UNDOER), "her playlist: hers alone");
-        assert_eq!(may_undo(&admin2, Some("root"), Kept::Shared), Ok(()), "any administrator");
-        assert_eq!(may_undo(&bob(), Some("root"), Kept::Shared), Err("That isn't yours to undo."));
-        assert_eq!(may_undo(&bob(), Some("bob"), Kept::Shared), Ok(()), "its maker");
+        assert_eq!(undoer(&alice(), Some("alice"), Kept::Account, false), Ok(()));
+        assert_eq!(undoer(&root(), Some("alice"), Kept::Account, false), Err(undo_said::NOT_YOURS), "her playlist: hers alone");
+        assert_eq!(undoer(&admin2, Some("root"), Kept::Shared, false), Ok(()), "any administrator");
+        assert_eq!(undoer(&bob(), Some("root"), Kept::Shared, false), Err("That isn't yours to undo."));
+        assert_eq!(undoer(&bob(), Some("bob"), Kept::Shared, false), Ok(()), "its maker");
     }
 
     /// CN6's `decide` half (its test, `library_actions_name_their_copy_and_follow_the_server`, is the records crate's: the

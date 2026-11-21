@@ -362,7 +362,8 @@ impl Refusal {
     }
 }
 
-/// Who may undo, as one rule of the viewer, the Change's maker and its kind's scope (DC1a's rule shape; OQ-GF-1 (b)): per
+/// Who may undo, the one rule, of the viewer, the Change's maker and its kind's scope (OQ-GF-1 (b); `decide()`'s arrival Undo and
+/// the path's [`may_undo`] both read it, and nothing else decides who may undo): per
 /// account, its account alone; shared, its maker or any administrator; a player's, whoever `controls` it now. A key that reads
 /// undoes nothing; a key that controls undoes a player's Change, and, an administrator's, shared data (Home Assistant's review
 /// and its Undo); an account's own data only by a sign-in or a full key. `maker`: none for Cratarr itself or a row older than
