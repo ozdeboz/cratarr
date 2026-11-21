@@ -4167,9 +4167,10 @@ async fn a_length_fix_stays_in_its_file_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// The one lock, seen: one reading of the list shows a run writing. Changed by design (COU.11, GEN.58): Change cover, its second
-/// kind until 0.18, is no file run any more and waits for no lock: chosen while the run writes, it answers at once with its Undo, the
-/// record shows it at once, and no file is written by it; the run goes on to its end.
+/// The one lock, seen: one reading of the list shows a run writing and a second waiting, not done; the second takes its turn once the
+/// first is through. Two file runs of 0.18 on the one lock (the types sheet's records in two runs: Change cover, the second kind until
+/// 0.18, is no file run any more: the coordinator, 2026-11-21, "the lock's proof keeps two runs"). And Change cover waits for no lock
+/// (COU.11, GEN.58): chosen while a run writes, it answers at once with its Undo, the record shows it at once, no file is written.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_second_run_waits_while_the_first_writes_end_to_end() {
@@ -4179,23 +4180,38 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
     let (old, new) = (std::fs::read(&cover).unwrap(), std::fs::read(music.join("Various Artists/Club Classics (2001)/cover.jpg")).unwrap());
     let album = s.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
 
-    s.write_the_sheet().await;
+    // The sheet's records in two runs: the first most of them, the second the last.
+    let sheet = s.get("/api/file-changes/plans/types").await;
+    let records = sheet["records"].as_array().unwrap().clone();
+    assert!(records.len() > 2, "two runs' worth: {sheet}");
+    let ticked = |rs: &[Value]| {
+        let albums: Vec<&Value> = rs.iter().map(|r| &r["album"]).collect();
+        let stamps: serde_json::Map<String, Value> = rs.iter().map(|r| (r["album"].as_str().unwrap().to_string(), r["stamp"].clone())).collect();
+        json!({ "albums": albums, "stamps": stamps })
+    };
+    let (last, most) = records.split_last().unwrap();
+    s.ok(reqwest::Method::POST, "/api/file-changes/plans/types/apply", ticked(most)).await;
     // Albums go at least 50 ms apart, so asked this often the run is caught with most of them to go.
     let asked = Instant::now();
     while s.get("/api/file-changes/runs").await[0]["state"] != "writing" {
         assert!(asked.elapsed() < Duration::from_secs(60), "waited for the run to get going");
     }
-    let second = s.upload_cover(&album, &new).await;
-    assert!(second["undo"].is_string(), "answered at once, its Undo with it: {second}");
+    let second = s.ok(reqwest::Method::POST, "/api/file-changes/plans/types/apply", ticked(std::slice::from_ref(last))).await;
+    assert_eq!(second["state"], "waiting", "{second}");
     let runs = s.get("/api/file-changes/runs").await;
-    let state = |what: &str| runs.as_array().unwrap().iter().find(|r| r["what"] == what).map(|r| r["state"].clone());
-    assert_eq!((state("types"), state("cover")), (Some(json!("writing")), None), "{runs}");
+    let states: Vec<Value> = runs.as_array().unwrap().iter().filter(|r| r["what"] == "types").map(|r| r["state"].clone()).collect();
+    assert!(states.contains(&json!("writing")) && states.contains(&json!("waiting")), "one writing, one waiting: {runs}");
+
+    let chosen = s.upload_cover(&album, &new).await;
+    assert!(chosen["undo"].is_string(), "answered at once, its Undo with it: {chosen}");
+    let runs = s.get("/api/file-changes/runs").await;
+    assert!(!runs.as_array().unwrap().iter().any(|r| r["what"] == "cover"), "no file run: {runs}");
     assert_eq!(s.cover_of(&album).await, new, "the record shows it at once");
     assert!(std::fs::read(&cover).unwrap() == old, "nothing written by it");
 
-    s.until("the run's end", Duration::from_secs(120), || async {
+    s.until("the second run's turn", Duration::from_secs(120), || async {
         let runs = s.get("/api/file-changes/runs").await;
-        runs.as_array().unwrap().iter().any(|r| r["what"] == "types" && r["state"] == "done")
+        runs.as_array().unwrap().iter().filter(|r| r["what"] == "types" && r["state"] == "done").count() >= 2
     })
     .await;
     assert!(std::fs::read(&cover).unwrap() == old, "nor after");
