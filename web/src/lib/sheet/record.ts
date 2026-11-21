@@ -24,6 +24,10 @@ export type Card = { group: EntryGroup; items: Item[] };
 const ofAction = (a: ActionView): Item => ({ name: a.name, title: a.title, icon: a.icon, group: a.group, action: a });
 const ofLink = (l: LinkView): Item => ({ name: l.name, title: l.title, icon: l.icon, group: l.group, link: l });
 
+/** The yes an action asks at a step (RS25, decision 0034): the server's words for it, in order, each asked before anything is
+ *  sent (a main library's Delete asks twice); none left, it is sent. The page works out no step of its own. */
+export const askAt = (a: Pick<ActionView, 'confirm'>, step: number): string | null => a.confirm?.[step] ?? null;
+
 /** The Play row (RS3, CN4): the play section's actions in the order sent, Want last, or first from Discover. */
 export const playRow = (e: RecordEntity): ActionView[] => e.actions.filter((a) => a.section === 'play');
 
