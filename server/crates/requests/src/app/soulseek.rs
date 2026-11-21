@@ -3838,24 +3838,22 @@ pub mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
-    /// X4: the record's cover goes beside its placed files as `cover.jpg`; none where it has none. It comes from the record's cover
-    /// address, else its release group.
+    /// X4, flipped by the plan (TA1, C-WM-7, 2026-11-21: covers live in Cratarr's store, and writing into files is quiet in 0.18): a
+    /// placing writes no file beside its placed files, no `cover.jpg` among them; the record's cover stays in the store. Every placing,
+    /// a take of a set-aside folder too: no placing asks for a cover to write.
     #[test]
-    fn the_placed_album_has_its_records_cover_beside_it() {
+    fn a_placed_album_has_no_file_beside_its_files() {
         let d = data_folder("cover");
         let (lib, from) = (d.join("soulseek"), d.join("fetched"));
         std::fs::create_dir_all(&from).unwrap();
         std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
-        let to = place_with(&lib, &record("Glass Harbour", "Harbour Lights", Some(2014)), &[from.join("01 Pier.flac")], Some(&b"jpeg"[..]), |_| Ok(true), |_| true).unwrap();
-        assert_eq!(std::fs::read(to.join("cover.jpg")).unwrap(), b"jpeg");
-        let bare = place_with(&lib, &record("Glass Harbour", "Low Tide", None), &[from.join("01 Pier.flac")], None, |_| Ok(true), |_| true).unwrap();
-        assert!(bare.join("01 Pier.flac").exists() && !bare.join("cover.jpg").exists(), "none where it has none");
-        use super::super::cover_cache::Of;
-        let rg = "00000000-0000-4000-8000-000000000140";
-        let address = format!("/api/covers/release-group/{rg}");
-        assert_eq!(cover_source(Some(address.as_str()), &[]), Some(Of::ReleaseGroup(rg.into())));
-        assert_eq!(cover_source(None, &[rg.to_string()]), Some(Of::ReleaseGroup(rg.into())), "its group's");
-        assert_eq!(cover_source(Some("https://example.org/a.jpg"), &[]), None);
+        let to = place_with(&lib, &record("Glass Harbour", "Harbour Lights", Some(2014)), &[from.join("01 Pier.flac")], None, |_| Ok(true), |_| true).unwrap();
+        let names: Vec<String> = std::fs::read_dir(&to).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["01 Pier.flac"], "the placed files alone");
+        let code = include_str!("soulseek.rs").split("pub mod tests {").next().unwrap();
+        for written in ["cover.jpg", "cover_for(", "large_cover("] {
+            assert!(!code.contains(written), "no placing writes or fetches a cover: {written}");
+        }
         std::fs::remove_dir_all(&d).ok();
     }
 

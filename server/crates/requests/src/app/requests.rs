@@ -4505,6 +4505,72 @@ pub mod tests {
         assert!(strict.violations().is_empty(), "{:?}", strict.violations());
     }
 
+    /// The house's copy as a script answers it, one answer an ask (none left: a copy made), each ask recorded.
+    struct Answers {
+        answers: Mutex<std::collections::VecDeque<WantCopy>>,
+        asked: Mutex<Vec<(String, i64)>>,
+    }
+
+    impl Answers {
+        fn of(answers: Vec<WantCopy>) -> Self {
+            Answers { answers: Mutex::new(answers.into()), asked: Mutex::default() }
+        }
+    }
+
+    impl House for Answers {
+        fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, _sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>> {
+            self.asked.lock().unwrap().push((account.to_string(), record));
+            let answer = self.answers.lock().unwrap().pop_front().unwrap_or(WantCopy::Made);
+            Box::pin(async move { answer })
+        }
+    }
+
+    /// PL2: an asker's copy that fails for a passing reason is tried again. Bob and ann want Night Ferry; bob's fetch added it to his
+    /// music; ann's copy is tried before the served library has rebuilt, so `copy_into_own` finds no copy whole while the served
+    /// holding says bob holds it: passing. Her request waits, saying why, and is tried again at the next round, where it is made. One
+    /// still finding none after the served library's next rebuild ends with its words; a failure that won't pass ends at once, as
+    /// today. Never a request closed for good by a failure the next round would not have.
+    #[tokio::test]
+    async fn an_askers_copy_is_tried_again_after_a_passing_failure() {
+        const G: &str = "00000000-0000-4000-8000-000000000471";
+        const G2: &str = "00000000-0000-4000-8000-000000000472";
+        const G3: &str = "00000000-0000-4000-8000-000000000473";
+        let serve = room_shape();
+        with_accounts(&serve);
+        let strict = Strict::expecting_nothing();
+        let now = super::super::moment::now_secs;
+        // Night Ferry: none whole at first (the served library not rebuilt yet), then made.
+        let (r, _) = held_in(&serve, "Night Ferry", 1, G, BOB, gb(0.5), 50);
+        let hers = kept_request(&serve, "ann", r, G, 100, SOULSEEK_SEARCHES);
+        let house = Answers::of(vec![WantCopy::NoneWhole]);
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
+        round_with(&h, &serve, now()).await.unwrap();
+        let waits = now_of(&serve, hers.id).fetched.unwrap_or_default();
+        assert!(!waits.starts_with(NOT_COPIED), "not closed for good by a passing failure: {waits}");
+        assert_eq!(waits, "Waits for its copy: the library is being read", "her request waits, saying why");
+        round_with(&h, &serve, now()).await.unwrap();
+        assert_eq!(*house.asked.lock().unwrap(), [("ann".to_string(), r), ("ann".to_string(), r)], "tried again at the next round");
+        assert_eq!(now_of(&serve, hers.id).fetched.as_deref(), Some(COPIED_INTO_OWN), "made");
+        // Still none whole after the served library's next rebuild: it ends with its words.
+        let (r2, _) = held_in(&serve, "Far Ferry", 1, G2, BOB, gb(0.5), 60);
+        let eves = kept_request(&serve, "eve", r2, G2, 200, SOULSEEK_SEARCHES);
+        let house = Answers::of(vec![WantCopy::NoneWhole, WantCopy::NoneWhole]);
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
+        round_with(&h, &serve, now()).await.unwrap();
+        assert!(!now_of(&serve, eves.id).fetched.unwrap_or_default().starts_with(NOT_COPIED), "passing until the library rebuilt");
+        serve.build_passed_for_tests();
+        round_with(&h, &serve, now()).await.unwrap();
+        assert!(now_of(&serve, eves.id).fetched.is_some_and(|f| f.starts_with(NOT_COPIED)), "after the rebuild, it ends with its words");
+        // A failure that won't pass (her music's folder refused): it ends at once, as today.
+        let (r3, _) = held_in(&serve, "Near Ferry", 1, G3, BOB, gb(0.5), 70);
+        let anns = kept_request(&serve, "ann", r3, G3, 300, SOULSEEK_SEARCHES);
+        let house = Answers::of(vec![WantCopy::Failed("her music's folder refused it".into())]);
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
+        round_with(&h, &serve, now()).await.unwrap();
+        assert_eq!(now_of(&serve, anns.id).fetched.as_deref(), Some(format!("{NOT_COPIED}: her music's folder refused it").as_str()));
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+    }
+
     /// AL02.10: ann's Want waiting for room. (i) She takes it back, then drops under: cancelled, never handed. (ii) The server
     /// restarts while it waits: it still waits (the word on its row), and is handed at the first round once she is under. (iii)
     /// Her two tabs Want R at once while she is full: one row, waiting. Never a cancelled Want handed, nor a waiting one lost.

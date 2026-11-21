@@ -5946,6 +5946,25 @@ async fn slskd_watching(completed: PathBuf, file: PathBuf, refused: &'static str
     (url, asked, refusing, violations)
 }
 
+/// PL3: the e2e suite sets the space floor it means. A new data folder's server answers a floor of 0 before any Want is asked, so no
+/// test's result hangs on the machine's free space; the space tests (AL03.2, AL03.3 among them) set their own. Never an e2e result
+/// that depends on the machine's disk.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_harness_sets_the_floor_it_means_end_to_end() {
+    let root = temp("pl3-floor");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    let floor = s.get("/api/settings/floor").await;
+    assert_eq!(floor["gb"].as_f64(), Some(0.0), "the harness's floor: {floor}");
+    assert_eq!(floor["short"], false, "{floor}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// AL03.2, slskd's side (INTERACTIONS top 13, I14; OQ-F1 (a)). Ann's Wants R3 and R4 and root's S2 asked; the floor raised above the
 /// disk (10^9 GB); the server restarts with Soulseek's list holding R3's item ticked (its transfer not begun), R4's under way and root's
 /// S2 ticked. Below the floor: R3 starts no transfer (slskd refuses one asked of its user, and none comes), its item saying the server
