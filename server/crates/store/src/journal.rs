@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 
 pub type EventId = i64;
 
+/// A Change of the one path as the journal keeps it (`entries`).
+pub use crate::entries::Kept;
+
 /// What happened. An album action is one event carrying everything needed to react to it and to undo it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -409,6 +412,8 @@ impl Journal {
         conn.execute_batch(SCHEMA).context("creating the journal")?;
         // DI01's tables (RN): the saved queues, the sources' pauses and the runner's jobs, in this file (R1).
         conn.execute_batch(crate::intake::SCHEMA).context("creating the saved queues")?;
+        // The one table of Changes (GF), in this file too.
+        conn.execute_batch(crate::entries::SCHEMA).context("creating the table of Changes")?;
         for (table, column) in ADDED_COLUMNS {
             let name = column.split_whitespace().next().unwrap_or_default();
             let has: bool = conn

@@ -605,9 +605,12 @@ export const backInCrate = (id: string, key: string, meanwhile: () => CrateArtis
  *  undo; a change through the outbox, as above. */
 export const getExcludedArtists = () => quietly<ExcludedArtist[]>('/api/me/excluded-artists');
 export const excludeArtist = (key: string, name: string) =>
-  laterJson<ExcludedArtist & { undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { name }, () => ({ key, name, at: Date.now(), undo: null }), 'PUT');
+  laterJson<Answer<ExcludedArtist>>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { name }, () => ({ result: { key, name, at: Date.now() }, rev: 0 }), 'PUT');
 export const includeArtist = (key: string) =>
-  later<{ key: string; undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { method: 'DELETE' }, () => ({ key, undo: null }));
+  later<Answer<{ key: string }>>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { method: 'DELETE' }, () => ({ result: { key }, rev: 0 }));
+/** A command on the one path answers its result, its Undo's token (`undo`, none when nothing changed) and the rev its change
+ *  took (SCENARIOS-GF §0). */
+export type Answer<R> = { result: R; undo?: string; rev: number };
 /** Every change answers with its undo token (`undo`, decision 0026), for `withUndo`. */
 type Undo = { undo: string | null };
 export const createCrate = (name: string, conditions: Condition[]) => post<{ id: string } & Undo>('/api/crates', { name, conditions });

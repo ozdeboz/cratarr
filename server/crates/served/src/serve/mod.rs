@@ -497,8 +497,6 @@ impl Serve {
     /// Records a view shows that changed, moved from what the catalogue owes into the change log and told (`subscribe_records`).
     /// A failure is logged; what is owed stays owed for the next check. Blocking.
     fn records_logged(&self) {
-        use crate::catalogue::record_log::Now;
-        use crate::userdata::offline::Op;
         loop {
             let owed = match self.catalogue().owed_records(OWED_AT_ONCE) {
                 Ok(owed) if !owed.is_empty() => owed,
@@ -508,30 +506,45 @@ impl Serve {
                     return;
                 }
             };
-            let ids: Vec<RecordChanged> = owed
-                .iter()
-                .map(|o| match o.now {
-                    Now::Changed => RecordChanged { id: ids::record(o.record), op: "changed", into: None },
-                    Now::Merged { into } => RecordChanged { id: ids::record(o.record), op: "merged", into: Some(ids::record(into)) },
-                    Now::Forgotten => RecordChanged { id: ids::record(o.record), op: "forgotten", into: None },
-                })
-                .collect();
-            let rows: Vec<(String, Op, Option<String>)> =
-                ids.iter().map(|c| (c.id.clone(), if c.op == "changed" { Op::Changed } else { Op::Deleted }, c.into.clone())).collect();
-            let logged = self.userdata.log_records(&rows).and_then(|rev| self.catalogue().owed_moved(&owed).map(|()| rev));
-            match logged {
-                Ok(rev) => {
-                    let _ = self.records.send(Arc::new(RecordsChanged { rev, ids }));
-                }
-                Err(e) => {
-                    tracing::warn!(target: "library", reason = %format!("{e:#}"), "the records' changes were not logged: owed for the next check");
-                    return;
-                }
+            if let Err(e) = self.log_owed(&owed) {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "the records' changes were not logged: owed for the next check");
+                return;
             }
             if owed.len() < OWED_AT_ONCE {
                 return;
             }
         }
+    }
+
+    /// Owed rows into the change log at one rev, moved out of what the catalogue owes, and told: that rev.
+    fn log_owed(&self, owed: &[crate::catalogue::record_log::Owed]) -> Result<i64> {
+        use crate::catalogue::record_log::Now;
+        use crate::userdata::offline::Op;
+        let ids: Vec<RecordChanged> = owed
+            .iter()
+            .map(|o| match o.now {
+                Now::Changed => RecordChanged { id: ids::record(o.record), op: "changed", into: None },
+                Now::Merged { into } => RecordChanged { id: ids::record(o.record), op: "merged", into: Some(ids::record(into)) },
+                Now::Forgotten => RecordChanged { id: ids::record(o.record), op: "forgotten", into: None },
+            })
+            .collect();
+        let rows: Vec<(String, Op, Option<String>)> =
+            ids.iter().map(|c| (c.id.clone(), if c.op == "changed" { Op::Changed } else { Op::Deleted }, c.into.clone())).collect();
+        let rev = self.userdata.log_records(&rows)?;
+        self.catalogue().owed_moved(owed)?;
+        let _ = self.records.send(Arc::new(RecordsChanged { rev, ids }));
+        Ok(rev)
+    }
+
+    /// The records a command's Change just wrote, logged now, before its answer (SCENARIOS-GF CP9): their rows owed by the
+    /// catalogue's triggers move into the change log at one rev and are told, so the refresh's owed-move never logs them twice.
+    /// The rev; none where none was owed. Blocking.
+    pub fn log_records_now(&self, records: &[i64]) -> Result<Option<i64>> {
+        let owed = self.catalogue().owed_records_of(records)?;
+        if owed.is_empty() {
+            return Ok(None);
+        }
+        self.log_owed(&owed).map(Some)
     }
 
     /// Every record a view shows that changes from now on, as the change log has it (LV3).

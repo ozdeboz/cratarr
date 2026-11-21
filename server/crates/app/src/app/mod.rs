@@ -12,7 +12,7 @@
 //! - `sync`: the user's own server playlists, kept in step with the files;
 //! - `settings`: the Settings page.
 
-pub use cratarr_health::app::{albums, albums_base, along_base, analysis_import, analysis_pass, analysis_pass_base, around, around_records, artists, audiomuse, backup_list, base_host, beat_this, beyond, changes, classical, collection, cover_cache, covers, crates, crates_from_radio, crates_insights, crates_served, describe, device_covers, device_index, device_index_base, discogs, discogs_facts, discover, editions, error, excluded_artists, file_facts, file_facts_base, file_runs, file_runs_base, file_words, first_start, fix_plans, fixes, fixes_base, follow, harvest, health, health_base, health_findings, health_host, health_requests, history, home, import, incoming, incoming_base, incoming_host, incoming_served, incoming_settings, incomplete, incomplete_base, insights, insights_records, intake_card, intake_card_base, kodi, labels, lastfm, length_fixes, library, listenbrainz, listening, listening_base, matching, matching_base, moment, musicbrainz, originals, play, playing, playing_host, playlists, playlists_base, playlists_settings, playon, playon_base, playon_players, playon_served, plays, queue, queue_base, queue_requests, queues_listening, radio, radio_base, reach, records_host, references, references_turn, refind, related, renumber, renumber_base, replace_base, requests, requests_base, requests_host, requests_turn, resume, retention, retention_base, retention_protected, room, runtime_base, scrobble, search_base, settings, settings_base, shelf, similar, soulseek, soulseek_base, spotify, step_017, step_018, switches, sync, taste, tempo, together, track_fetch, track_fetch_records, track_fetch_turn, track_intake, track_intake_base, turn, visuals, words, works};
+pub use cratarr_health::app::{albums, albums_base, along_base, analysis_import, analysis_pass, analysis_pass_base, around, around_records, artists, audiomuse, backup_list, base_host, beat_this, beyond, changes, commands, classical, collection, cover_cache, covers, crates, crates_from_radio, crates_insights, crates_served, describe, device_covers, device_index, device_index_base, discogs, discogs_facts, discover, editions, error, excluded_artists, file_facts, file_facts_base, file_runs, file_runs_base, file_words, first_start, fix_plans, fixes, fixes_base, follow, harvest, health, health_base, health_findings, health_host, health_requests, history, home, import, incoming, incoming_base, incoming_host, incoming_served, incoming_settings, incomplete, incomplete_base, insights, insights_records, intake_card, intake_card_base, kodi, labels, lastfm, length_fixes, library, listenbrainz, listening, listening_base, matching, matching_base, moment, musicbrainz, originals, play, playing, playing_host, playlists, playlists_base, playlists_settings, playon, playon_base, playon_players, playon_served, plays, queue, queue_base, queue_requests, queues_listening, radio, radio_base, reach, records_host, references, references_turn, refind, related, renumber, renumber_base, replace_base, requests, requests_base, requests_host, requests_turn, resume, retention, retention_base, retention_protected, room, runtime_base, scrobble, search_base, settings, settings_base, shelf, similar, soulseek, soulseek_base, spotify, step_017, step_018, switches, sync, taste, tempo, together, track_fetch, track_fetch_records, track_fetch_turn, track_intake, track_intake_base, turn, visuals, words, works};
 pub use cratarr_health::app::{AlbumFate, AlbumMore, AlbumRef, AlbumView, AlbumsView, ArtistView, ByName, CollectionService, CollectionView, CopySheet, CrateLook, CrateOrder, CratePage, CrateService, CrateView, DeleteResult, Digging, FitSummary, FitView, FollowTarget, FreshIds, FromQueue, IncomingService, IncomingView, InsightsService, JobView, KeepPreview, KeepResult, Library, LidarrView, LikeCurve, MomentView, NamingView, NotArtist, OpsAnswer, PlayEvent, PlayOn, PlayOnCommand, PlayOnSettings, PlayOnSettingsView, PlayResult, PlayerReport, Players, PlayingService, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats, Plays, QueueTrack, QueueTracks, ReplaceAsk, ReplacePreview, ReplaceSheet, SettingsService, SettingsView, SourceTab, SourceView, StateView, TargetChoice, ToggleError, TrackStateView, VERSION, incoming_jobs_shown, plain, players, whose_players};
 pub use cratarr_search::app::{search, search_host};
 
@@ -102,6 +102,8 @@ pub struct App {
     pub settings: SettingsService,
     /// What happened to albums (decision 0011); the live channel tells the pages.
     pub journal: Arc<crate::journal::Journal>,
+    /// The one command path and its one Undo (GF): its kinds registered here, its Changes in the journal's file.
+    pub commands: Arc<commands::Commands>,
     /// Notices when a player changes, for the live channel.
     pub events: events::PlayerWatch,
     /// The players Cratarr commands itself: the Android app (decision 0031).
@@ -156,6 +158,19 @@ impl App {
         ));
         incoming.listen();
         incoming.work();
+        // The one path, the file kinds' window the trash's days as Settings has them now; each kind's Undo registered.
+        let trash_days = {
+            let incoming = incoming.clone();
+            Arc::new(move || i64::from(settings_base::SettingsIncoming::trash_days(&*incoming)))
+        };
+        let commands = Arc::new(commands::Commands::new(journal.clone(), served.clone(), trash_days));
+        if let Some(s) = &served {
+            commands.register(Arc::new(crates::out::OutKind { serve: s.clone() }));
+        }
+        // What a stop left between a Change's intent and its end, settled by what its store shows.
+        if let Err(e) = commands.settle().await {
+            tracing::warn!(reason = %format!("{e:#}"), "the changes a stop left were not settled");
+        }
         let playing = PlayingService::new(library.clone(), playlists.clone());
         playing.set_file_facts(Arc::new(app_playing::AppFileFacts));
         let settings = SettingsService::new(
@@ -225,6 +240,7 @@ impl App {
             artists,
             settings,
             journal,
+            commands,
             events: Default::default(),
             play_on,
             plays,

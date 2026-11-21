@@ -13,6 +13,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::{App, QueueTracks as _, SettingsView, SourceView, StateView, StatusView, ToggleError, TrackStateView};
+use crate::app::commands::Answer;
+use crate::app::crates::out::Outed;
 use crate::ctx::{ChangeAt, Ctx};
 use crate::serve::listener::Listener;
 use crate::userdata::offline::{ChangeKind, Op, item_id};
@@ -2615,20 +2617,27 @@ async fn excluded_artists(State(app): State<Arc<App>>) -> Result<Json<Vec<crate:
     Ok(Json(app.crates.excluded_artist_list().await?))
 }
 
-/// Exclude everywhere (decision 0083): the artist left out of every automatic pick of the account's, by any credit.
-/// The key kept is their name's (`app::excluded_artists::key`; without a name, the path's is read as the name). Them as
-/// listed, and the undo token (null when listed already).
-async fn exclude_artist(State(app): State<Arc<App>>, Path(key): Path<String>, Json(b): Json<ArtistNamed>) -> Result<Json<serde_json::Value>, ApiError> {
+/// Exclude everywhere (decision 0083), a command on the one path (GF): the artist left out of every automatic pick of the
+/// account's, by any credit. The key kept is their name's (`app::excluded_artists::key`; without a name, the path's is read as
+/// the name). `{ result: {key, name, at}, undo, rev }`, no `undo` when listed already.
+async fn exclude_artist(ctx: Ctx, headers: HeaderMap, Path(key): Path<String>, Json(b): Json<ArtistNamed>) -> Result<Json<Answer<Outed>>, ApiError> {
     let name = b.name.filter(|n| !n.trim().is_empty()).unwrap_or(key);
-    let (a, undo) = app.crates.exclude_artist(&name).await?;
-    Ok(Json(json!({ "key": a.key, "name": a.name, "at": a.at, "undo": undo })))
+    let serve = ctx.serve()?;
+    let out = crate::app::crates::out::Out::on(serve.clone(), &name);
+    Ok(Json(ctx.app.commands.run(&crate::app::requests::viewer(&serve), idempotency_key(&headers), &out).await?))
 }
 
-/// An artist taken back off the account's everywhere list: picked again. Their key, and the undo token (null when they
-/// were not on it).
-async fn include_artist(State(app): State<Arc<App>>, Path(key): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (key, undo) = app.crates.include_artist(&key).await?;
-    Ok(Json(json!({ "key": key, "undo": undo })))
+/// An artist taken back off the account's everywhere list, a command on the one path (GF): picked again. `{ result: {key},
+/// undo, rev }`, no `undo` when they were not on it.
+async fn include_artist(ctx: Ctx, headers: HeaderMap, Path(key): Path<String>) -> Result<Json<Answer<Outed>>, ApiError> {
+    let serve = ctx.serve()?;
+    let out = crate::app::crates::out::Out::off(serve.clone(), &key);
+    Ok(Json(ctx.app.commands.run(&crate::app::requests::viewer(&serve), idempotency_key(&headers), &out).await?))
+}
+
+/// The `Idempotency-Key` a command came with: its Change keeps it, so a resend finds it (`idempotent::once` makes the request once).
+fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
+    headers.get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::trim).filter(|k| !k.is_empty())
 }
 
 async fn crate_delete(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -4488,28 +4497,53 @@ async fn playlists_rows(State(app): State<Arc<App>>, Json(b): Json<ManyPlaylists
     Ok(Json(json!({ "playlists": out })))
 }
 
-/// One action's undo tokens (decision 0026): one, or one per playlist of an action on several.
+/// One action's undo tokens (decision 0026): one, or one per playlist of an action on several; by token, its parts (a run's
+/// or an album action's albums, a batch's items: SCENARIOS-GF §0).
 #[derive(Deserialize)]
 struct UndoRequest {
     tokens: Vec<String>,
+    #[serde(default)]
+    parts: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// The one undo (decision 0026): every token an action returned, undone newest first. Playlist and crate changes
 /// answer with their redo tokens, in the order they were made: undone newest first in turn, the redo does the action
 /// again in its own order (an edit before the rename that followed it). Incoming's tokens (its event ids) answer with
 /// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051), and each account's own (X5).
-async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+///
+/// The one path's tokens (`j…`, GF) go to its one Undo (`Commands::undo`), each judged by the one rule of who may undo: one token
+/// refused answers its status in §0's one shape (`{error, why?}`); otherwise `{undone, refused, rev}`, with `redo` the undone ones'
+/// Redo tokens. The kinds not on the path yet keep their own tokens here, as before, until GF's rest moves them.
+async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Response, ApiError> {
     let app = ctx.app.clone();
+    let (ours, theirs): (Vec<String>, Vec<String>) = req.tokens.iter().cloned().partition(|t| crate::app::commands::on_the_path(t));
+    let mut path = None;
+    if !ours.is_empty() {
+        let serve = ctx.serve()?;
+        let a = app.commands.undo(&crate::app::requests::viewer(&serve), &ours, &req.parts).await;
+        if req.tokens.len() == 1
+            && req.parts.is_empty()
+            && let Some(r) = a.refused.first()
+        {
+            let status = StatusCode::from_u16(r.status).unwrap_or(StatusCode::CONFLICT);
+            let mut body = json!({ "error": r.error });
+            if let Some(why) = &r.why {
+                body["why"] = why.clone().into();
+            }
+            return Ok((status, Json(body)).into_response());
+        }
+        path = Some(a);
+    }
     // Playlists' and crates' (`c…`) and Discover's (`d…`, the signed-in account's own) are anyone's; Incoming's an administrator's,
     // or the account's own (X5: a user's Add to or Delete of their request, by the account the journal names).
     if !crate::serve::access::administering() {
         let me = crate::serve::who::current().map(|w| w.user);
-        if req.tokens.iter().filter(|t| !t.starts_with('c') && !t.starts_with('d')).any(|t| me.is_none() || app.incoming.done_by(t) != me) {
+        if theirs.iter().filter(|t| !t.starts_with('c') && !t.starts_with('d')).any(|t| me.is_none() || app.incoming.done_by(t) != me) {
             return Err(ToggleError::Forbidden("That isn't yours to undo.".into()).into());
         }
     }
     let (mut redo, mut restored) = (Vec::new(), Vec::new());
-    for token in req.tokens.iter().rev() {
+    for token in theirs.iter().rev() {
         if token.starts_with('d') {
             let (serve, account) = discoverer(&ctx)?;
             let t = token.clone();
@@ -4525,7 +4559,9 @@ async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json:
             restored.push(app.incoming.undo(token).await?);
         }
     }
-    Ok(Json(json!({ "redo": redo, "restored": restored })))
+    let Some(a) = path else { return Ok(Json(json!({ "redo": redo, "restored": restored })).into_response()) };
+    redo.extend(a.undone.iter().filter_map(|u| u.redo.clone()));
+    Ok(Json(json!({ "undone": a.undone, "refused": a.refused, "rev": a.rev, "redo": redo, "restored": restored })).into_response())
 }
 
 pub struct ApiError(ToggleError);

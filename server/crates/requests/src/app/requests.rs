@@ -140,7 +140,8 @@ pub fn viewer(serve: &Serve) -> cratarr_domain::can::Viewer {
             };
             (w.user, w.admin, key)
         }
-        None => (String::new(), crate::serve::access::administering(), None),
+        // Signing in off: the one account it acts for (`Serve::current_user`), so what it makes is its own to undo (GF).
+        None => (serve.current_user().unwrap_or_default(), crate::serve::access::administering(), None),
     };
     let p = rights(serve);
     Viewer::new(&account, admin, key, May { request: p.request, offline: p.offline, playlists: p.playlists }, None)

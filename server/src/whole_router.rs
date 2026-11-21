@@ -81,7 +81,7 @@ impl Whole {
     }
 
     /// A sign-in of `user`, as the cookie a browser sends.
-    fn session(&self, user: &str) -> String {
+    pub(crate) fn session(&self, user: &str) -> String {
         let (token, _) = self.served.sessions.create(user, "the sweep", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).unwrap();
         format!("{}={token}", crate::serve::signin::COOKIE)
     }

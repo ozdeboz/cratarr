@@ -5,6 +5,8 @@
 pub use cratarr_served::app::{audiomuse, error, excluded_artists, import, moment, musicbrainz, reach, references_turn, requests_turn, switches, track_fetch_turn, turn};
 
 pub mod changes;
+// The one command path and its one Undo (GF).
+pub mod commands;
 pub mod analysis_pass_base;
 pub mod collection;
 pub mod first_start;
