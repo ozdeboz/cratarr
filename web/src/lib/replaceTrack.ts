@@ -2,7 +2,7 @@
 // album cannot be had): the album's release as MusicBrainz has it (which tracks are there), one Soulseek search for a
 // track, its candidates, one fetched and checked (decoded whole, its length, AcoustID naming that recording), then added
 // to the album's folder, tagged from MusicBrainz, with Undo. Administrators only.
-import type { FileRun } from './api';
+import type { FileRun, Task } from './api';
 
 export type ReleaseTrack = {
   disc: number;
@@ -51,13 +51,28 @@ async function call<T>(path: string, method = 'GET', body?: unknown): Promise<T>
     } catch {
       /* no words */
     }
-    throw new Error(why || (r.status === 404 ? 'This Cratarr cannot do that yet.' : `Cratarr said ${r.status}.`));
+    throw Object.assign(new Error(why || (r.status === 404 ? 'This Cratarr cannot do that yet.' : `Cratarr said ${r.status}.`)), { status: r.status });
   }
   return r.status === 204 ? (undefined as T) : r.json();
 }
 const enc = encodeURIComponent;
 
-export const getRelease = (source: string, album: string) => call<Release>(`/api/albums/${enc(source)}/${enc(album)}/release`);
+/** An album's release as Cratarr keeps it (SCENARIOS-LOOKUPS LK.B2): read where kept; else opened (an administrator's
+ *  `POST`), which answers it where kept or begins its job, followed by its id until it ends, and then read. */
+export async function getRelease(source: string, album: string): Promise<Release> {
+  const path = `/api/albums/${enc(source)}/${enc(album)}/release`;
+  try {
+    return await call<Release>(path);
+  } catch (e) {
+    if ((e as { status?: number }).status !== 404) throw e;
+  }
+  const opened = await call<Release | { task: Task }>(path, 'POST');
+  if (!('task' in opened)) return opened;
+  const { tasks } = await import('./tasks.svelte');
+  const ended = await tasks.ended(opened.task);
+  if (ended.error) throw new Error(ended.error);
+  return call<Release>(path);
+}
 /** A release read once and kept (Health's Work through reads the next album's ahead, and an album opened in Health's
  *  panel reads its missing tracks): forgotten when a track is added to the album, or the answer failed. */
 const releases = new Map<string, Promise<Release>>();

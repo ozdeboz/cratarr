@@ -1,0 +1,125 @@
+{
+  "about": "What a request and a Soulseek item say, by their standing (SCENARIOS-DC2 SD1; DOMAIN-CORE C.5, C.6), written by cratarr-domain's tests: each standing's words with their blanks; a time beside them is the page's to say.",
+  "words": [
+    [
+      "delivered",
+      "Delivered"
+    ],
+    [
+      "rejected",
+      "Rejected"
+    ],
+    [
+      "taken_back",
+      "Taken back"
+    ],
+    [
+      "asked_twice",
+      "Asked twice"
+    ],
+    [
+      "merged",
+      "Merged into another record"
+    ],
+    [
+      "declined",
+      "Declined"
+    ],
+    [
+      "waits_for_room",
+      "Waits for room"
+    ],
+    [
+      "waits_for_space",
+      "Waits for space"
+    ],
+    [
+      "waits_for_release",
+      "Waits for its release"
+    ],
+    [
+      "done",
+      "In your library"
+    ],
+    [
+      "arrived",
+      "Arrived"
+    ],
+    [
+      "partly",
+      "Partly there · {has} of {of}"
+    ],
+    [
+      "switched_off",
+      "{source} is switched off"
+    ],
+    [
+      "on_its_way",
+      "On its way"
+    ],
+    [
+      "fetching",
+      "{percent}%"
+    ],
+    [
+      "fetched",
+      "Waits to be checked"
+    ],
+    [
+      "checking",
+      "{done} of {of} checked"
+    ],
+    [
+      "placing",
+      "Being placed"
+    ],
+    [
+      "paused_until",
+      "Paused until"
+    ],
+    [
+      "short_of_space",
+      "The server is short of space"
+    ],
+    [
+      "placing_again",
+      "It could not be placed: tried again"
+    ],
+    [
+      "cant_store",
+      "Soulseek can't store its files: tried again"
+    ],
+    [
+      "slskd_off",
+      "slskd is switched off"
+    ],
+    [
+      "background_off",
+      "Background reading is paused"
+    ],
+    [
+      "waits_for_user",
+      "Waiting for {user}'s other record"
+    ],
+    [
+      "waits_for_pick",
+      "Found: waits for a pick"
+    ],
+    [
+      "looking",
+      "Looking for it"
+    ],
+    [
+      "not_found_yet",
+      "Not found yet"
+    ],
+    [
+      "not_answering",
+      "{source} isn't answering"
+    ],
+    [
+      "asked",
+      "Wanted"
+    ]
+  ]
+}

@@ -10,6 +10,10 @@
   import { loadHealth } from './healthReport.svelte';
   import { me } from './me.svelte';
   import { TRACKLIST } from './recordNotHad';
+  import { on } from './events.svelte';
+  import { namesRecord, type Changed } from './recordCache';
+  import { recordOf } from './cache.svelte';
+  import { typeLine } from './sheet/record';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import Group from './settings/Group.svelte';
@@ -31,6 +35,12 @@
     );
     return () => (gone = true);
   });
+  // The record's read (`record:read`: begun by its open, a Confirm or a pasted link, the PUT's answer's `task`) reaches the page by
+  // `changed` for the record (LOOKUPS Found 10, RV12): the references are read again as it lands.
+  $effect(() => on<Changed>('changed', (c) => namesRecord(c, album) && again++));
+  // The record's type and what it is by (VR39's `type_why`), from its one entity: facts, the same from any place.
+  const rec = recordOf(() => ({ id: album, place: { from: 'page' } }));
+  const typeSaid = $derived(rec.shown?.entity ? typeLine(rec.shown.entity.properties) : null);
   // The record's own lengths, beside the sources' where any gives them.
   const timed = $derived(refs?.sources.filter((x) => x.lengths?.some((ms) => ms > 0)) ?? []);
   let rows = $state<PlaylistRow[] | null>(null);
@@ -80,6 +90,7 @@
 {:else}
   {@const r = refs}
   <Group>
+    {#if typeSaid}<Item name="Type" line={typeSaid} />{/if}
     {#each r.sources as x (x.source)}
       {@const counts = r.counting === x.source}
       <Item lead={LEAD[x.state]} name={NAME[x.source] ?? x.source} line={lineOf(x)} tone={x.state === 'differs' ? 'warn' : null} value={counts ? TRACKLIST : null} busy={busy === x.source} wrap>

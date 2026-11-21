@@ -39,8 +39,10 @@ impl Server {
         Self::start_with(data, &[]).await
     }
 
-    /// `start`, with these in its environment.
+    /// `start`, with these in its environment. A new data folder's server is given a floor of 0 before anything else is asked (PL3):
+    /// no test's result hangs on the machine's free space, and the space tests set their own.
     async fn start_with(data: &Path, env: &[(&str, &str)]) -> Server {
+        let fresh = !data.join("userdata.sqlite").exists();
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let child = Command::new(BIN)
             .env("CRATARR_DATA_DIR", data)
@@ -54,6 +56,12 @@ impl Server {
         let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new(), acting: std::sync::Mutex::new(None) };
         let answered = |r: reqwest::Response| r.status().is_success() || r.status() == reqwest::StatusCode::UNAUTHORIZED;
         s.until("the server answers", Duration::from_secs(60), || async { s.http.get(format!("{}/api/albums", s.base)).send().await.is_ok_and(answered) }).await;
+        // A server that asks for a sign-in from its first start (its accounts from the environment) has no one the harness may act
+        // as: its tests ask no Want, and set a floor themselves where they would.
+        if fresh {
+            let (status, floor) = s.anyone().send(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+            assert!(status == 200 || status == 401, "the harness's floor: {status} {floor}");
+        }
         s
     }
 
@@ -5944,6 +5952,25 @@ async fn slskd_watching(completed: PathBuf, file: PathBuf, refused: &'static str
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (url, asked, refusing, violations)
+}
+
+/// PL3: the e2e suite sets the space floor it means. A new data folder's server answers a floor of 0 before any Want is asked, so no
+/// test's result hangs on the machine's free space; the space tests (AL03.2, AL03.3 among them) set their own. Never an e2e result
+/// that depends on the machine's disk.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_harness_sets_the_floor_it_means_end_to_end() {
+    let root = temp("pl3-floor");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    let floor = s.get("/api/settings/floor").await;
+    assert_eq!(floor["gb"].as_f64(), Some(0.0), "the harness's floor: {floor}");
+    assert_eq!(floor["short"], false, "{floor}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
 }
 
 /// AL03.2, slskd's side (INTERACTIONS top 13, I14; OQ-F1 (a)). Ann's Wants R3 and R4 and root's S2 asked; the floor raised above the

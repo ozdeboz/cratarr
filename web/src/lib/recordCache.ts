@@ -24,6 +24,8 @@ export type ToldId = { id: string; op: string; into?: string | null };
 export type Told = { rev?: number; ids?: ToldId[]; stale?: string };
 /** A `changed` as the page hears it: records (Told), the log's reset of them, or an account's rights changed (CN10, M13). */
 export type Changed = Told & { area?: string; reset?: string };
+/** Whether a told change names this record (its id among the changed). */
+export const namesRecord = (c: Told, id: string): boolean => !!c.ids?.some((x) => x.id === id);
 /** The server asked for one record from one place. */
 export type Ask = (id: string, place: Place) => Promise<RecordEntity>;
 

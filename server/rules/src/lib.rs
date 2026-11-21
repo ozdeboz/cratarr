@@ -44,6 +44,7 @@ pub mod holding;
 pub mod hygiene;
 pub mod ids;
 pub mod index;
+pub mod lists;
 pub mod matcher;
 pub mod names;
 pub mod radio;

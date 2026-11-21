@@ -137,7 +137,7 @@ async fn a_room_or_floor_must_be_a_number_of_gb() {
         assert!(answer["error"].as_str().is_some_and(|e| e.starts_with("Give the floor in GB, from 0")), "floor {bad}: {answer}");
     }
     assert_eq!(w.served.users.get("ann").unwrap().room_bytes, Some(50 * crate::app::room::GB), "the old room kept");
-    assert_eq!(crate::app::room::floor(&w.served.userdata), 300 * crate::app::room::GB, "the old floor kept");
+    assert_eq!(crate::app::room::saved_floor(&w.served.userdata), Some(300 * crate::app::room::GB), "the old floor kept");
 }
 
 /// `body` posted as JSON to `path` with that cookie: the answer as `Whole::send` gives it.

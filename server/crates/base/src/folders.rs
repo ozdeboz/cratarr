@@ -134,6 +134,21 @@ pub fn free(_dir: &Path) -> Option<u64> {
     None
 }
 
+/// The size of the disk `dir` is on, in bytes (statvfs' total; PL4's floor is a share of it), where it can be read.
+#[cfg(unix)]
+pub fn size(dir: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is a valid NUL-terminated path and `s` a writable statvfs.
+    (unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0).then(|| s.f_blocks as u64 * s.f_frsize as u64)
+}
+
+#[cfg(not(unix))]
+pub fn size(_dir: &Path) -> Option<u64> {
+    None
+}
+
 /// A chosen folder's state. Blocking.
 pub fn status(dir: &Path) -> Status {
     let exists = dir.is_dir();
