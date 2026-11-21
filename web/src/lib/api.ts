@@ -2586,14 +2586,6 @@ export const openRecord = (b: import('./openRecord').RecordOpenBody) => post<{ r
 /** Want for any album (a missing one): the same request and rights as Discover's Want. */
 export const wantAlbum = (a: import('./wantPath').WantBody) =>
   post<{ request: AlbumRequest }>('/api/requests/want', a);
-/** The words looked up on MusicBrainz (Find more music, 0.9.3): its albums and artists, the surest first, `have` where
- *  the library has them. */
-export type MusicBrainzFound = {
-  albums: { release_group: string; title: string; artist: string; year: number | null; kind: string | null; cover: string | null; have: boolean; request?: RequestMark | null }[];
-  artists: { mbid: string; name: string; disambiguation?: string | null; have: boolean }[];
-};
-export const musicBrainzSearch = (q: string, limit = 20) =>
-  quietly<MusicBrainzFound>(`/api/musicbrainz/search?${new URLSearchParams({ q, limit: String(limit) })}`);
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */
@@ -2818,22 +2810,27 @@ export type BeyondAlbum = {
 /** An artist Beyond lists (C57): by their MusicBrainz id; `artist`, Cratarr's who holds it (`ar-<n>`), none until opened. */
 export type BeyondArtist = { mbid: string; name: string; disambiguation?: string | null; artist?: string | null; number?: number | null; have: boolean };
 export type BeyondFound = { albums: BeyondAlbum[]; artists: BeyondArtist[] };
-export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<BeyondFound> {
+type BeyondAnswer = { albums: BeyondAlbum[]; artists?: BeyondArtist[] };
+const beyondFound = (r: BeyondAnswer): BeyondFound => ({ albums: r.albums ?? [], artists: r.artists ?? [] });
+/** Beyond's search for the words (SCENARIOS-LOOKUPS LK.D8, global search's and Find more music's): what Cratarr keeps for
+ *  them read; where nothing is kept (404), the search sent (`POST`), which answers the rows or begins its job, followed by
+ *  its id, `seen` told the rows as each source answers (its task's `result` while it runs), the whole answer at its end. */
+export async function searchBeyond(q: string, limit = 20, offset = 0, seen?: (r: BeyondFound) => void): Promise<BeyondFound> {
   try {
-    const r = await request<{ albums: BeyondAlbum[]; artists?: BeyondArtist[] }>(
-      `/api/search/beyond?${new URLSearchParams({ q, limit: String(limit), ...(offset ? { offset: String(offset) } : {}) })}`,
+    return beyondFound(
+      await request<BeyondAnswer>(`/api/search/beyond?${new URLSearchParams({ q, limit: String(limit), ...(offset ? { offset: String(offset) } : {}) })}`),
     );
-    return { albums: r.albums, artists: r.artists ?? [] };
   } catch (e) {
     if (!(e instanceof ApiError && e.status === 404)) throw e;
   }
-  // A server before 0.9.13: MusicBrainz's alone, one page.
-  if (offset) return { albums: [], artists: [] };
-  const r = await musicBrainzSearch(q, limit);
-  return {
-    albums: r.albums.map((a) => ({ title: a.title, artist: a.artist, year: a.year, cover: a.cover, release_group: a.release_group, sources: ['musicbrainz'], request: a.request ?? null, have: a.have })),
-    artists: r.artists,
-  };
+  const sent = await post<BeyondAnswer | { task: Task }>('/api/search/beyond', { q, limit, offset });
+  if (!('task' in sent)) return beyondFound(sent);
+  const { tasks } = await import('./tasks.svelte');
+  const ended = await tasks.ended(sent.task, (t) => {
+    if (t.result && seen) seen(beyondFound(t.result as BeyondAnswer));
+  });
+  if (ended.error) throw new ApiError(ended.error, false, 200);
+  return beyondFound((ended.result ?? { albums: [] }) as BeyondAnswer);
 }
 /** A wind's plan, without its sound (map=1): where in the track(s) each moment of its stream is. */
 export const windMap = (url: string) =>

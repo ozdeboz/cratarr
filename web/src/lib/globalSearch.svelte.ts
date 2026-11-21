@@ -195,7 +195,8 @@ $effect.root(() => {
     if (kept) return void (globalSearch.beyond = { q, albums: kept });
     let gone = false;
     const t = setTimeout(() => {
-      searchBeyond(q).then(
+      // Each source's rows as it answers (LK.D8: the search is a job), the whole answer at its end.
+      searchBeyond(q, 20, 0, ({ albums }) => !gone && (globalSearch.beyond = { q, albums })).then(
         ({ albums }) => {
           beyondKept.set(q.toLowerCase(), albums);
           if (!gone) globalSearch.beyond = { q, albums };

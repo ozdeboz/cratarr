@@ -45,7 +45,7 @@
     if (!now) return;
     let gone = false;
     const t = setTimeout(() => {
-      searchBeyond(now, PAGE).then(
+      searchBeyond(now, PAGE, 0, (r) => !gone && (found = { q: now, r, done: false })).then(
         (r) => !gone && (found = { q: now, r, done: r.albums.length < PAGE }),
         (e) => !gone && (error = e instanceof Error ? e.message : 'The search could not be asked'),
       );

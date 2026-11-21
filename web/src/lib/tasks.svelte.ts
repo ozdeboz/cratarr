@@ -17,7 +17,7 @@ class Tasks {
   #users = 0;
   #off: (() => void) | null = null;
   /** The jobs followed by their id until they end (`ended`), with how often the server's list lacked each. */
-  #waiting = new Map<number, { done: (t: Task) => void; fail: (e: Error) => void; missed: number }>();
+  #waiting = new Map<number, { done: (t: Task) => void; fail: (e: Error) => void; seen?: (t: Task) => void; missed: number }>();
 
   /** The latest of a kind, running or ended. */
   of(kind: string): Task | null {
@@ -30,7 +30,9 @@ class Tasks {
   }
 
   apply(t: Task) {
-    if (t.finished !== null) this.#waiting.get(t.id)?.done(t);
+    const w = this.#waiting.get(t.id);
+    w?.seen?.(t);
+    if (t.finished !== null) w?.done(t);
     const had = this.byKind[t.kind];
     // A late word of an older task never hides a newer one.
     if (had && had.id > t.id) return;
@@ -50,8 +52,9 @@ class Tasks {
 
   /** A job an open began or joined, followed by its id until it ends (SCENARIOS-LOOKUPS: an open answers 202 with its
    *  task; several of one kind may run at once, one per key). Its end as the live channel tells it, or as asked every two
-   *  seconds while that is down; the runner's own words where the server no longer knows it. */
-  ended(t: Task): Promise<Task> {
+   *  seconds while that is down; the runner's own words where the server no longer knows it. `seen` is told each word of it
+   *  while it runs (what it has found so far, in its `result`). */
+  ended(t: Task, seen?: (t: Task) => void): Promise<Task> {
     if (t.finished !== null) return Promise.resolve(t);
     return new Promise((resolve, reject) => {
       const stop = this.follow();
@@ -60,7 +63,7 @@ class Tasks {
         stop();
         then();
       };
-      this.#waiting.set(t.id, { done: (x) => end(() => resolve(x)), fail: (e) => end(() => reject(e)), missed: 0 });
+      this.#waiting.set(t.id, { done: (x) => end(() => resolve(x)), fail: (e) => end(() => reject(e)), seen, missed: 0 });
       this.apply(t);
     });
   }
