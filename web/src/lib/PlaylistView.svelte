@@ -133,6 +133,7 @@
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
+  import RecordMenu, { opensRecord } from './sheet/Record.svelte';
   import RecordProblemSheet from './RecordProblemSheet.svelte';
   import { sheetFor } from './healthTools';
   import { ICON_OF } from './menuTable';
@@ -1441,14 +1442,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     requested: { icon: 'inbox', label: 'Requested' },
   };
   let wanting = $state(false);
-  /** The header's Want or Requested, in its ⋮ menu too (F36). */
-  const menuWant = $derived(
-    notHadShown?.actions.includes('requested')
-      ? { requested: true, disabled: false, run: () => void notHadAct('requested') }
-      : notHadShown?.actions.includes('want')
-        ? { requested: false, disabled: wanting, run: () => void notHadAct('want') }
-        : null,
-  );
   async function notHadAct(k: NotHadAction) {
     if (k === 'requested') return void (location.hash = hrefOf('requests'));
     if (k === 'want') return wantNotHad();
@@ -3212,7 +3205,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {/if}
 {#if flowMenu}
   {@const m = flowMenu}
-  <AlbumMenu {source} album={m} onclose={() => (flowMenu = null)} />
+  {#if opensRecord(source)}<RecordMenu id={m.id} from="crate" title={m.title} credit={m.artist} onclose={() => (flowMenu = null)} />
+  {:else}<AlbumMenu {source} album={m} onclose={() => (flowMenu = null)} />{/if}
 {/if}
 {#if bandcampMenuOpen && album && albumHead}
   <BandcampAlbumMenu album={{ id: album.id, title: albumHead.title, artist: albumHead.artist }} tracks={tracksOf((rows ?? []).filter((r) => r.id && !r.missing), BANDCAMP)} onclose={() => (bandcampMenuOpen = false)} />
@@ -3231,7 +3225,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   />
 {/if}
 {#if albumMenuOpen && album}
-  <AlbumMenu
+  {#if opensRecord(album.source)}<RecordMenu id={album.id} from="page" {title} credit={albumHead?.artist ?? null} onresumegone={() => (resumeAt = null)} onclose={() => (albumMenuOpen = false)} />
+  {:else}<AlbumMenu
     source={album.source}
     album={listedHere?.a ?? { id: album.id, title, artist: albumHead?.artist ?? null }}
     cover={covers[0] ?? null}
@@ -3239,10 +3234,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     genres={listGenres}
     viewable={false}
     {notHad}
-    want={menuWant}
     onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}
-  />
+  />{/if}
 {/if}
 
 

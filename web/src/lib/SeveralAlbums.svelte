@@ -2,6 +2,14 @@
   import { openRadio } from './radioAsk.svelte';
   import type { IconName } from './Icon.svelte';
   import { port } from './player/port.svelte';
+  import type { AlbumsSource, ListedAlbum } from './api';
+  import { offersOf, type AlbumOffer as Offer } from './copiesRule';
+  import { jobs } from './jobs.svelte';
+  import { me } from './me.svelte';
+
+  /** What each of a record's copies allows the viewer, by what the Library's list says of them: the several records' own until
+   *  RS01 for several takes them from the server (SCENARIOS-DC1 RS15). */
+  export const offersIn = (s: AlbumsSource, a: ListedAlbum): Offer[] => offersOf(s, a, me.admin, (library) => jobs.of(s.id, a.id, library)?.id ?? null);
 
   /** A question the list asks once the menu has closed (lib/settings/ConfirmSheet): Delete's, Move's. */
   export type Ask = { title: string; text?: string | null; label: string; icon: IconName; go: () => void };
@@ -14,20 +22,17 @@
   // and Remove from this device (in the app); what their copies allow (Cancel conversion, Move to another, Delete;
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo. Of records with several
   // copies Delete is an entry per library, as Move's. No Play from: it starts one record's queue.
-  import { offersIn } from './AlbumMenu.svelte';
   import { deleteGroups, moveGroups, moveLabel, moveSheet, moveWords, type AlbumOffer } from './copiesRule';
   import { ICON_OF } from './menuTable';
   import { albumOfDownload, albumRatings, copiesAdded, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
-  import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
+  import { cancelJob, deleteAlbum, moveAlbum, movePreview, type KeepPreview, type LibraryInfo, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import { plural } from './insights.svelte';
   import { recordsWord } from './recordTypeRules';
-  import { jobs } from './jobs.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { type LocalTrack } from './localPlayer.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
-  import { me } from './me.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { albumGone } from './panel.svelte';

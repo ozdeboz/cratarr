@@ -1,65 +1,25 @@
 <script lang="ts" module>
   import { openRadio } from './radioAsk.svelte';
-  import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
-  import RecordEdit from './RecordEdit.svelte';
   import { leavePlayer } from './navStep.svelte';
   import { port } from './player/port.svelte';
   import { untrack } from 'svelte';
-  import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
-  import { mayEdit, offersOf, type AlbumOffer } from './copiesRule';
-  import { jobs } from './jobs.svelte';
-  import { me } from './me.svelte';
-
-  /** What each of a record's copies allows the viewer, by what the Library's list says of them. */
-  export const offersIn = (s: AlbumsSource, a: ListedAlbum): AlbumOffer[] => offersOf(s, a, me.admin, (library) => jobs.of(s.id, a.id, library)?.id ?? null);
+  import type { ListedAlbum } from './api';
 </script>
 
 <script lang="ts">
-  import { whenWritten } from './fileRuns.svelte';
-  // An album's menu, the one every album has wherever it is opened (a Library row or tile, the select bar's More, the
-  // album panel's ⋮), after Symfonium's album sheet: the album at the top (its heart there), the large actions (Play,
-  // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable),
-  // related ones joined: where to go (View, each of its artists, its genres); its rating; Add to playlist (all its
-  // tracks, the playlists as toggle cards in a step, as a track's), Download…, Sync to this device and Share; Web search
-  // and Genius search; its cover on this device (a picture chosen here, or the server's read again); Play from, a queue
-  // of it from another of its copies; what its copies allow (Move to another, Replace in Music; decision 0034), each
-  // question asked in place and of one copy, named where it has several; Remove resume point and Delete last. Wherever
-  // it was opened from, the Library's list says what its copies are.
-  import {
-    albumCoverUrl,
-    albumResume,
-    albumView,
-    cancelJob,
-    deleteAlbum,
-    forgetAlbumResume,
-    moveAlbum,
-    movePreview,
-    replaceIncoming,
-    getAlbumCovers,
-    lookAlbumCovers,
-    missingCall,
-    stopTask,
-    uploadAlbumCover,
-    COVER_MAX,
-    ApiError,
-    setAlbumCover,
-    type CoverChoice,
-    replacePreview,
-    setAlbumFavorite,
-    type AlbumMoved,
-    type KeepPreview,
-    type ReplacePreview,
-  } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, copiesAdded, copiesGone, copiesMoved, copiesReplaced, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
-  import { adds, deleteEntries, moveEntries, moveSentences, moveSheet, moveWords, playFromEntries, replacedWords, replaceEntries, replaceSheet, replaceShown } from './copiesRule';
-  import { shownIn } from './sources.svelte';
+  // An album's menu where it is no Cratarr record (another server's album, this device's own music), and a Cratarr record's
+  // out of reach until the server marks what works away (lib/sheet/Record.svelte, RS01, is every Cratarr record's sheet:
+  // SCENARIOS-DC1 RS12, DL1). After Symfonium's album sheet: the album at the top (its heart there), the large actions (Play,
+  // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable):
+  // where to go (View, each of its artists, its genres); its rating; Add to playlist (all its tracks, the playlists as
+  // toggle cards in a step, as a track's), Download…, Sync to this device and Share; Web search and Genius search; its
+  // cover on this device (a picture chosen here, or the server's read again); Remove resume point last.
+  import { albumCoverUrl, albumResume, albumView, forgetAlbumResume, setAlbumFavorite } from './api';
+  import { albumOfDownload, albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
-  import { likeChip } from './quickCrate';
-  import { grabCrate } from './quickCrates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
-  import { player } from './live.svelte';
   import { type LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import DownloadStep from './DownloadStep.svelte';
@@ -68,32 +28,20 @@
   import { offeredNotHad } from './recordNotHad';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
-  import Asking from './Asking.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import MenuGroup from './MenuGroup.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { recordWord } from './recordTypeRules';
   import { playPlaylistFrom } from './output.svelte';
   import { shuffled } from './shuffle';
-  import { albumGone, albumSubject, panel, viewOver } from './panel.svelte';
-  import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
+  import { albumSubject, panel, viewOver } from './panel.svelte';
+  import { coverKey, localCovers, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo } from './addresses';
-  import { share } from './share';
+  import { recordWords, share } from './share';
   import { toast } from './toast.svelte';
   import { askFor, followingNow } from './following.svelte';
-  import AlbumCard from './AlbumCard.svelte';
-  import Seg from './Seg.svelte';
-  import SettingRow from './SettingRow.svelte';
-  import Cover from './Cover.svelte';
-  import PageLoading from './PageLoading.svelte';
-  import Meter from './Meter.svelte';
-  import { progressOf, tasks } from './tasks.svelte';
-  import { withUndo } from './undo.svelte';
-  import { can, findsTracks, offers } from './capabilities.svelte';
 
-  type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
   let {
     source: givenSource,
     album: givenAlbum,
@@ -102,11 +50,8 @@
     genres: givenGenres = null,
     viewable = true,
     notHad = false,
-    want = null,
     start = 'menu',
     onresumegone,
-    ongone,
-    onundone,
     onclose,
   }: {
     source: string;
@@ -120,19 +65,10 @@
     viewable?: boolean;
     /** A record not had (W9, lib/recordNotHad): only what needs no copy of it; no heart, no large actions. */
     notHad?: boolean;
-    /** A record not had's Want, or its Requested, as its page's header offers them (W9; the owner, 2026-11-19, F36: "Why
-     *  does it not offer want?"), first in the menu; the menu closes as it runs. */
-    want?: { requested: boolean; disabled: boolean; run: () => void } | null;
     /** The step it opens on: the entries, or straight at the playlists. */
-    /** 'cover': straight on Change cover (Health's albums without one). */
-    start?: 'menu' | 'lists' | 'cover';
+    start?: 'menu' | 'lists';
     /** Its resume point was removed here (the panel's Resume goes too). */
     onresumegone?: () => void;
-    /** A copy left its library (moved, replaced or deleted; not when queued to convert first). The Library's list is
-     *  kept true here. */
-    ongone?: () => void;
-    /** A move's or a delete's Undo went through. */
-    onundone?: () => void;
     onclose: () => void;
   } = $props();
   // What the menu was opened on, kept: an opener lets go of it as the menu closes (its {@const} turns null, so its
@@ -148,8 +84,7 @@
       return keptAlbum;
     }
   });
-  // Named by its release type: Delete EP, this single (lib/recordTypeRules).
-  // One word for its View and its Delete (F35.4), a track's Go to the same (GOTO.1).
+  // Named by its release type: this single (lib/recordTypeRules); its View the same (F35.4).
   const word = $derived(recordWord(a.type, a.secondary));
   const source = $derived.by(() => {
     try {
@@ -230,13 +165,8 @@
     }
   }
   const listed = () => [{ source, a: a as ListedAlbum }];
-  /** Missing tracks open (lib/ReplaceTrackSheet), in the menu's place. */
-  let missingOpen = $state(false);
-  // Edit (0.13, administrators'; the owner, 2026-10-31: per-record overrides): its type, year, secondary types, genres
-  // and classical set by hand (lib/RecordEdit), in the menu's place; the 0.10 Classical… sheet is its Classical row now.
-  let editOpen = $state(false);
   const actions = $derived.by<SheetAction[]>(() => {
-    if (notHad || ask || exporting || step !== 'menu') return [];
+    if (notHad || exporting || step !== 'menu') return [];
     const t = tracks;
     // Following someone (0.10): its tracks asked of them, next or at the end of their queue.
     if (followingNow()) {
@@ -304,37 +234,23 @@
   // Share: the album in words and its link here (lib/share.ts).
   function shareIt() {
     onclose();
-    share(a.title, [a.artist, a.title].filter(Boolean).join(' – '), linkTo('library', albumSubject(source, a.id)));
+    share(a.title, recordWords(a.artist, a.title), linkTo('library', albumSubject(source, a.id)));
   }
 
-  // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's again. Not in
-  // Cratarr's own library (the owner, 2026-10-25): there its administrators upload one, for everyone.
+  // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's again. Not a Cratarr record's
+  // (the owner, 2026-10-25): there its administrators change it, for everyone (RS01's Change cover).
   const deviceCovers = $derived(source !== 'cratarr');
-  // What the server can do (0.11, lib/capabilities): Missing tracks where it can look for a track (slskd and AcoustID)
-  // or take one from a file of its own; a cover uploaded where it takes one. A server before 0.11 offers as before.
-  const missingOffered = $derived(findsTracks());
   const ownCover = $derived(deviceCovers && !!localCovers[coverKey(source, a.id)]);
   let picker = $state<HTMLInputElement>();
   async function chosen(e: Event) {
     const file = (e.currentTarget as HTMLInputElement).files?.[0];
-    const [src, id, title, here] = [source, a.id, a.title, deviceCovers];
+    const [src, id] = [source, a.id];
     onclose();
     if (!file) return;
-    if (!here) return upload(src, id, title, file);
     try {
       await setLocalCover(src, id, file);
     } catch (e) {
       toast.fail(e, "The cover wasn't changed");
-    }
-  }
-  async function upload(src: string, id: string, title: string, file: File) {
-    if (file.size > COVER_MAX) return toast.fail(null, 'That picture is too large (at most 12 MB)');
-    try {
-      const run = await uploadAlbumCover(src, id, file);
-      whenWritten(run, `Changed the cover of ${title}.`, () => void refreshCover(src, id, albumCoverUrl(src, id)));
-    } catch (e) {
-      const big = e instanceof ApiError && e.status === 413;
-      toast.fail(missingCall(e) || big ? null : e, big ? 'That picture is too large (at most 12 MB)' : missingCall(e) ? "This server can't take a cover yet" : "The cover wasn't uploaded");
     }
   }
   /** The server's cover again, instead of the picture chosen on this device. */
@@ -361,10 +277,7 @@
   const addable = $derived(toList.addable);
 
   // svelte-ignore state_referenced_locally
-  let step = $state<ToPlaylistStep>(start === 'cover' ? 'menu' : start);
-  $effect(() => {
-    if (untrack(() => start) === 'cover') untrack(askCover);
-  });
+  let step = $state<ToPlaylistStep>(start);
   /** Download… (decision 0058, amended 0.10): its tracks, in lib/DownloadStep. */
   let exporting = $state(false);
   // Opened at the playlists for one that cannot go in them: there is nothing to add it to. Since 2026-10-15 every
@@ -376,257 +289,8 @@
       onclose();
     }
   });
-
-  // What its copies allow, by the Library's list (read here if nothing has yet; until then no library entries), each
-  // asked in place. The copy being asked of is held apart: it stays what the entry chose however the list changes.
-  // Deleting from a main library asks once more.
-  $effect(() => {
-    if (!library.view && source !== DEVICE) readLibrary(false).catch(() => {});
-  });
-  const listedHere = $derived(listedAlbum(source, a.id));
-  const copyOffers = $derived(listedHere ? offersIn(listedHere.s, listedHere.a) : []);
-  const trashDays = $derived(library.view?.trash_days ?? 14);
-  let copy = $state<AlbumOffer | null>(null);
-  const fromName = $derived(copy?.name ?? 'Incoming');
-  const primary = $derived(copy?.from?.kind === 'main');
-  const severalCopies = $derived(copyOffers.length > 1);
-  // Play from: a queue of the record from another of its copies. It goes with that queue, so it needs no account and
-  // nothing is asked first. Each track carries `from` wherever the queue goes, a player elsewhere too.
-  const playFrom = $derived(listedHere ? playFromEntries(listedHere.a, listedHere.s.library_info, shownIn(source)) : []);
-  const editable = $derived(listedHere ? mayEdit(listedHere.a, listedHere.s.library_info, me.admin) : me.admin);
-  // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
-  const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
-  // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
-  // 2026-11-02).
-  const converted = (n: number, library: string) =>
-    `${n} lossless ${n === 1 ? 'file' : 'files'} above ${library}'s quality limit ${n === 1 ? 'is' : 'are'} converted to FLAC first.`;
-  let ask = $state<false | Ask | 'really'>(false);
-  /** The library a move or a Replace goes into. */
-  let to = $state<LibraryInfo | null>(null);
-  const adding = $derived(!!to && adds(copy?.from ?? null, to));
-  let keep = $state<KeepPreview | null>(null);
-  /** A copy, as the preview says (T3: the server's word, so a departed user's music moves). */
-  const copying = $derived(!!keep?.copy);
-  /** The move's sentences, as its preview says it (T3). */
-  const sentences = (k: KeepPreview) => moveSentences({ title: a.title, from: fromName, to: to?.name ?? '', folder: k.folder ?? '', files: k.files, copy: !!k.copy, adding });
-  let swap = $state<ReplacePreview | null>(null);
-  /** What Replace's sheet offers for the copy asked of (OQ-A): from someone's own music no cover to choose, nothing carried over,
-   *  nothing said of Lidarr, and the tap says what the sheet showed. */
-  const swapAsks = $derived(replaceSheet(copy?.from?.kind));
-  /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
-  let coverWay = $state<'keep' | 'new'>('keep');
-  /** Change cover: the album's own and those to choose from (null while asked). */
-  type Covers = { current: CoverChoice | null; candidates: CoverChoice[] };
-  let covers = $state<Covers | null>(null);
-  // Looked for as a task (the owner, 2026-10-25: Discover's progress, how many from which source): its step under the
-  // loader, its result the covers. A server before it: asked in one go, as before.
-  let coverTask = $state<number | null>(null);
-  const coverLook = $derived(coverTask !== null ? tasks.of(`covers:${a.id}`) : null);
-  const coverProgress = $derived(coverLook && coverLook.finished === null ? progressOf(coverLook) : null);
-  // As they are found (the owner, 2026-10-25): what the running look has so far, its result once it ends.
-  const coversSoFar = $derived(covers ?? ((coverLook?.result as Covers | null | undefined) || null));
-  /** Stops the look (a cover chosen, or the menu left): no more of Discogs' pace spent on it. */
-  function stopLook() {
-    const id = coverTask;
-    if (id === null || !coverLook || coverLook.finished !== null) return;
-    coverTask = null;
-    stopTask(id).catch(() => {});
-  }
-  $effect(() => () => untrack(stopLook));
-  $effect(() => (ask === 'cover' ? tasks.follow() : undefined));
-  $effect(() => {
-    const t = coverLook;
-    if (!t || t.id !== coverTask || t.finished === null) return;
-    coverTask = null;
-    if (t.error) {
-      toast.show({ text: t.error, tone: 'error' });
-      onclose();
-    } else covers = t.result as Covers;
-  });
-  async function askCover() {
-    ask = 'cover';
-    covers = null;
-    // A server whose list says it cannot look as a task (cover_look) is asked for its covers at once, as before 0.9.6.
-    if (can('cover_look') === false) {
-      try {
-        covers = await getAlbumCovers(source, a.id);
-      } catch (e) {
-        toast.fail(e, 'Could not find covers');
-        onclose();
-      }
-      return;
-    }
-    try {
-      const { task } = await lookAlbumCovers(source, a.id);
-      tasks.begun(task);
-      coverTask = task.id;
-    } catch (e) {
-      if (!missingCall(e)) {
-        toast.fail(e, 'Could not find covers');
-        return onclose();
-      }
-      try {
-        covers = await getAlbumCovers(source, a.id);
-      } catch (e2) {
-        toast.fail(e2, 'Could not find covers');
-        onclose();
-      }
-    }
-  }
-  /** Change cover's From an address. */
-  let coverUrl = $state('');
-  /** The cover being made the album's: only its card turns busy (the owner, 2026-10-25). */
-  let settingCover = $state<string | null>(null);
-  const setCover = (c: CoverChoice) => {
-    if (working) return;
-    settingCover = c.url;
-    stopLook();
-    return act(async () => {
-      const run = await setAlbumCover(source, a.id, c.url);
-      onclose();
-      whenWritten(run, `Changed the cover of ${a.title}.`, () => void refreshCover(source, a.id, albumCoverUrl(source, a.id)));
-    }, 'Could not change the cover').finally(() => (settingCover = null));
-  };
-  const size = (c: CoverChoice) => (c.width && c.height ? `${c.width} × ${c.height}` : '');
-  let year = $state('');
-  let working = $state(false);
-
-  async function askMove(of: AlbumOffer, target: LibraryInfo) {
-    ask = 'move';
-    copy = of;
-    to = target;
-    keep = null;
-    year = '';
-    try {
-      keep = await movePreview(source, a.id, of.library, target.id);
-    } catch (e) {
-      toast.fail(e, 'Could not work out the names');
-      onclose();
-    }
-  }
-  async function askReplace(of: AlbumOffer, target: LibraryInfo) {
-    ask = 'replace';
-    copy = of;
-    to = target;
-    swap = null;
-    coverWay = 'keep';
-    year = '';
-    try {
-      swap = await replacePreview(source, a.id, of.library, target.id);
-    } catch (e) {
-      toast.fail(e, 'Could not pair the tracks');
-      onclose();
-    }
-  }
-  function askDelete(of: AlbumOffer) {
-    copy = of;
-    ask = 'delete';
-  }
-  // With a year typed in, show what the names would be.
-  async function tryYear() {
-    if (!/^\d{4}$/.test(year.trim()) || !to) return;
-    try {
-      if (ask === 'replace') swap = await replacePreview(source, a.id, copy?.library, to.id, year.trim());
-      else keep = await movePreview(source, a.id, copy?.library, to.id, year.trim());
-    } catch {
-      /* keep the question open */
-    }
-  }
-  async function act(work: () => Promise<void>, failure: string) {
-    if (working) return;
-    working = true;
-    try {
-      await work();
-    } catch (e) {
-      toast.fail(e, failure);
-    } finally {
-      working = false;
-      onclose();
-    }
-  }
-  // Done: the copy leaves its library, shown at once as `left` says. Queued (lossless files above the target's quality
-  // limit to convert first): its row shows the progress instead, and the queue says when it is done, to whoever asked (W13).
-  function moved(r: AlbumMoved, words: string, left: () => void, from: string | undefined, undone = `${r.title} is back in ${fromName}.`) {
-    if (r.queued) {
-      jobs.queued({ source, album_id: a.id, from });
-      jobs.poke();
-      return;
-    }
-    // It stays open where it is (the owner, 2026-11-01: no U-turns): its panel follows it to its new place.
-    left();
-    ongone?.();
-    withUndo(words, [r.undo], { undone, after: onundone });
-  }
-  /** Deleted: the record stays while one copy does; with its last its panel closes. */
-  function gone() {
-    ongone?.();
-    for (const x of copiesGone([{ source, id: a.id, from: copy?.library }])) albumGone(x.source, x.id);
-  }
-  const moveIt = () =>
-    act(async () => {
-      if (!to) return;
-      const [into, from] = [to, copy?.library];
-      // The tap carries what its sheet showed (RF10): the server refuses it where the copy changed since.
-      const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined, moveSheet(keep));
-      // A copy leaves the record's copy where it was and adds the new one (T3); a move moves it.
-      const said = keep ? sentences(keep) : null;
-      const went = [{ source, id: a.id, from, to: into.id }];
-      moved(r, said?.done ?? `Moved ${a.title} to ${into.name}.`, () => (copying ? copiesAdded(went) : copiesMoved(went)), from, said?.undone);
-    }, `Could not ${moveWords(copying, adding).act} the ${word}`);
-  /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
-  const replaceIt = (carry = false) =>
-    act(async () => {
-      if (!to) return;
-      const [into, from, kind, asks] = [to, copy?.library, copy?.from?.kind, swapAsks];
-      const shown = asks.shown ? replaceShown(swap) : undefined;
-      const r = await replaceIncoming(source, a.id, from, into.id, year.trim() || undefined, asks.cover && swap?.covers ? coverWay : undefined, asks.carry && carry, shown);
-      // The copy that took the other's place is now that one: what is listed of it comes with the next read. From Incoming the copy
-      // leaves; from someone's own music it was copied and stays (RY02.4).
-      const said = replacedWords(r.title, into.name, fromName, kind);
-      moved(r, said.done, () => copiesReplaced([{ source, id: a.id, from, kind }]), from, said.undone);
-    }, `Could not replace the ${word}`);
-  /** The tag differences shown at first (the rest behind "And N more"). */
-  const DIFF_SHOWN = 12;
-  let diffAll = $state(false);
-  const remove = () =>
-    act(async () => {
-      const { undo, title } = await deleteAlbum(source, a.id, copy?.library);
-      gone();
-      withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in ${fromName}.`, after: onundone });
-    }, `Could not delete the ${word}`);
-  async function cancel(id: number) {
-    onclose();
-    try {
-      await cancelJob(id);
-      await jobs.poke();
-    } catch (e) {
-      toast.fail(e, 'Could not cancel it');
-    }
-  }
 </script>
 
-{#snippet lookProgress()}
-  {#if coverProgress}{#if coverProgress.value !== null}<Meter label={coverProgress.line} value={coverProgress.value} />{:else}<span class="look-line">{coverProgress.line}</span>{/if}{/if}
-{/snippet}
-
-<!-- A record not had's Want or Requested, on its own card first, as Discover's card draws them (F36). -->
-{#snippet wantCard()}
-  {#if notHad && want}
-    <MenuGroup label="Want">
-      <MenuEntry
-        icon={want.requested ? 'inbox' : 'circlePlus'}
-        label={want.requested ? 'Requested' : 'Want'}
-        disabled={want.disabled}
-        onclick={() => {
-          want.run();
-          onclose();
-        }}
-      />
-    </MenuGroup>
-  {/if}
-{/snippet}
-
-<!-- Missing tracks (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
 {#snippet entry(e: EntryId)}
   {#if notHad && !offeredNotHad(e)}
     <!-- A record not had: nothing of a copy's (lib/recordNotHad). -->
@@ -645,19 +309,6 @@
     {#each artistNames as name (name)}<MenuEntry icon={ICON_OF.artist} label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
   {:else if e === 'goGenre'}
     {#each genres as g (g)}<MenuEntry icon={ICON_OF.genre} label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
-  {:else if e === 'soundsLike'}
-    <!-- Sounds like it: the crate search's sentence with the album as its "like" term (0.12: one way to make a crate). -->
-    {#if source === 'cratarr'}<MenuEntry
-        icon={ICON_OF.soundsLike}
-        label="Sounds like this"
-        onclick={() => {
-          // Read before closing: closing lets go of the album.
-          const chip = likeChip('album', a.id, a.title);
-          onclose();
-          leavePlayer();
-          grabCrate([chip]);
-        }}
-      />{/if}
   {:else if e === 'favourite'}
     <MenuEntry icon="heart" label="Favourite" switched={fav} onclick={toggleFavourite} />
   {:else if e === 'rating'}
@@ -698,200 +349,39 @@
     <MenuEntry icon="search" label="Web search" onclick={() => search('https://duckduckgo.com/?q=')} />
   {:else if e === 'geniusSearch'}
     <MenuEntry icon="search" label="Genius search" onclick={() => search('https://genius.com/search?q=')} />
-  {:else if e === 'changeCover'}
-    <!-- Its administrators' (decision 0051): the cover for everyone. -->
-    {#if me.admin && source === 'cratarr'}<MenuEntry icon="image" label="Change cover" onclick={askCover} />{/if}
-  {:else if e === 'missingTracks'}
-    <!-- Its release's tracks, the missing ones found one at a time (0.9.8, single-track replacement). -->
-    {#if me.admin && source === 'cratarr' && missingOffered}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
-  {:else if e === 'edit'}
-    {#if editable && source === 'cratarr'}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
   {:else if e === 'deviceCover'}
-    {#if !(me.admin && source === 'cratarr') && deviceCovers}<MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />{/if}
+    {#if deviceCovers}<MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />{/if}
   {:else if e === 'serverCover'}
     <!-- No Read the cover again (the owner, 2026-10-26): a cover's address carries its stamp (lib/coverStamps), so a
          changed one shows by itself. Only a picture chosen on this device is undone here. -->
     {#if ownCover}<MenuEntry icon="imageOff" label="Use the server's cover" onclick={serverCover} />{/if}
-  {:else if e === 'playFrom'}
-    {#each playFrom as p (p.library)}<MenuEntry icon="play" label={p.label} onclick={() => run(() => playListedAlbum(source, a as ListedAlbum, p.library))} />{/each}
-  {:else if e === 'cancelConversion'}
-    {#if me.admin}
-      {#each new Set(copyOffers.flatMap((o) => o.job ?? [])) as job (job)}<MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />{/each}
-    {/if}
-  {:else if e === 'moveTo'}
-    {#each moveEntries(copyOffers) as m (m.key)}<MenuEntry icon={ICON_OF[`${m.verb}To`]} label={m.label} onclick={() => askMove(m.offer, m.to)} />{/each}
-  {:else if e === 'replaceIn'}
-    {#if me.admin}
-      {#each replaceEntries(copyOffers) as r (r.key)}<MenuEntry icon="swap" label={r.label} onclick={() => askReplace(r.offer, r.to)} />{/each}
-    {/if}
   {:else if e === 'removeResume'}
     {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
-  {:else if e === 'deleteAlbum'}
-    {#each deleteEntries(copyOffers, word) as d (d.offer.library)}<MenuEntry icon="trash" label={d.label} danger onclick={() => askDelete(d.offer)} />{/each}
   {/if}
 {/snippet}
 
-{#if missingOpen}
-  <ReplaceTrackSheet {source} album={{ id: a.id, title: a.title }} {onclose} />
-{:else if editOpen}
-  <RecordEdit {source} albums={[a as ListedAlbum]} {onclose} />
-{:else}
 <MenuSheet
   label={a.title}
   {onclose}
   images={[cover ?? albumCoverUrl(source, a.id)]}
   title={a.title}
   chips={[a.artist ?? 'Unknown artist']}
-  heart={notHad || ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
+  heart={notHad || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
   {actions}
-  beside={ask === 'cover' && coverProgress ? lookProgress : null}
-  end={ask === 'cover'
-    ? [
-        ...(coverProgress ? [{ icon: 'search' as const, label: 'Looking for covers', busy: true, onclick: () => {} }] : []),
-        { icon: 'link', label: 'From an address', onclick: () => ((coverUrl = ''), (ask = 'cover-url')) },
-        ...(offers('cover_upload') ? [{ icon: 'upload' as const, label: 'Upload cover', onclick: () => picker?.click() }] : []),
-      ]
-    : null}
-  onback={ask === 'cover-url' ? () => (ask = 'cover') : ask ? () => (ask = false) : exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
-  step={ask || (exporting ? 'export' : step)}
+  onback={exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
+  step={exporting ? 'export' : step}
 >
   {#if exporting && tracks}
     <DownloadStep what={{ kind: 'tracks', name: a.title, tracks: tracks.map((x) => ({ source: x.source, id: x.id })) }} {tracks} {onclose} />
-  {:else if ask === 'move'}
-    <div class="form">
-      {#if !keep}
-        <Asking />
-      {:else if keep.refused?.kind === 'needs_year'}
-        <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
-        <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
-      {:else if keep.refused}
-        <p class="ask">Can't {moveWords(copying, adding).act} {a.title}: {keep.refused.detail}</p>
-      {:else}
-        <p class="ask">
-          {sentences(keep).lead}<strong>{keep.folder}</strong>{sentences(keep).tail}{#if keep.convert}
-            {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
-            {` ${NO_LIDARR}`}{/if}
-        </p>
-      {/if}
-      <div class="actions">
-        {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{sentences(keep).button}</button>
-        {/if}
-        <button onclick={onclose}>Cancel</button>
-      </div>
-    </div>
-  {:else if ask === 'replace'}
-    <div class="form">
-      {#if !swap}
-        <Asking />
-      {:else if swap.refused?.kind === 'needs_year'}
-        <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
-        <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
-      {:else if swap.refused?.kind === 'unmatched'}
-        <p class="ask">Can't replace {swap.old}: no match for {swap.refused.detail.join(', ')}.</p>
-      {:else if swap.refused}
-        <p class="ask">Can't replace {swap.old}: {swap.refused.detail}</p>
-      {:else}
-        <p class="ask">
-          Replace <strong>{swap.old}</strong> with this copy ({swap.tracks} {swap.tracks === 1 ? 'track' : 'tracks'}{swap.added
-            ? `, ${swap.added} new`
-            : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
-          {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
-            {` ${converted(swap.convert, to?.name ?? '')}`}{/if}{#if !swap.acquisition && swapAsks.lidarr}
-            {` ${NO_LIDARR}`}{/if}
-        </p>
-        <!-- Its cover (the owner, 2026-10-25): the one it has, or the new copy's; both shown. -->
-        {#if swapAsks.cover && swap.covers && (swap.covers.current || swap.covers.new)}
-          {@const c = swap.covers}
-          <div class="covers">
-            <figure class:on={coverWay === 'keep'}><span class="thumb"><Cover src={c.current} /></span><figcaption>Current</figcaption></figure>
-            <figure class:on={coverWay === 'new'}><span class="thumb"><Cover src={c.new} /></span><figcaption>New</figcaption></figure>
-          </div>
-          <SettingRow label="Cover"><Seg label="Cover" options={[{ value: 'keep', label: 'Keep' }, { value: 'new', label: 'New' }]} bind:value={coverWay} /></SettingRow>
-        {/if}
-        <!-- What changes in the tags (0.9.7; the owner, 2026-10-26: only the differences), what the new copy lacks, and what
-             carrying over brings along. -->
-        {#if swap.lost?.length}<p class="ask lost">The new copy lacks: {swap.lost.join(', ')}.</p>{/if}
-        {#if swap.diff?.length}
-          <ul class="diff">
-            {#each diffAll ? swap.diff : swap.diff.slice(0, DIFF_SHOWN) as d, i (i)}
-              <li>
-                <small>{d.track ?? 'Every track'} · {d.field}</small>
-                <span><span class="was">{d.old || '–'}</span> → <b>{d.new || '–'}</b></span>
-              </li>
-            {/each}
-          </ul>
-          {#if !diffAll && swap.diff.length > DIFF_SHOWN}<button class="more" onclick={() => (diffAll = true)}>And {swap.diff.length - DIFF_SHOWN} more</button>{/if}
-        {/if}
-        {#if swapAsks.carry && swap.carry?.length}<p class="ask carried">Carried over: {swap.carry.join(', ')}.</p>{/if}
-      {/if}
-      <div class="actions">
-        {#if swap && (!swap.refused || swap.refused.kind === 'needs_year')}
-          {#if swapAsks.carry && swap.carry?.length}
-            <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={() => replaceIt(true)}>Replace and carry over</button>
-            <button disabled={working || !!swap.refused} onclick={() => replaceIt()}>Replace only</button>
-          {:else}
-            <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={() => replaceIt()}>Replace</button>
-          {/if}
-        {/if}
-        <button onclick={onclose}>Cancel</button>
-      </div>
-    </div>
-  {:else if ask === 'cover-url'}
-    <!-- A picture's address for its cover (the owner, 2026-10-25: beside Upload, top right of Change cover). -->
-    <div class="form">
-      <p class="ask">The picture's address</p>
-      <input class="url" type="url" inputmode="url" placeholder="https://…" aria-label="Picture address" bind:value={coverUrl} />
-      <div class="actions">
-        <button class="solid" disabled={working || !/^https?:\/\/\S+$/.test(coverUrl.trim())} aria-busy={working} onclick={() => setCover({ url: coverUrl.trim(), width: null, height: null })}>Use it</button>
-        <button onclick={() => (ask = 'cover')}>Cancel</button>
-      </div>
-    </div>
-  {:else if ask === 'cover'}
-    <!-- Change cover (0.9.5): the album's own first, then Discogs' and the Cover Art Archive's, as an artist's albums;
-         a tap makes it the cover, inside every file and beside them (Undo brings the old one back). -->
-    <!-- A few seconds with Discogs (its master and up to six releases, at its pace): the covers as they are found,
-         how far beside the back button, the busy ring at the top right (the owner, 2026-10-25). -->
-    {#if !coversSoFar}
-      {#if !coverProgress}<PageLoading />{/if}
-    {:else if covers && !covers.candidates.length}
-      <p class="ask pad">No other covers found.</p>
-    {:else}
-      {@const list = coversSoFar}
-      <ul class="cover-grid">
-        {#if list.current}<li><AlbumCard source="cover" album={{ id: 'current', title: 'Current', year: null }} cover={list.current.url} lines={[size(list.current)]} onopen={() => onclose()} /></li>{/if}
-        {#each list.candidates as c (c.url)}
-          <li><AlbumCard source="cover" album={{ id: c.url, title: c.what ?? (c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive'), year: null }} cover={c.url} lines={[size(c), c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive']} busy={settingCover === c.url} onopen={() => setCover(c)} /></li>
-        {/each}
-      </ul>
-    {/if}
-  {:else if ask === 'delete'}
-    <div class="form">
-      <p class="ask">Delete {a.title}{severalCopies ? ` from ${fromName}` : ''}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
-      <div class="actions">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>{severalCopies ? `Delete from ${fromName}` : `Delete ${word}`}</button>
-        <button onclick={onclose}>Cancel</button>
-      </div>
-    </div>
-  {:else if ask === 'really'}
-    <!-- A main library's extra step (decision 0034; 0101: any of them). -->
-    <div class="form">
-      <p class="ask">{a.title} is in {fromName}, your main library. Delete it from there?</p>
-      <div class="actions">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete from {fromName}</button>
-        <button onclick={onclose}>Cancel</button>
-      </div>
-    </div>
   {:else if step === 'menu'}
-    <!-- The shared groups, in the table's order (decision 0058, lib/menuTable); a record not had's Want first. -->
-    <MenuTable kind="album" {entry} lead={wantCard}>
+    <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
+    <MenuTable kind="album" {entry}>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
     </MenuTable>
   {:else}
     <PlaylistsStep to={toList} bind:step {onclose} />
   {/if}
 </MenuSheet>
-{/if}
 
 <style>
   /* The rating's card: its word, then five stars, filled up to the rating in the accent. */
@@ -913,171 +403,4 @@
   .picker {
     display: none;
   }
-
-  /* Change cover's choices: as an artist's albums, a grid of covers. */
-  .cover-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 16px 12px;
-    margin: 0;
-    padding: 0 16px 12px;
-    list-style: none;
-  }
-
-  .pad {
-    padding: 0 16px;
-  }
-
-  /* Replace's two covers, the chosen one ringed in the accent. */
-  .covers {
-    display: flex;
-    gap: 12px;
-  }
-
-  .covers figure {
-    margin: 0;
-    opacity: 0.55;
-  }
-
-  .covers figure.on {
-    opacity: 1;
-  }
-
-  .covers .thumb {
-    display: block;
-    width: 88px;
-    height: 88px;
-    overflow: hidden;
-    border-radius: 8px;
-  }
-
-  .covers figure.on .thumb {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  .covers figcaption {
-    margin-top: 4px;
-    color: var(--muted);
-    font-size: 13px;
-  }
-
-  .form {
-    display: grid;
-    gap: 12px;
-    padding: 0 16px 8px;
-  }
-
-  .ask {
-    margin: 0;
-    font-size: 0.92rem;
-  }
-
-  /* Replace's tag differences (0.9.7): each as it was and as it comes, what the new copy lacks in amber. */
-  .ask.lost {
-    color: var(--warn-ink);
-  }
-
-  .ask.carried {
-    color: var(--muted);
-  }
-
-  .diff {
-    display: grid;
-    gap: 8px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-size: 0.88rem;
-  }
-
-  .diff li {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .diff small,
-  .diff .was {
-    color: var(--muted);
-  }
-
-  .more {
-    justify-self: start;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--accent-ink);
-    font: inherit;
-    font-size: 0.88rem;
-    cursor: pointer;
-  }
-
-  .actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .actions button {
-    min-height: 40px;
-    padding: 0 14px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .actions button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
-  }
-
-  .actions button.danger.solid {
-    background: var(--danger);
-    border-color: var(--danger);
-    color: #fff;
-    font-weight: 600;
-  }
-
-  .actions button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .year {
-    min-height: 40px;
-    width: 7em;
-    padding: 0 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font: inherit;
-    color: inherit;
-  }
-
-  /* From an address: the whole width, as the year's field otherwise. */
-  .url {
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 40px;
-    padding: 0 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font: inherit;
-    color: inherit;
-  }
-
-  /* The look's step without a count, beside the back button: as Meter's line. */
-  .look-line {
-    color: var(--accent-ink);
-    font-size: 0.8rem;
-  }
-
-  /* A question's answer being worked out: the loading sign, small (as the track menu's). */</style>
+</style>

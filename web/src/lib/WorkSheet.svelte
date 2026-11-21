@@ -6,6 +6,7 @@
   // (its snippet, Play next, Add to queue: the owner, 2026-10-30, works reachable). Cratarr's own library only.
   import { fromAction } from 'svelte/attachments';
   import AlbumMenu from './AlbumMenu.svelte';
+  import RecordMenu, { opensRecord } from './sheet/Record.svelte';
   import { albumCoverUrl, getWork, type WorkRecording, type WorkView } from './api';
   import { longpress } from './longpress';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
@@ -129,7 +130,7 @@
   {/if}
 </MenuSheet>
 {#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
-{#if albumMenu}{@const r = shownAlbum!}<AlbumMenu source={SOURCE} album={{ id: r.album_id, title: r.album, artist: r.performers.length ? r.performers.join(', ') : null }} onclose={() => (albumMenu = null)} />{/if}
+{#if albumMenu}{@const r = shownAlbum!}{#if opensRecord(SOURCE)}<RecordMenu id={r.album_id} from="work" title={r.album} onclose={() => (albumMenu = null)} />{:else}<AlbumMenu source={SOURCE} album={{ id: r.album_id, title: r.album, artist: r.performers.length ? r.performers.join(', ') : null }} onclose={() => (albumMenu = null)} />{/if}{/if}
 
 <style>
   .rows,

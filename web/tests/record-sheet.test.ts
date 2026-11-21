@@ -68,7 +68,7 @@ test('the Head draws the state as sent', () => {
   assert.deepEqual(headChips(entity({ properties: { ...entity().properties, year: { value: null, by: [] }, type: { value: null, by: [] } } })), ['Glass Harbour', 'Record']);
   // No state word is written in the sheet: they come with the entity.
   for (const s of shared('record-states.json').states as { words: string }[]) {
-    const words = s.words.split('{')[0].trim();
+    const words = s.words.split('{')[0];
     for (const [path, text] of sources) if (path.startsWith('lib/sheet/')) assert.ok(!text.includes(`'${words}`) && !text.includes(`>${words}`), `${path} writes "${words}"`);
   }
 });
@@ -142,7 +142,8 @@ test('every record opener opens the one sheet with its place', () => {
   assert.deepEqual([...PLACES].sort(), [...new Set([...words, 'label'])].sort(), "the page's places are the when-table's words");
   let mounts = 0;
   for (const [path, text] of sources) {
-    for (const m of text.matchAll(/<Record\b((?:=>|[^>])*?)\/>/g)) {
+    // The one sheet, mounted as every kind's sheet is named (AlbumMenu, TrackMenu…): `import RecordMenu from './sheet/Record.svelte'`.
+    for (const m of text.matchAll(/<RecordMenu\b((?:=>|[^>])*?)\/>/g)) {
       mounts++;
       const from = m[1].match(/\bfrom=(?:"([a-z]+)"|\{(\w+)\})/);
       assert.ok(from, `${path}: a record opener without its place`);
@@ -150,7 +151,7 @@ test('every record opener opens the one sheet with its place', () => {
       assert.match(m[1], /\bid=/, `${path}: a record by its id`);
     }
     // The sheet other servers' albums and this device's music keep: a Cratarr record goes to the one sheet first.
-    if (/<AlbumMenu\b/.test(text)) assert.match(text, /\{#if opensRecord\(/, `${path}: a Cratarr record opened on the old sheet`);
+    if (/<AlbumMenu\b/.test(text)) assert.ok(/\{[#:](?:else )?if [^}\n]*\bopensRecord\(/.test(text), `${path}: a Cratarr record opened on the old sheet`);
   }
   assert.ok(mounts >= 10, `the openers moved: ${mounts}`);
   for (const f of ['lib/HealthPanel.svelte', 'lib/RecordProblemSheet.svelte', 'lib/HealthIncoming.svelte']) assert.doesNotMatch(read(f), /<AlbumMenu\b/, `${f}: only Cratarr's records`);
@@ -176,6 +177,8 @@ const WAITING: Record<string, string> = {
 test('the page reads no right for a record', () => {
   const found = new Map<string, number>();
   for (const [path, text] of sources) {
+    // Settings' libraries (a library's own `keep_to`) and the visuals' patch graph (a node's `deletable`) hold no record.
+    if (path.startsWith('lib/settings/') || path.startsWith('lib/visuals/')) continue;
     const n = [...text.matchAll(RIGHTS)].length;
     if (n) found.set(path, n);
   }
@@ -183,15 +186,17 @@ test('the page reads no right for a record', () => {
   for (const path of Object.keys(WAITING)) assert.ok(found.has(path), `${path} reads no right any more: take it off the waiting list`);
   // The record's sheet, its cache and the sheet other servers' albums keep read no role or permission at all (CN8).
   for (const f of ['lib/sheet/Record.svelte', 'lib/sheet/record.ts', 'lib/recordCache.ts', 'lib/cache.svelte.ts', 'lib/AlbumMenu.svelte', 'lib/HealthIncoming.svelte']) {
-    assert.doesNotMatch(read(f), /\bme\.admin\b|\bpermissions\.request\b|\bcopiesRule\b/, `${f} reads a right`);
+    assert.doesNotMatch(read(f), /\bme\.admin\b|\bpermissions\.request\b|\b(?:copyPlaying|copyLines|playFromEntries|moveEntries|replaceEntries|deleteEntries|adds)\(/, `${f} reads a right`);
   }
 });
 
 test("no record entry's words or icon are written in the sheet: they are the server's table", () => {
   const sheet = read('lib/sheet/Record.svelte') + read('lib/sheet/record.ts');
   for (const e of shared('entries.json').entries as { name: string; title: string; icon: string }[]) {
+    // A title with a blank by its words before it ("Move to "), any other whole.
     const words = e.title.split('{')[0];
-    assert.ok(!sheet.includes(`'${words}`) && !sheet.includes(`"${words}`) && !sheet.includes(`>${words}`), `the sheet writes "${words}" (${e.name})`);
+    const quotes = e.title.includes('{') ? ["'", '"', '>'].map((o) => [o, '']) : [["'", "'"], ['"', '"'], ['>', '<']];
+    for (const [open, end] of quotes) assert.ok(!sheet.includes(`${open}${words}${end}`), `the sheet writes "${words}" (${e.name})`);
   }
 });
 

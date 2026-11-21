@@ -61,8 +61,8 @@ function server() {
   const cache = new RecordCache(
     (id, place) =>
       new Promise<Entity>((ok, no) => {
-        asks.push({ id, place, ok, no });
-        if (auto) queueMicrotask(() => answer(asks.length - 1));
+        const i = asks.push({ id, place, ok, no }) - 1;
+        if (auto) queueMicrotask(() => answer(i));
       }),
     (e) => (e instanceof Error && e.message.startsWith('404 ') ? e.message.slice(4) : null),
   );

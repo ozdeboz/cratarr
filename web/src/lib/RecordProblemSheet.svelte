@@ -12,7 +12,7 @@
   import { FIXABLE } from './fixes.svelte';
   import { review } from './fileRuns.svelte';
   import { LEVEL, fullOf } from './healthTools';
-  import AlbumMenu from './AlbumMenu.svelte';
+  import RecordMenu from './sheet/Record.svelte';
   import HealthItemTools from './HealthItemTools.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import MoreInfo from './MoreInfo.svelte';
@@ -100,7 +100,7 @@
 {:else if betterOf}
   <ReplaceTrackSheet source={betterOf.source} album={{ id: betterOf.album, title: '' }} replace={{ source: betterOf.source, id: betterOf.track }} onclose={done} />
 {:else if coverOf}
-  <AlbumMenu source="cratarr" album={{ id: coverOf.id, title: coverOf.title, artist: null }} start="cover" onclose={done} />
+  <RecordMenu id={coverOf.id} from="problem" title={coverOf.title} start="cover" onclose={done} />
 {:else if !elsewhere}
   <MenuSheet label={title} {title} {onclose}>
     <div class="problem">

@@ -405,9 +405,10 @@ test("Replace from someone's own music carries its sheet and the own copy's fold
 });
 
 test('every move, copy and Replace tap sends its sheet', () => {
-  const menu = readFileSync(new URL('../src/lib/AlbumMenu.svelte', import.meta.url), 'utf8');
+  // The record's one sheet (RS01) and several records' entries.
+  const menu = readFileSync(new URL('../src/lib/sheet/Record.svelte', import.meta.url), 'utf8');
   const several = readFileSync(new URL('../src/lib/SeveralAlbums.svelte', import.meta.url), 'utf8');
-  assert.match(menu, /await moveAlbum\(source, a\.id, from, into\.id, year\.trim\(\) \|\| undefined, moveSheet\(keep\)\)/, "the menu's");
+  assert.match(menu, /await moveAlbum\(OWN, rid, from, into, year\.trim\(\) \|\| undefined, moveSheet\(keep\)\)/, "the record sheet's");
   assert.match(menu, /const shown = asks\.shown \? replaceShown\(swap\) : undefined;/, "Replace's");
   assert.match(several, /await moveAlbum\(x\.s\.id, x\.a\.id, x\.from, x\.to\.id, undefined, moveSheet\(p\)\)/, "a group's, each its own preview's");
 });

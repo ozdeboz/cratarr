@@ -39,7 +39,7 @@
   import { LEVEL, allGone, fullOf, goneTracks } from './healthTools';
   import { ENTRY_NAME, goToName } from './menuTable';
   import { FIXABLE } from './fixes.svelte';
-  import AlbumMenu from './AlbumMenu.svelte';
+  import RecordMenu from './sheet/Record.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { releaseOf, type ReleaseTrack } from './replaceTrack';
   import { me } from './me.svelte';
@@ -627,7 +627,7 @@
 {/if}
 {#if coverOf}
   {@const c = shownCover!}
-  <AlbumMenu source="cratarr" album={{ id: c.id, title: c.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
+  <RecordMenu id={c.id} from="problem" title={c.title} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
 {/if}
 {#if betterOf}
   <ReplaceTrackSheet source={betterOf.source} album={{ id: betterOf.album, title: '' }} replace={{ source: betterOf.source, id: betterOf.track }} onclose={() => ((betterOf = null), loadHealth())} />
