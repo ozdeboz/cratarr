@@ -12,9 +12,11 @@ import { keep, readKept } from './keptStore';
 import { whenSent } from './later.svelte';
 import { reach, whenReached } from './reach.svelte';
 
-/** The log's kinds the page shows, and the `changed` area each is told as. */
+/** The log's kinds the page shows, and the `changed` area each is told as; records as the live channel tells them, `{ rev, ids }`
+ *  (SCENARIOS-DC1 LV9: the one page cache reads them, lib/cache.svelte). */
 const AREAS: Record<string, string> = { playlist: 'playlists', favourite: 'favourites', rating: 'ratings', excluded: 'excluded' };
-const KINDS = Object.keys(AREAS);
+const RECORD = 'record';
+const KINDS = [...Object.keys(AREAS), RECORD];
 const EVERY_MS = 60_000;
 /** Pages of the log read in one go at most (a long time away: the rest next time). */
 const PAGES = 20;
@@ -58,7 +60,11 @@ export async function readChangesNow() {
     }
     await keep(REV, revs);
     if (first) return;
-    for (const [kind, ids] of refresh) emit('changed', { area: AREAS[kind], ids: ids === 'all' ? null : [...ids] });
+    for (const [kind, ids] of refresh) {
+      // A record's ops told as changed: its read answers a merged one as the one it went into, and one gone in the server's words.
+      if (kind === RECORD) emit('changed', ids === 'all' ? { rev: revs[account], reset: RECORD } : { rev: revs[account], ids: [...ids].map((id) => ({ id, op: 'changed' })) });
+      else emit('changed', { area: AREAS[kind], ids: ids === 'all' ? null : [...ids] });
+    }
   } catch {
     /* next time */
   } finally {

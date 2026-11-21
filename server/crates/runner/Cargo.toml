@@ -1,0 +1,27 @@
+[package]
+name = "cratarr-runner"
+description = "Cratarr's job runner: its jobs as rows in the journal's file, their states and words, the resources they take turns on"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-store/test-support"]
+
+[dependencies]
+cratarr-store.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+cratarr-store = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }

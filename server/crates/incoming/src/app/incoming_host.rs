@@ -25,6 +25,7 @@ pub trait IncomingHost: Send + Sync + 'static {
     fn served(&self) -> &Option<Arc<crate::serve::Serve>>;
     /// The fetcher approved requests are handed to (`requests::fetcher`).
     fn request_fetcher(&self) -> Option<Box<dyn crate::ports::Fetcher>>;
-    /// A passed fetch added to its album, a run on the one path (`track_fetch::add`).
-    fn add_fetched(self: Arc<Self>, fetch: String) -> Asked<'static, Result<super::file_runs::Status>>;
+    /// A passed fetch added to its album, a run on the one path (`track_fetch::add`); `also` written in its run's own transaction,
+    /// given its Undo (RN's R2: the bulk item's Added with its run).
+    fn add_fetched(self: Arc<Self>, fetch: String, also: Option<crate::intake::Also>) -> Asked<'static, Result<super::file_runs::Status>>;
 }

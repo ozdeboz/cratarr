@@ -10,6 +10,7 @@ pub mod catalogue;
 pub mod crates;
 pub mod incoming;
 pub mod insights;
+pub mod intake;
 pub mod journal;
 pub mod moved;
 pub mod placement;

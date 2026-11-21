@@ -41,6 +41,10 @@ fn viewer(name: &str) -> Viewer {
     match name {
         "root" => Viewer::new("root", true, None, May::default(), None),
         "key" => Viewer::new("root", true, Some(Scope::Read), May::default(), None),
+        // Home Assistant's: an administrator's control key (CHECK-DC1's ruling 2, HA-CONTRACT-0.18).
+        "control" => Viewer::new("root", true, Some(Scope::Control), May::default(), None),
+        // Another administrator, signed in (ruling 3: any administrator undoes shared data).
+        "admin2" => Viewer::new("admin2", true, None, May::default(), None),
         "alice" => Viewer::new("alice", false, None, user, Some(OWN_A)),
         "bob" => Viewer::new("bob", false, None, user, Some(OWN_B)),
         "carol" => Viewer::new("carol", false, None, May { request: false, offline: false, playlists: true }, None),
@@ -105,7 +109,9 @@ fn kept_by_root(v: &Viewer) -> Record {
 fn actions(state: &str, action: &str) -> Vec<A> {
     match (state, action) {
         (_, "the preview's Play row") => vec![A::Play],
-        (_, "the Play row") => vec![A::Play, A::Shuffle, A::PlayNext, A::AddToQueue, A::StartRadio],
+        // Play reads the record's tracks (a GET); the rest are queued or started on a player (a POST, never a reading key: ruling 1).
+        (_, "Play") => vec![A::Play],
+        (_, "Shuffle, Play next, Add to queue, Start radio") => vec![A::Shuffle, A::PlayNext, A::AddToQueue, A::StartRadio],
         (_, "Want") => vec![A::Want],
         (_, "Requested") => vec![A::Requested],
         (_, "Favourite, Rating, Download\u{2026}, Sync, Delete, Edit") => {
@@ -164,9 +170,9 @@ fn holds(answer: &str, d: Decision) -> bool {
 fn the_policy_table_is_the_spec() {
     let table: Table = serde_json::from_str(POLICY).unwrap();
     assert!(table.about.contains("CN1"));
-    assert_eq!(table.viewers, ["root", "key", "alice", "bob", "carol"]);
+    assert_eq!(table.viewers, ["root", "key", "control", "admin2", "alice", "bob", "carol"]);
     let states: BTreeSet<&str> = table.rows.iter().map(|r| r.state.as_str()).collect();
-    assert_eq!((states.len(), table.rows.len()), (8, 28), "every state and row of CN1's table");
+    assert_eq!((states.len(), table.rows.len()), (8, 29), "every state and row of CN1's table, the Play row split by ruling 1");
     for row in &table.rows {
         assert_eq!(row.answers.len(), table.viewers.len(), "{row:?}");
         for (name, answer) in table.viewers.iter().zip(&row.answers) {
@@ -226,4 +232,69 @@ fn no_action_on_an_upload_reaches_whom_it_is_hidden_from() {
         // Her holding of it: not had, as if it were not there (HD6).
         assert_eq!(upload.holding, Holding::NotHad);
     }
+}
+
+/// A table the server's code holds, kept in shared/ in its written form for the page's tests (TY4): written where it differs, and
+/// then the test fails until the written file is committed, so a table changed in code and not written again fails.
+fn written(file: &str, table: &impl Serialize) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../shared").join(file);
+    let json = serde_json::to_string_pretty(table).unwrap() + "\n";
+    let kept = std::fs::read_to_string(&path).unwrap_or_default().replace('\r', "");
+    if kept != json {
+        std::fs::write(&path, &json).unwrap();
+        panic!("shared/{file} was not the table's written form: written now, commit it");
+    }
+}
+
+/// RS1: the when-table is data, read whole. The sections' one order, and a row a place: its context, the section right after the
+/// head, its library set, whether View is offered. shared/when.json, for the page's check that each opener sends its `from`.
+/// Red first: no when-table on the server (each sheet's own order, PlaylistView's and AlbumMenu's).
+#[test]
+fn the_when_table_is_read_whole() {
+    use cratarr_domain::when::{Context, Libraries, ORDER, Section, WHEN};
+    #[derive(Serialize)]
+    struct Table {
+        about: &'static str,
+        order: Vec<Section>,
+        places: Vec<cratarr_domain::when::When>,
+    }
+    let about = "The record sheet's when-table (SCENARIOS-DC1 RS1; decision 0104 point 6), written by cratarr-domain's tests: the sections' one order, and per place (its `from`) only what it adds: its context, the section right after the head, the libraries it counts, and whether View is offered.";
+    assert_eq!(ORDER[0], Section::Head);
+    assert_eq!(ORDER.len(), 13);
+    let row = |from: &str| WHEN.iter().find(|w| w.from == from).unwrap();
+    assert_eq!((row("crate").first, row("crate").context, row("crate").libraries), (Section::Context, Some(Context::Crate), Libraries::Crate));
+    assert_eq!((row("incoming").first, row("problem").first, row("downloads").first), (Section::Arrival, Section::Health, Section::Device));
+    assert_eq!(row("library").libraries, Libraries::Switch);
+    assert!(!row("page").view);
+    written("when.json", &Table { about, order: ORDER.to_vec(), places: WHEN.to_vec() });
+}
+
+/// TY4 for the record's words (RS2, RS23): the states' words and the entries, as shared JSON in their written form.
+#[test]
+fn the_words_tables_are_written_and_current() {
+    use cratarr_domain::words::{ENTRIES, Entry, STATES, StateWords};
+    #[derive(Serialize)]
+    struct States {
+        about: &'static str,
+        states: Vec<StateWords>,
+    }
+    #[derive(Serialize)]
+    struct Entries {
+        about: &'static str,
+        entries: Vec<Entry>,
+    }
+    written(
+        "record-states.json",
+        &States {
+            about: "What each state of a record says (SCENARIOS-DC1 RS2), written by cratarr-domain's tests: its words with their blanks; a time beside them is the page's to say.",
+            states: STATES.to_vec(),
+        },
+    );
+    written(
+        "entries.json",
+        &Entries {
+            about: "The record sheet's entries (SCENARIOS-DC1 RS23), written by cratarr-domain's tests: each one's name in the answers, its title with its blank ({type}, {name}, {library}), its icon and its group, in the menu's order.",
+            entries: ENTRIES.to_vec(),
+        },
+    );
 }

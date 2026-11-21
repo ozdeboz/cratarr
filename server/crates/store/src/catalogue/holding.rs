@@ -19,7 +19,7 @@ use anyhow::Result;
 use cratarr_domain::identity::titled_as;
 use cratarr_rules::assign::{Fit, Side, assign, fit};
 use cratarr_rules::holding::{CopyFacts, Library, Went};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::Catalogue;
 use super::identity::RefTrack;
@@ -198,6 +198,76 @@ impl Catalogue {
             None => read(&mut self.db()),
         }
     }
+
+    /// What a record's views read of it (SCENARIOS-DC1 HD14: one read for one view), on one reader in one read transaction: the
+    /// record it is now (a merged one's end, RV3), its credits and labels, its copies by the present rule with their quality, and
+    /// its Bandcamp page. None: no such record, or one forgotten (RV4). Blocking.
+    pub fn record_read(&self, id: i64, library: &dyn Fn(i64) -> Library) -> Result<Option<RecordRead>> {
+        let read = |c: &mut Connection| -> Result<Option<RecordRead>> {
+            let tx = c.transaction()?;
+            let out = record_read_in(&tx, id, library)?;
+            tx.commit()?;
+            Ok(out)
+        };
+        match self.reader() {
+            Some(mut c) => read(&mut c),
+            None => read(&mut self.db()),
+        }
+    }
+}
+
+/// A copy's quality as its present files give it: one format for them all (none where they differ), the lowest bitrate, and when
+/// its first file was written (the earliest file time), which of a record only in people's own music says whose came first (CN5).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Quality {
+    pub format: Option<String>,
+    pub min_kbps: Option<i64>,
+    pub added: Option<i64>,
+}
+
+/// `Catalogue::record_read`'s answer.
+#[derive(Debug, Clone)]
+pub struct RecordRead {
+    pub row: super::records::RecordRow,
+    /// Its credited artists in credit order: their ids and names.
+    pub artists: Vec<(i64, String)>,
+    /// Its labels: each label's id, name and catalogue number here ('' none), in the order given.
+    pub labels: Vec<(i64, String, String)>,
+    pub copies: Copies,
+    /// Each present copy's quality, by its catalogue folder.
+    pub quality: HashMap<i64, Quality>,
+    /// Its Bandcamp album page, where a reference names one.
+    pub bandcamp: Option<String>,
+}
+
+/// `Catalogue::record_read` in the caller's transaction.
+pub fn record_read_in(tx: &Connection, id: i64, library: &dyn Fn(i64) -> Library) -> Result<Option<RecordRead>> {
+    let Some(end) = super::records::merged_end(tx, id)? else { return Ok(None) };
+    let Some(row) = super::records::record_in(tx, end)? else { return Ok(None) };
+    let artists = tx
+        .prepare_cached("SELECT a.id, a.name FROM record_artists r JOIN artists a ON a.id = r.artist WHERE r.record = ?1 ORDER BY r.position, a.id")?
+        .query_map([end], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let labels = tx
+        .prepare_cached("SELECT l.id, l.name, r.catno FROM record_labels r JOIN labels l ON l.id = r.label WHERE r.record = ?1 ORDER BY l.id, r.catno")?
+        .query_map([end], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let copies = held_in(tx, &[(end, end)], library)?.remove(&end).unwrap_or_default();
+    let mut quality = HashMap::new();
+    let mut st = tx.prepare_cached(&format!(
+        "SELECT f.folder, CASE WHEN count(DISTINCT COALESCE(f.format, '')) = 1 THEN max(f.format) END, min(NULLIF(f.bitrate, 0)), min(f.mtime)
+           FROM files f JOIN tracks t ON t.id = f.track WHERE t.record = ?1 AND t.retired_at IS NULL AND {} GROUP BY f.folder",
+        super::PRESENT_F
+    ))?;
+    for q in st.query_map([end], |r| Ok((r.get::<_, i64>(0)?, Quality { format: r.get(1)?, min_kbps: r.get(2)?, added: r.get(3)? })))? {
+        let (folder, q) = q?;
+        quality.insert(folder, q);
+    }
+    let bandcamp: Option<String> = tx
+        .prepare_cached("SELECT value FROM \"references\" WHERE subject = ?1 AND source = 'bandcamp' AND kind = 'album' ORDER BY value LIMIT 1")?
+        .query_row([crate::serve::ids::record(end)], |r| r.get(0))
+        .optional()?;
+    Ok(Some(RecordRead { row, artists, labels, copies, quality, bandcamp }))
 }
 
 #[cfg(test)]

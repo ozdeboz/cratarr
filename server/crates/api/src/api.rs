@@ -229,6 +229,8 @@ pub fn router(app: Arc<App>) -> Router {
         // A label's page (C56), and a list's row opened: its record, made at open (Q33); a label About shows, opened (F9).
         .route("/api/labels/{id}", get(label_page))
         .route("/api/records/open", post(open_record))
+        // A record as one object (DC1a): its entity for the viewer asking, from the place asked (SCENARIOS-DC1 RV1).
+        .route("/api/records/{id}", get(crate::serve::views::record::record))
         .route("/api/labels/open", post(open_label))
         .route("/api/artists/open", post(open_artist))
         .route("/api/discover/missing", get(discover_missing))
@@ -364,6 +366,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/admin/migration", get(migration_report))
             .route("/api/admin/migration/moved", get(migration_moved))
             .route("/api/health/report", get(health_report))
+            // Health › Activity (RN): every job that runs, what it does now and how far; administrators' only (R8).
+            .route("/api/activity", get(activity))
             // Health's Missing list: a track there is this one (A5), for good.
             .route("/api/missing/reconnect", post(reconnect_track))
             .route("/api/folders", get(browse_folders))
@@ -2207,7 +2211,7 @@ async fn export_token(ctx: Ctx, Path(token): Path<String>) -> Result<Response, A
 }
 
 /// `application/x-www-form-urlencoded` value: `+` is a space, `%XX` a byte (UTF-8 as a whole).
-fn form_decode(s: &str) -> String {
+pub(crate) fn form_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -4038,13 +4042,10 @@ struct NamedCopy {
     from: Option<String>,
 }
 
-async fn delete_incoming(
-    State(app): State<Arc<App>>,
-    Path((source, album)): Path<(String, String)>,
-    body: Option<Json<NamedCopy>>,
-) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+async fn delete_incoming(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(app.incoming.delete(&source, &album, b.from.as_deref()).await?))
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::DeleteArrival, b.from.as_deref(), None).await?;
+    Ok(Json(ctx.app.incoming.delete(&source, &album, b.from.as_deref()).await?))
 }
 
 
@@ -4089,9 +4090,10 @@ struct MoveTo {
     from_dir: Option<String>,
 }
 
-async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+async fn delete_album(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(app.delete_album(&source, &album, b.from.as_deref()).await?))
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Delete, b.from.as_deref(), None).await?;
+    Ok(Json(ctx.app.delete_album(&source, &album, b.from.as_deref()).await?))
 }
 
 /// An album of someone's own music deleted from the Users panel (the administrators' only way, the owner, 2026-11-04).
@@ -4104,7 +4106,9 @@ async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(
     Ok(Json(app.move_preview(&source, &album, q.from.as_deref(), &q.to, q.year.as_deref()).await?))
 }
 
-async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
+async fn move_album(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Move, b.from.as_deref(), Some(&b.to)).await?;
+    let app = ctx.app.clone();
     let sheet = match (b.folder, b.files, b.from_dir) {
         (Some(folder), Some(files), Some(from_dir)) => Some(crate::app::CopySheet { folder, files, from_dir }),
         _ => None,
@@ -4120,13 +4124,10 @@ async fn keep_preview(
     Ok(Json(app.incoming.keep_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
 }
 
-async fn keep_incoming(
-    State(app): State<Arc<App>>,
-    Path((source, album)): Path<(String, String)>,
-    body: Option<Json<KeepInto>>,
-) -> Result<Json<crate::app::KeepResult>, ApiError> {
+async fn keep_incoming(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<KeepInto>>) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(app.incoming.keep(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref()).await?))
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Keep, b.from.as_deref(), b.to.as_deref()).await?;
+    Ok(Json(ctx.app.incoming.keep(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref()).await?))
 }
 
 async fn replace_preview(
@@ -4166,12 +4167,10 @@ struct ReplaceBody {
     from_dir: Option<String>,
 }
 
-async fn replace_incoming(
-    State(app): State<Arc<App>>,
-    Path((source, album)): Path<(String, String)>,
-    body: Option<Json<ReplaceBody>>,
-) -> Result<Json<crate::app::KeepResult>, ApiError> {
+async fn replace_incoming(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<ReplaceBody>>) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Replace, b.from.as_deref(), b.to.as_deref()).await?;
+    let app = ctx.app.clone();
     if !matches!(b.cover.as_deref(), None | Some("keep" | "new")) {
         return Err(ToggleError::Refused("cover is keep or new".into()).into());
     }
@@ -4733,6 +4732,13 @@ async fn migration_moved(State(app): State<Arc<App>>) -> Result<Json<serde_json:
     Ok(Json(json!({ "albums": of(ALBUM), "artists": of(ARTIST), "tracks": of(SONG) })))
 }
 
+/// Health › Activity (RN item 6, R8: administrators', as Health is): every job that runs or waits, from the runner alone, each with
+/// what it does now, how far, what it waits for and whose; its patches follow on the live channel (`activity`), none by a poll.
+async fn activity() -> Result<Json<serde_json::Value>, ApiError> {
+    let jobs = crate::run::spawn_blocking(|| crate::runner::runner().rows()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(json!({ "jobs": jobs })))
+}
+
 /// The 0.16 first start's migration report (decision 0101's rehearsal: compared with production's copy), by part:
 /// each when it ran (epoch s) and what it found (its `tables`, its `unmatched`, its own fields). None ran: no parts.
 async fn migration_report(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -4871,7 +4877,7 @@ fn listenbrainz_who(ctx: &Ctx, b: &ListenBrainzImport) -> Result<(Arc<crate::ser
 async fn own_tasks(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
-    Ok(Json(json!({ "tasks": crate::app::tasks::tasks().of(&account) })))
+    Ok(Json(json!({ "tasks": crate::runner::runner().of(&account) })))
 }
 
 /// One's own running task asked to stop (0.9.6: a cover picked ends its look); refused when it is not running. Work that
@@ -4879,7 +4885,7 @@ async fn own_tasks(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
 async fn stop_task(ctx: Ctx, Path(id): Path<u64>) -> Result<StatusCode, ApiError> {
     ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
-    if crate::app::tasks::tasks().stop(&account, id) { Ok(StatusCode::NO_CONTENT) } else { Err(ToggleError::Refused("That task is not running.".into()).into()) }
+    if crate::runner::runner().stop(&account, id) { Ok(StatusCode::NO_CONTENT) } else { Err(ToggleError::Refused("That task is not running.".into()).into()) }
 }
 
 #[derive(Deserialize)]
@@ -4916,12 +4922,12 @@ async fn ids_moved(State(app): State<Arc<App>>, Json(b): Json<MovedBody>) -> Res
 }
 
 /// Long work begun as a task: 202 with the task, which the page follows (`app::tasks`).
-fn started(task: Result<crate::app::tasks::Task, String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+fn started(task: Result<crate::runner::Task, String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let task = task.map_err(ToggleError::Refused)?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "task": task }))))
 }
 
-fn progress_of(h: Arc<crate::app::tasks::Handle>) -> impl Fn(&str, u64, Option<u64>) + Send + Sync {
+fn progress_of(h: Arc<crate::runner::Handle>) -> impl Fn(&str, u64, Option<u64>) + Send + Sync {
     move |name, done, total| h.step(name, done, total)
 }
 
@@ -4963,7 +4969,7 @@ fn bring_listenbrainz(ctx: &Ctx, b: ListenBrainzImport, preview: bool) -> Result
     if let Err(e) = serve.userdata.set_import_choice(&listenbrainz_choice(&account), &user) {
         tracing::warn!("import: the ListenBrainz user could not be kept: {e:#}");
     }
-    started(crate::app::tasks::spawn("import:listenbrainz", &account.clone(), preview, move |h| async move {
+    started(crate::runner::spawn("import:listenbrainz", &account.clone(), preview, move |h| async move {
         let progress = progress_of(h);
         if preview {
             crate::app::listenbrainz::preview(&serve, &account, &user, &progress).await
@@ -5042,7 +5048,7 @@ async fn discover(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let services = json!({ "listenbrainz": who.listenbrainz.is_some(), "lastfm": who.lastfm.is_some() });
     let stale = found.as_ref().is_none_or(|f| crate::app::moment::now_secs() - f.at > crate::app::discover::FRESH_SECS);
-    let running = crate::app::tasks::tasks().of(&account).iter().any(|t| t.kind == crate::app::discover::KIND && t.finished.is_none());
+    let running = crate::runner::runner().of(&account).iter().any(|t| t.kind == crate::app::discover::KIND && t.finished.is_none());
     // Every account looks: the library's discographies need no service (0069 amended, 0.9).
     if stale && !running {
         let _ = crate::app::discover::start(&app, serve.clone(), &account, who);
@@ -6131,7 +6137,7 @@ async fn bring_lastfm(ctx: &Ctx, b: LastFmImport, preview: bool) -> Result<(Stat
         keeps_history(ctx)?;
     }
     let (serve, account, user, auth) = lastfm_who(ctx, b).await?;
-    started(crate::app::tasks::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
+    started(crate::runner::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
         crate::app::lastfm::bring(&serve, &account, &user, &auth, what, preview, &progress_of(h)).await
     }))
 }
@@ -6162,7 +6168,7 @@ async fn import_file(ctx: Ctx, Query(q): Query<FileImport>, body: axum::body::By
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
-    started(crate::app::tasks::spawn("import:file", &account.clone(), q.preview, move |h| async move {
+    started(crate::runner::spawn("import:file", &account.clone(), q.preview, move |h| async move {
         crate::app::import_files::import(&app, &serve, &account, &q.name, &body, q.preview, &progress_of(h)).await
     }))
 }
@@ -7386,7 +7392,9 @@ struct SetCover {
 }
 
 /// An album's cover set to one of its candidates: beside its tracks and inside each; Undo puts the old one back.
-async fn set_album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+async fn set_album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::ChangeCover, None, None).await?;
+    let app = ctx.app.clone();
     own_album(&source)?;
     // A run on the one path (0.14): the choice is the yes, Undo the run's.
     Ok(Json(crate::app::covers::run(&app, &album, Some(&b.url), None).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
@@ -7471,7 +7479,8 @@ async fn background_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::V
 async fn bandcamp_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
     crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         crate::app::switches::set_on(crate::app::switches::BANDCAMP, b.enabled)?;
-        crate::bandcamp::switched(crate::serve::instance().as_deref().map(|s| &*s.userdata), b.enabled);
+        // Its hold lifted where its turn keeps it: the journal's row (RN's R4).
+        crate::bandcamp::switched(None, b.enabled);
         Ok(())
     })
     .await
@@ -7735,7 +7744,7 @@ impl IntoResponse for ApiError {
             ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder | ToggleError::NameTaken(_) => {
                 StatusCode::CONFLICT
             }
-            ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
+            ToggleError::UnknownPlaylist | ToggleError::NotFound(_) => StatusCode::NOT_FOUND,
             ToggleError::Gone(_) => StatusCode::GONE,
             ToggleError::Forbidden(_) | ToggleError::Fenced => StatusCode::FORBIDDEN,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,

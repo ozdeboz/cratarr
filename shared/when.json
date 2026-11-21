@@ -1,0 +1,133 @@
+{
+  "about": "The record sheet's when-table (SCENARIOS-DC1 RS1; decision 0104 point 6), written by cratarr-domain's tests: the sections' one order, and per place (its `from`) only what it adds: its context, the section right after the head, the libraries it counts, and whether View is offered.",
+  "order": [
+    "head",
+    "play",
+    "context",
+    "request",
+    "soulseek",
+    "arrival",
+    "versions",
+    "library",
+    "sources",
+    "device",
+    "health",
+    "discover",
+    "go"
+  ],
+  "places": [
+    {
+      "from": "library",
+      "first": "play",
+      "libraries": "switch",
+      "view": true
+    },
+    {
+      "from": "artist",
+      "first": "play",
+      "libraries": "switch",
+      "view": true
+    },
+    {
+      "from": "search",
+      "first": "play",
+      "libraries": "switch",
+      "view": true
+    },
+    {
+      "from": "work",
+      "context": "work",
+      "first": "play",
+      "libraries": "all",
+      "view": true
+    },
+    {
+      "from": "missing",
+      "first": "play",
+      "libraries": "switch",
+      "view": true
+    },
+    {
+      "from": "discover",
+      "context": "discover",
+      "first": "play",
+      "libraries": "all",
+      "view": true
+    },
+    {
+      "from": "crate",
+      "context": "crate",
+      "first": "context",
+      "libraries": "crate",
+      "view": true
+    },
+    {
+      "from": "playlist",
+      "context": "playlist",
+      "first": "context",
+      "libraries": "switch",
+      "view": true
+    },
+    {
+      "from": "player",
+      "context": "playing",
+      "first": "play",
+      "libraries": "all",
+      "view": true
+    },
+    {
+      "from": "downloads",
+      "context": "device_copy",
+      "first": "device",
+      "libraries": "all",
+      "view": true
+    },
+    {
+      "from": "incoming",
+      "context": "review",
+      "first": "arrival",
+      "libraries": "all",
+      "view": true
+    },
+    {
+      "from": "problem",
+      "context": "problem",
+      "first": "health",
+      "libraries": "all",
+      "view": true
+    },
+    {
+      "from": "several",
+      "context": "selection",
+      "first": "play",
+      "libraries": "opener",
+      "view": true
+    },
+    {
+      "from": "device",
+      "first": "play",
+      "libraries": "switch",
+      "view": true
+    },
+    {
+      "from": "page",
+      "first": "play",
+      "libraries": "opener",
+      "view": false
+    },
+    {
+      "from": "requests",
+      "context": "request",
+      "first": "request",
+      "libraries": "all",
+      "view": true
+    },
+    {
+      "from": "soulseek",
+      "context": "request",
+      "first": "soulseek",
+      "libraries": "all",
+      "view": true
+    }
+  ]
+}

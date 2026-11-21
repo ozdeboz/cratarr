@@ -61,7 +61,7 @@ pub fn name_of(key: &str) -> &'static str {
         "requests:fetcher-down" => "Fetchers out of reach",
         "playlists:missing" => "Missing tracks",
         // No tool names in the names (the owner, 2026-10-26).
-        "analysis:audiomuse" => "Analysis",
+        "analysis:audiomuse" => "AudioMuse",
         "servers:lidarr" => "Lidarr",
         "sign-in:refused" => "Refused requests",
         "sign-in:throttled" => "Throttled sign-ins",
@@ -71,6 +71,7 @@ pub fn name_of(key: &str) -> &'static str {
         "server:short-of-space" => "Short of space",
         "requests:waiting" => "Requests",
         "requests:soulseek-set-aside" | "requests:soulseek-frozen" => "Soulseek queue",
+        "requests:bulk-set-aside" => "Bulk queue",
         "words:genre" => "Genres in the files",
         "words:style" => "Styles in the files",
         "words:mood" => "Moods in the files",

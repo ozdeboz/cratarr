@@ -1,0 +1,151 @@
+{
+  "words": {
+    "waits_for_room": "Waits for room · {used} of {room} GB",
+    "waits_for_space": "Waits for space · {free} GB free",
+    "waits_for_release": "Waits for its release · {day}",
+    "not_found_yet": "Not found yet · again in {in}",
+    "stuck": "Stuck: {why} · tried again at {at}",
+    "paused_until": "Paused until {until}",
+    "percent": "{percent}%",
+    "waits_to_be_checked": "Waits to be checked",
+    "checked": "{done} of {of} checked",
+    "files": "{done} of {of} files",
+    "count": "{done} of {of}",
+    "waits_for_turn": "Waits for its turn to {what}",
+    "waits_for_memory": "Waits for memory",
+    "resting": "Resting",
+    "background_off": "Background reading is paused",
+    "asked_for": "asked for",
+    "catching_up": "catching up",
+    "again_at": "Tried again at {at}",
+    "owed": "Lidarr is told again at {at}"
+  },
+  "c8": [
+    {
+      "today": "request: waits for room",
+      "state": "waiting",
+      "waits": "room",
+      "words": "waits_for_room",
+      "example": "Waits for room · 130 of 100 GB"
+    },
+    {
+      "today": "request: waits for space",
+      "state": "waiting",
+      "waits": "disk",
+      "words": "waits_for_space",
+      "example": "Waits for space · 3 GB free"
+    },
+    {
+      "today": "request: waits for its release",
+      "state": "scheduled",
+      "waits": null,
+      "words": "waits_for_release",
+      "example": "Waits for its release · 4 Dec"
+    },
+    {
+      "today": "soulseek: waiting",
+      "state": "scheduled",
+      "waits": null,
+      "words": "not_found_yet",
+      "example": "Not found yet · again in 4 hours"
+    },
+    {
+      "today": "soulseek: stuck",
+      "state": "retrying",
+      "waits": null,
+      "words": "stuck",
+      "example": "Stuck: No folder holds every track · tried again at 15:00"
+    },
+    {
+      "today": "soulseek: held",
+      "state": "waiting",
+      "waits": "source",
+      "words": "paused_until",
+      "example": "Paused until 14:05"
+    },
+    {
+      "today": "soulseek: fetching",
+      "state": "running",
+      "waits": null,
+      "words": "percent",
+      "example": "45%"
+    },
+    {
+      "today": "soulseek: fetched",
+      "state": "waiting",
+      "waits": "check",
+      "words": "waits_to_be_checked",
+      "example": "Waits to be checked"
+    },
+    {
+      "today": "soulseek: checking",
+      "state": "running",
+      "waits": null,
+      "words": "checked",
+      "example": "4 of 9 checked"
+    },
+    {
+      "today": "lidarr: owed stops",
+      "state": "retrying",
+      "waits": null,
+      "words": "owed",
+      "example": "Lidarr is told again at 15:00"
+    },
+    {
+      "today": "discogs: typing",
+      "state": "running",
+      "waits": null,
+      "words": "count",
+      "example": "30 of 300"
+    },
+    {
+      "today": "musicbrainz: re-reads",
+      "state": "running",
+      "waits": null,
+      "words": "count",
+      "example": "12 of 43"
+    },
+    {
+      "today": "conversion",
+      "state": "running",
+      "waits": null,
+      "words": "files",
+      "example": "3 of 10 files"
+    },
+    {
+      "today": "scrobble queue",
+      "state": "retrying",
+      "waits": null,
+      "words": "again_at",
+      "example": "Tried again at 15:00"
+    },
+    {
+      "today": "import",
+      "state": "running",
+      "waits": null,
+      "words": "count",
+      "example": "120 of 400"
+    },
+    {
+      "today": "track fetch",
+      "state": "running",
+      "waits": null,
+      "words": "percent",
+      "example": "45%"
+    },
+    {
+      "today": "intake card: hearing",
+      "state": "running",
+      "waits": null,
+      "words": "files",
+      "example": "4 of 9 files"
+    },
+    {
+      "today": "decode: waits for its turn",
+      "state": "waiting",
+      "waits": "decode",
+      "words": "waits_for_turn",
+      "example": "Waits for its turn to decode"
+    }
+  ]
+}

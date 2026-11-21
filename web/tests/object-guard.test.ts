@@ -43,8 +43,8 @@ const OBJECTS: Record<string, Obj> = {
   // Chip and name: no one yet (OBJ's record parts); the type's words (recordWord, goToName, viewName) are taken as the one.
   Record: {
     map: { card: 5, row: 8, chip: 5, sheet: 6, name: 9, picture: 3 },
-    pin: { card: 7, row: 13, chip: 8, sheet: 8, name: 32, picture: 3 },
-    one: { card: 'lib/AlbumCard.svelte', row: 'lib/ReleaseRow.svelte', sheet: 'lib/AlbumMenu.svelte', picture: 'lib/api.ts' },
+    pin: { card: 6, row: 13, chip: 8, sheet: 8, name: 31, picture: 3 },
+    one: { card: 'lib/AlbumCard.svelte', row: 'lib/ReleaseRow.svelte', sheet: 'lib/sheet/Record.svelte', picture: 'lib/api.ts' },
     marks: [
       { part: 'card', re: /<Tile\b(?:(?!<\/Tile>)[^]){0,900}?albumSubject\(/, why: "a Tile drawn with a record (the Library's grid tile)" },
       { part: 'card', re: /\{#snippet \w+\(\w+: DiscoverAlbum\)\}/, why: "Discover's card of its own" },
@@ -139,7 +139,7 @@ const OBJECTS: Record<string, Obj> = {
   // The name's one is standing() (requestState.ts, which also holds cardStanding, so no file is named).
   Request: {
     map: { row: 1, chip: 6, sheet: 4, name: 5, picture: 1 },
-    pin: { chip: 4, sheet: 4, name: 4, picture: 1 },
+    pin: { chip: 4, sheet: 3, name: 4, picture: 1 },
     one: { card: 'Discover.svelte', row: 'lib/RequestsPanel.svelte', chip: 'lib/CoverStatus.svelte', sheet: 'lib/RequestsPanel.svelte' },
     marks: [
       { part: 'row', re: /<(?:ReleaseRow|Row|Item)\b[^\n]{0,200}?\b(?:line|sub)=\{[^}\n]{0,40}\b(?:standing|cardStanding)\(/, why: "a row whose line is a request's standing, written in place (none today beside RequestsPanel's)" },
@@ -177,8 +177,8 @@ const OBJECTS: Record<string, Obj> = {
   // The Incoming dot is every library's dot (not told apart); HealthPanel's intake row goes through the record's row.
   Arrival: {
     map: { card: 1, row: 1, chip: 1, sheet: 2, name: 5 },
-    pin: { card: 1, row: 1, chip: 1, sheet: 2, name: 3 },
-    one: { card: 'lib/IntakeCard.svelte', sheet: 'lib/AlbumMenu.svelte' },
+    pin: { card: 0, row: 1, chip: 1, sheet: 2, name: 2 },
+    one: { card: 'lib/IntakeCard.svelte', sheet: 'lib/sheet/Record.svelte' },
     marks: [
       { part: 'card', re: /<div class="pair">/, in: 'lib/HealthIncoming.svelte', why: 'HealthIncoming: the two copies side by side' },
       { part: 'row', re: /\{#snippet extra\(s: ShelfSource, a: ListedAlbum\)\}/, in: 'Library.svelte', why: "the Library tile's Incoming lines (conversion, verdict)" },
@@ -311,7 +311,7 @@ const OBJECTS: Record<string, Obj> = {
   // Left unmarked as the one to be: the name, trackIntake's itemLine.
   'Single-track intake item': {
     map: { row: 3, chip: 1, sheet: 1, name: 4, picture: 1 },
-    pin: { row: 3, chip: 1, sheet: 1, name: 6, picture: 1 },
+    pin: { row: 3, chip: 1, sheet: 1, name: 5, picture: 1 },
     one: { row: 'lib/ReplaceTrackSheet.svelte', chip: 'lib/ReplaceTrackSheet.svelte', sheet: 'lib/ReplaceTrackSheet.svelte', picture: 'lib/ReplaceTrackSheet.svelte' },
     marks: [
       { part: 'row', re: /\$\{\w+\.position\}\. \$\{\w+\.title\}/, why: 'the wanted track\'s "n. Title" written again (HealthItemTools)' },

@@ -1161,7 +1161,8 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     // Nothing that has somewhere to go stays behind, in any table of the user data or any store. Not named here: a scan has no list.
     let old: Vec<(String, String)> = every_text(&data.join("userdata.sqlite")).into_iter().filter(|(table, _)| table != "migration_report").flat_map(|(table, text)| hashes_in(&text).into_iter().map(move |id| (table.clone(), id))).collect();
     assert_eq!(old, [("annotation".to_string(), ORPHAN.to_string())], "the one no tag makes, kept");
-    for store in ["crates.json", "users/bob/crates.json", "queues.json", "track-intake.json", "convert-queue.json"] {
+    // The bulk queue as the first start moved it, kept by 0.18's step as `track-intake.json.017` once its items are on rows (RN's DM3).
+    for store in ["crates.json", "users/bob/crates.json", "queues.json", "track-intake.json.017", "convert-queue.json"] {
         let text = std::fs::read_to_string(data.join(store)).unwrap();
         assert_eq!(hashes_in(&text), Vec::<String>::new(), "{store}");
     }
@@ -2369,6 +2370,45 @@ fn tracks_at(data: &Path, library: &Path, dir: &str) -> Vec<String> {
     rows.map(Result::unwrap).collect()
 }
 
+/// Home Assistant's review of an arrival, with its key (HA-CONTRACT-0.18 §3; CHECK-DC1's ruling 2): an administrator's control-scope
+/// key rejects an arrival, takes that back (its Undo), and promotes it, each answered as Home Assistant reads it. The guard that no
+/// move of the review onto `decide()` locks Home Assistant out: a failure here is Home Assistant's.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn home_assistant_reviews_an_arrival_with_its_control_key_end_to_end() {
+    let (s, _root, music, _incoming) = on_music_and_incoming("ha-review").await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "root", "password": "root pw", "admin": true })).await;
+    s.act_as("root", "root pw").await;
+    let made = s.ok(reqwest::Method::POST, "/api/auth/keys", json!({ "name": "Home Assistant", "password": "root pw", "scope": "control" })).await;
+    let key = made["key"].as_str().expect("a control key").to_string();
+    let id = s.incoming_album("Just Arrived").await["id"].as_str().unwrap().to_string();
+    let ha = |method: reqwest::Method, path: String| {
+        let request = s.http.request(method, format!("{}{path}", s.base)).bearer_auth(&key);
+        async move {
+            let r = request.send().await.unwrap();
+            let status = r.status().as_u16();
+            (status, r.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (status, rejected) = ha(reqwest::Method::POST, format!("/api/library/albums/{id}/reject")).await;
+    assert_eq!((status, rejected["review"].as_str()), (200, Some("rejected")), "Home Assistant's reject, with its control key: {rejected}");
+    let (status, back) = ha(reqwest::Method::DELETE, format!("/api/library/albums/{id}/review")).await;
+    assert_eq!((status, back["review"].as_str()), (200, Some("unreviewed")), "Home Assistant's Undo of its reject: {back}");
+    s.incoming_album("Just Arrived").await;
+    // Once the library holds it in Incoming again.
+    let start = Instant::now();
+    let promoted = loop {
+        let (status, answer) = ha(reqwest::Method::POST, format!("/api/library/albums/{id}/promote")).await;
+        if status == 200 {
+            break answer;
+        }
+        assert!(start.elapsed() < Duration::from_secs(120), "Home Assistant's promote, with its control key: {status} {answer}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    assert_eq!(promoted["review"].as_str(), Some("promoted"), "{promoted}");
+    assert!(folder_named(&music, "Just Arrived").is_some(), "promoted into Music");
+}
+
 /// Keep: the album leaves Incoming for Music with its track ids and every byte, and is on the list of runs. Its Undo puts each
 /// file back where it was, under its old name, and Music holds nothing of it.
 #[tokio::test(flavor = "multi_thread")]
@@ -2645,7 +2685,8 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
 
     let (dir, deleting) = ("Salt Meridian/Both Shores (2018)", format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()));
     let kept = as_it_lies(&music.join(dir));
-    assert_eq!(bob.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 409, "not his");
+    // A right missing is a 403 (CN1, CN9: the handler decides first, in the table's words; never a 409 for a right, CN2).
+    assert_eq!(bob.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 403, "not his");
     assert!(as_it_lies(&music.join(dir)) == kept, "the kept files are there");
     bob.ok(reqwest::Method::POST, &deleting, json!({ "from": path(&incoming) })).await;
     assert!(!incoming.join(dir).exists(), "his own request");
@@ -6587,6 +6628,53 @@ async fn a_folder_with_only_clipping_a_click_and_a_pop_passes_with_notes_end_to_
     let card = heard_card(&s, &s.incoming_album("Tide Tables").await, &incoming).await;
     assert_eq!(sound(&card), ("amber", "Track 2: Clipped at 0:01; Track 3: A click at 0:01; a pop at the very end"));
     assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 0.18's upgrade, one real start (SCENARIOS-RN DM6; DC2's KE7 joins it with its `soulseek` part): a data folder with what 0.17 kept
+/// of RN's, its bulk queue (`track-intake.json`, the 0.17 fixture) and its sources' holds in the user data's server choices, started
+/// as 0.18. RN's asserts: the `bulk queue` and `sources' holds` parts of `/api/admin/migration` agree with DM1 and DM5;
+/// `/api/track-intake` lists the 12; Activity lists each of the queue's jobs once; the old file kept as `.017`. Never a part failed,
+/// nor an item listed twice.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_017_data_folder_upgrades_to_018_end_to_end() {
+    let root = temp("rn-upgrade");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    settings(&data, &[(&library, "main")], &root.join("own"));
+    // A first start makes the data folder's stores; stopped, it is given what 0.17 kept of RN's.
+    Server::start(&data).await.stop();
+    let fixture = include_bytes!("fixtures/0.17/track-intake.json");
+    std::fs::write(data.join("track-intake.json"), fixture).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    {
+        let ud = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+        for (source, until) in [("musicbrainz", now + 600), ("bandcamp", now + 80_000), ("lastfm", now + 200_000), ("discogs", now - 10)] {
+            ud.execute("INSERT OR REPLACE INTO import_choices (source, choice) VALUES (?1, ?2)", rusqlite::params![format!("{source}:held_until"), until.to_string()]).unwrap();
+        }
+        // As 0.17 left it: the step's marks are 0.18's own.
+        let j = rusqlite::Connection::open(data.join("journal.sqlite")).unwrap();
+        j.execute("DELETE FROM intake_marks WHERE name LIKE 'step_018:%'", []).unwrap();
+    }
+    let s = Server::start(&data).await;
+    let parts = s.get("/api/admin/migration").await["parts"].clone();
+    let bulk = &parts["bulk queue"];
+    assert_eq!(bulk["moved"], 12, "{bulk}");
+    assert_eq!(bulk["said"], "Bulk queue: 12 moved (2 queued, 1 searched again, 2 found, 1 not found, 1 failed, 1 to fetch, 2 back to its tick, 1 added, 1 refused); 0 dropped");
+    let holds = &parts["sources' holds"];
+    assert_eq!(holds["moved"], 3, "MusicBrainz, Bandcamp, Last.fm cut to its cap; Discogs past: {holds}");
+    assert!(!data.join("track-intake.json").exists() && std::fs::read(data.join("track-intake.json.017")).unwrap() == fixture.to_vec(), "kept as .017, byte for byte");
+    let items = s.get("/api/track-intake").await["items"].as_array().cloned().unwrap_or_default();
+    let ids: std::collections::BTreeSet<String> = items.iter().map(|i| i["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!((items.len(), ids.len()), (12, 12), "the 12, each once");
+    let jobs = s.get("/api/activity").await["jobs"].as_array().cloned().unwrap_or_default();
+    let queue_jobs: Vec<String> = jobs.iter().filter_map(|j| j["id"].as_str().filter(|id| id.starts_with("intake:")).map(str::to_string)).collect();
+    let once: std::collections::BTreeSet<&String> = queue_jobs.iter().collect();
+    assert_eq!(once.len(), queue_jobs.len(), "each of the queue's jobs once: {queue_jobs:?}");
+    assert!(queue_jobs.iter().all(|j| ids.contains(j.trim_start_matches("intake:"))), "every job an item of the queue");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

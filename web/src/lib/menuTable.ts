@@ -77,7 +77,9 @@ export type MenuCard = { group: MenuGroupId; entries: readonly EntryId[]; label?
 type Kind = { actions: readonly string[]; cards: readonly MenuCard[] };
 
 /** The large actions' names in their order (0058's A): a menu shows the ones that apply. */
-const PLAY = ['Play', 'Resume', 'Shuffle', 'Play next', 'Add to queue', 'Ask to play next', 'Ask to add to queue', 'Start radio'];
+/** Resume's name (decision 0030): the page's own large action beside Play, a record's too until the server sends it. */
+export const RESUME = 'Resume';
+const PLAY = ['Play', RESUME, 'Shuffle', 'Play next', 'Add to queue', 'Ask to play next', 'Ask to add to queue', 'Start radio'];
 
 export const MENUS: Record<MenuKind, Kind> = {
   track: {
@@ -97,18 +99,19 @@ export const MENUS: Record<MenuKind, Kind> = {
       { group: 'remove', entries: ['removeFromQueue', 'removeFromList'] },
     ],
   },
+  // Another server's album and this device's own music (AlbumMenu); a Cratarr record's entries are the server's (RS01: its
+  // words table and when-table, shared/entries.json; SCENARIOS-DC1 RS23).
   album: {
     actions: PLAY,
     cards: [
-      { group: 'go', entries: ['view', 'goArtist', 'goGenre', 'soundsLike'] },
+      { group: 'go', entries: ['view', 'goArtist', 'goGenre'] },
       { group: 'feel', entries: ['favourite', 'rating'] },
       { group: 'collect', entries: ['addToPlaylist'] },
       // Remove from this device beside what put it there (the owner, 2026-10-26: last in the menu it was out of sight).
       { group: 'take', entries: ['download', 'keep', 'removeFromDevice', 'share'] },
       { group: 'know', entries: ['webSearch', 'geniusSearch'] },
-      { group: 'change', entries: ['edit', 'changeCover', 'missingTracks', 'deviceCover', 'serverCover'] },
-      { group: 'library', label: 'Library', entries: ['playFrom', 'cancelConversion', 'moveTo', 'replaceIn'] },
-      { group: 'remove', entries: ['removeResume', 'deleteAlbum'] },
+      { group: 'change', entries: ['deviceCover', 'serverCover'] },
+      { group: 'remove', entries: ['removeResume'] },
     ],
   },
   artist: {

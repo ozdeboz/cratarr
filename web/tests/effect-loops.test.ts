@@ -14,7 +14,6 @@ const SETTLES: Record<string, [number, string]> = {
   'Discover.svelte|seenEnd': [1, 'guarded by t.id !== seenEnd'],
   'Home.svelte|skyIn': [1, 'returns when true; only ever set true'],
   'Library.svelte|switching': [1, 'set false only while true'],
-  'lib/AlbumMenu.svelte|coverTask': [1, 'guarded by t.id !== coverTask, then null'],
   'lib/AlbumShelf.svelte|reach': [1, 'a timer adds blocks until reach >= most'],
   'lib/AlbumShelf.svelte|selecting': [1, 'written in the keydown handler only'],
   'lib/ContentControls.svelte|hidden': [1, 'written in the pointerdown handler only'],
@@ -26,6 +25,7 @@ const SETTLES: Record<string, [number, string]> = {
   'lib/RecordReferences.svelte|rows': [1, 'the || rows guard; set once by the answer'],
   'lib/SeekWave.svelte|after': [2, 'set to null only when it matches the player; the other write is in a timer'],
   'lib/SettingsPanel.svelte|scrollEl': [1, 'scrollTop is a DOM property, not state'],
+  'lib/sheet/Record.svelte|coverTask': [1, 'guarded by t.id !== coverTask, then null'],
   'lib/settings/LibrariesPart.svelte|statuses': [1, 'a per-path guard; written by the answer'],
 };
 

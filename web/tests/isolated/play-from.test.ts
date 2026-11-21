@@ -202,13 +202,14 @@ test('with a Play from queue running the card goes on saying what Play would giv
 const read = (f: string) => readFileSync(new URL(`../../src/lib/${f}`, import.meta.url), 'utf8');
 
 test("Play from closes the menu first and goes through the record's own Play", () => {
-  assert.match(read('AlbumMenu.svelte'), /onclick=\{\(\) => run\(\(\) => playListedAlbum\(source, a as ListedAlbum, p\.library\)\)\}/);
+  // RS01: the server's Play and Play from, each its copy named by its library (`from`).
+  assert.ok(/onclose\(\);\s*navigator\.vibrate\?\.\(8\);\s*void playListedAlbum\(source, \{ id: album, title \}, a\.fields\?\.from\)/.test(read('sheet/Record.svelte')));
 });
 
 test('Play from is offered wherever the queue would go, and asks no account', () => {
-  const line = read('AlbumMenu.svelte').match(/const playFrom = \$derived\(([^\n]+)\);/)?.[1] ?? '';
-  assert.match(line, /^listedHere \? playFromEntries\(/);
-  assert.doesNotMatch(line, /me\./);
+  // Where it is offered is the server's (CN4: the copy that plays for the place's libraries); a version line's tap is that action.
+  assert.ok(/a\.name === 'play_from' && a\.fields\?\.from === v\.id/.test(read('sheet/record.ts')));
+  assert.ok(!/\bme\./.test(read('sheet/Record.svelte')));
 });
 
 test("this page's report tells Cratarr the copy of each track it holds", () => {

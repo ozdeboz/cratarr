@@ -34,11 +34,13 @@ test('a job that does not say where it comes from holds every copy back, the saf
 const read = (f: string) => readFileSync(new URL(`../../src/${f}`, import.meta.url), 'utf8');
 
 test('nothing takes a copy leaving for the record gone: only `copiesGone` says when a panel closes', () => {
-  for (const f of ['lib/AlbumMenu.svelte', 'lib/SeveralAlbums.svelte']) assert.match(read(f), /of copiesGone\(.*albumGone\(x\.source, x\.id\)/, f);
-  assert.doesNotMatch(read('lib/AlbumMenu.svelte'), /^\s*albumGone\(/m);
+  // The record's one sheet (RS01) and several records' entries.
+  for (const f of ['lib/sheet/Record.svelte', 'lib/SeveralAlbums.svelte']) assert.ok(/of copiesGone\(.*albumGone\(x\.source, x\.id\)/.test(read(f)), f);
+  assert.doesNotMatch(read('lib/sheet/Record.svelte'), /^\s*albumGone\(/m);
   assert.doesNotMatch(read('Library.svelte'), /albums\.filter\(\(x\) => x\.id !== id\)/, 'the row went, to come back with the next read');
 });
 
 test("a menu's offers ask each copy's own job", () => {
-  assert.match(read('lib/AlbumMenu.svelte'), /\(library\) => jobs\.of\(s\.id, a\.id, library\)/);
+  // Several records' offers until RS01 for several (RS15); a record's Cancel conversion is the server's, its job in its address.
+  assert.ok(/\(library\) => jobs\.of\(s\.id, a\.id, library\)/.test(read('lib/SeveralAlbums.svelte')));
 });

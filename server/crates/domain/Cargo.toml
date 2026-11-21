@@ -10,10 +10,16 @@ repository.workspace = true
 [lib]
 doctest = false
 
+# The views' TypeScript (TY1, TY5): the crates above turn it on in their tests, as they write the page's generated types.
+[features]
+ts = ["dep:ts-rs"]
+
 # Pure (DOMAIN-CORE §14): no I/O, no clock, no async, no app or store crate. It reads only what it is handed.
 [dependencies]
 cratarr-rules.workspace = true
 serde.workspace = true
+ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
+ts-rs.workspace = true

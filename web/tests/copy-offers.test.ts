@@ -57,12 +57,13 @@ test("a leaver's own music into Music reads Move, as the server moves it", () =>
 
 test("the record menu and several albums take their words and icons from one place", () => {
   const read = (f: string) => readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8');
-  const [menu, several] = [read('AlbumMenu.svelte'), read('SeveralAlbums.svelte')];
+  const [menu, several] = [read('sheet/Record.svelte'), read('SeveralAlbums.svelte')];
   assert.ok(/moveSentences/.test(menu) && /keep\??\.copy/.test(menu) && /copiesAdded\(/.test(menu), 'the record menu: the preview\'s copy, the shared words, copiesAdded');
   assert.ok(!/'Added' : 'Moved'/.test(menu) && !/adding \? 'Add' : 'Move'/.test(menu), 'no words of its own');
   assert.ok(!/const moveWords/.test(several) && /moveWords\(/.test(several) && /copiesAdded\(/.test(several), 'several albums: the shared words, copiesAdded');
-  // F33.1, F33.3: the entries' words from the table, their icons from the one map; neither builds its own.
-  assert.match(menu, /<MenuEntry icon=\{ICON_OF\[`\$\{m\.verb\}To`\]\} label=\{m\.label\}/);
+  // F33.1, F33.3: the entries' words from the table, their icons from the one map; neither builds its own. The record's one sheet
+  // draws each entry with the server's words and icon (the words table, shared/entries.json; RS23).
+  assert.match(menu, /<MenuEntry icon=\{i\.icon as IconName\} label=\{i\.title\}/);
   assert.match(several, /icon=\{ICON_OF\[`\$\{verb\}To`\]\}\r?\n      label=\{moveLabel\(verb, mv\.name\)\}/);
   assert.ok(!/'Copy' : mv\.adding \? 'Add' : 'Move'/.test(several) && !/icon="intoBox"/.test(several + menu), 'no words or icon of their own');
 });
@@ -226,26 +227,29 @@ test('no Replace from own music offline or on a list that names no copies', () =
   // Cratarr out of reach: the list as kept still says Bob's copy beats Music's, and the record's menu leaves Replace out, as its
   // tap needs Cratarr.
   assert.equal(replaceEntries(offersOf(s2, { id: 'al-1', copies: [copy('music'), copy('bob', replacing('music'))] }, true, none)).length, 1, 'the list as kept');
+  // The sheet another server's album, this device's music and a record out of reach open (AlbumMenu) has no Replace at all: a
+  // record's comes from the server, on its one sheet (RS01).
   const entries = MENUS.album.cards.flatMap((c) => c.entries);
-  assert.ok(entries.includes('replaceIn') && !entries.filter((e) => offeredAway(e, true)).includes('replaceIn'), 'out of reach: no Replace');
+  assert.ok(!entries.includes('replaceIn') && !entries.filter((e) => offeredAway(e, true)).includes('replaceIn'), 'out of reach: no Replace');
 });
 
 test('the record menu takes its Replace words from copiesRule', () => {
   const read = (f: string) => readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8');
-  const [menu, albums] = [read('AlbumMenu.svelte'), read('albums.svelte.ts')];
-  assert.match(menu, /replaceEntries\(copyOffers\)/, 'its entries');
+  // The record's one sheet (RS01): its Replace entries are the server's (CN6, RS7), its words and its left step the rule's.
+  const [menu, albums] = [read('sheet/Record.svelte'), read('albums.svelte.ts')];
+  assert.doesNotMatch(menu, /replaceEntries\(/, 'its entries are the server\'s');
   assert.match(
     menu,
-    /const said = replacedWords\(r\.title, into\.name, fromName, kind\);\s*moved\(r, said\.done, \(\) => copiesReplaced\(\[\{ source, id: a\.id, from, kind \}\]\), from, said\.undone\);/,
+    /const said = replacedWords\(r\.title, toLib\?\.name \?\? '', fromName, kind\);\s*moved\(r, said\.done, \(\) => copiesReplaced\(\[\{ source: OWN, id: rid, from, kind \}\]\), from, said\.undone\);/,
     'its left step and its Undo words',
   );
   assert.match(albums, /changeListed\(replaced, \(a, i\) => afterReplace\(a, replaced\[i\]\.from, replaced\[i\]\.kind\)\)/, "the left step is the rule's");
-  assert.doesNotMatch(menu, /`Replaced \$\{|copiesGone\(\[\{ source, id: a\.id, from \}\]\)/, 'no words or left step of its own');
+  assert.doesNotMatch(menu, /`Replaced \$\{|copiesGone\(\[\{ source: OWN, id: rid, from, kind/, 'no words or left step of its own');
   // Its sheet: from someone's own music no cover choice, no carrying over, nothing of Lidarr or Incoming (OQ-A), and the tap says
   // what the sheet showed (OQ-G).
   assert.deepEqual(replaceSheet('own'), { cover: false, carry: false, lidarr: false, shown: true });
   assert.deepEqual(replaceSheet('incoming'), { cover: true, carry: true, lidarr: true, shown: false });
-  assert.match(menu, /const swapAsks = \$derived\(replaceSheet\(copy\?\.from\?\.kind\)\);/);
+  assert.match(menu, /const swapAsks = \$derived\(replaceSheet\(fromLib\?\.kind\)\);/);
   const sheet = menu.slice(menu.indexOf("{:else if ask === 'replace'}"), menu.indexOf("{:else if ask === 'cover-url'}"));
   assert.match(sheet, /\{#if swapAsks\.cover && swap\.covers && /, 'the cover choice');
   assert.equal(sheet.split('swap.carry?.length').length, sheet.split('swapAsks.carry && swap.carry?.length').length, 'carrying over, every time');
@@ -254,7 +258,7 @@ test('the record menu takes its Replace words from copiesRule', () => {
   assert.doesNotMatch(sheet, /Incoming/);
   // RF10: what it showed, by the one rule, the own copy's folder with it.
   assert.match(menu, /const shown = asks\.shown \? replaceShown\(swap\) : undefined;/);
-  assert.match(menu, /replaceIncoming\(source, a\.id, from, into\.id, year\.trim\(\) \|\| undefined, asks\.cover && swap\?\.covers \? coverWay : undefined, asks\.carry && carry, shown\)/);
+  assert.match(menu, /replaceIncoming\(OWN, rid, from, into, year\.trim\(\) \|\| undefined, asks\.cover && swap\?\.covers \? coverWay : undefined, asks\.carry && carry, shown\)/);
 });
 
 test("another server's album comes with its one copy, and goes by what that copy allows", () => {

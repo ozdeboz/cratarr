@@ -2303,6 +2303,8 @@ export type Task = {
 };
 type Started = { task: Task };
 export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
+/** Health › Activity (RN; administrators'): every job that runs or waits (lib/activityRows). */
+export const getActivity = () => quietly<{ jobs: import('./activityRows').ActivityJob[] }>('/api/activity');
 /** An album's numbers as a release has them (0.9.6; Health's track numbers): where from, whether its discs stay
  *  (a CD's, a CD-sized digital release's) or run on as one (vinyl, cassette), each track now and after. */
 export type Renumbering = {
@@ -2836,6 +2838,18 @@ export const albumView = (source: string, album: string) =>
     () => quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`),
     () => deviceRecord(source, album),
   );
+/** A record as one entity (SCENARIOS-DC1 RV1): for this viewer, from the place it is shown from (`from`, the libraries its opener
+ *  has switched off, the record's own page's `opener`); a merged one answers as the one it went into, one gone 404 in the
+ *  server's words. Read through the one page cache (lib/cache.svelte). */
+export function getRecord(id: string, place: { from: string; without?: readonly string[]; opener?: string }) {
+  const q = new URLSearchParams({ from: place.from });
+  for (const w of place.without ?? []) q.append('without', w);
+  if (place.opener) q.set('opener', place.opener);
+  return quietly<import('./generated/Entity').Entity<import('./generated/RecordProperties').RecordProperties>>(`/api/records/${encodeURIComponent(id)}?${q}`);
+}
+/** A record's action as the server addresses it (RV10): its method, its address and its body, answered as its handler answers. */
+export const actOn = (a: import('./generated/ActionView').ActionView) =>
+  request<unknown>(a.href, a.method === 'GET' ? undefined : { method: a.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a.fields ?? {}) });
 /** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their
  *  albums and the albums they appear on, newest first, and their tracks album by album with the plays. */
 export type ArtistView = {

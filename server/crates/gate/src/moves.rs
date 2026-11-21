@@ -286,6 +286,12 @@ fn copy_across(from: &Path, to: &Path, remove: impl FnOnce(&Path) -> std::io::Re
 /// copied. A copy that fails takes away what this made, folders too. Which copies share the original's blocks (`shared`), in the
 /// plan's order. Blocking.
 pub fn copy(plan: &[Step]) -> Result<Vec<bool>> {
+    copy_told(plan, &|_| {})
+}
+
+/// `copy`, `told` how many of the plan's files are there after each one lands (RA8, RN's TU2: "1 of 24" … "24 of 24", the last
+/// before it returns).
+pub fn copy_told(plan: &[Step], told: &dyn Fn(usize)) -> Result<Vec<bool>> {
     let all: Vec<(PathBuf, PathBuf)> = plan.iter().map(|s| Ok((full(&s.from)?, full(&s.to)?))).collect::<Result<_>>()?;
     let mut todo = Vec::new();
     for (from, to) in &all {
@@ -300,6 +306,7 @@ pub fn copy(plan: &[Step]) -> Result<Vec<bool>> {
         }
         todo.push((from, to));
     }
+    let there = all.len() - todo.len();
     let mut made: Vec<&PathBuf> = Vec::new();
     for (from, to) in todo {
         if let Err(e) = clone_file(from, to) {
@@ -312,6 +319,10 @@ pub fn copy(plan: &[Step]) -> Result<Vec<bool>> {
             return Err(e);
         }
         made.push(to);
+        told(there + made.len());
+    }
+    if made.is_empty() {
+        told(all.len());
     }
     Ok(all.iter().map(|(_, to)| shared(to)).collect())
 }

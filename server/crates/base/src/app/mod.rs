@@ -1,12 +1,11 @@
 //! The app's shared services and what the areas above it share (SP2-MOVE-NIGHT.md): library, settings, sync, shelf,
-//! collection, follow, tasks, words and the parts moved down from the areas (`<origin>_base`). The app's other parts
+//! collection, follow, words and the parts moved down from the areas (`<origin>_base`). The app's other parts
 //! are below it (cratarr-served and the lower crates) and above it.
 
 pub use cratarr_served::app::{audiomuse, error, excluded_artists, import, moment, musicbrainz, reach, references_turn, requests_turn, switches, track_fetch_turn, turn};
 
 pub mod changes;
 pub mod analysis_pass_base;
-pub mod heavy_base;
 pub mod collection;
 pub mod first_start;
 pub mod follow;
@@ -19,7 +18,6 @@ pub mod words;
 pub mod file_words;
 pub mod track_intake_base;
 pub mod runtime_base;
-pub mod tasks;
 pub mod retention_base;
 pub mod taste;
 pub mod tempo;

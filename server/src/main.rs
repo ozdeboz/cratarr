@@ -1,7 +1,7 @@
-use cratarr_api::{analysis, api, app, catalogue, config, diagnostics, fixtures, idempotent, mcp, memwatch, run, serve, settings, snapcast, source};
+use cratarr_api::{analysis, api, app, catalogue, config, diagnostics, fixtures, idempotent, journal, mcp, memwatch, run, runner, serve, settings, snapcast, source};
 // What the route sweep's tests (whole_router.rs) name besides.
 #[cfg(test)]
-use cratarr_api::{bandcamp, journal, playlists, search};
+use cratarr_api::{bandcamp, playlists, search};
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -248,15 +248,23 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
-    // Every outside service's hold kept across a restart taken up before anything is asked (OQ-T3), Bandcamp's day after its bot
-    // check among them (Y8); their holds kept from now on.
-    app::turn::keep_all(&served.userdata, &[&app::discogs::TURN, &app::lastfm::FM]);
     // The environment's server settings, with what Settings saved over them (0.9.8).
     let runtime = app::runtime::start(app::runtime::Seed::from_env(&env), Some(&served.userdata), &cfg.bind);
     let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), runtime.snapcast_host.clone());
     // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
     let lan_base = app::runtime::lan_base(&runtime);
     let app = app::App::new(cfg, saved, origin, Some(served.clone())).await.context("cannot open the catalogue")?;
+    // RN's start, once the first start has moved what it moves (0.15's stores and journal, inside `App::new`) and before any pass asks a
+    // source (each waits minutes first). The app's journal is the server's (RN's R1: the saved queues and the runner's jobs in it).
+    journal::set_instance(app.journal.clone());
+    // 0.18's step, RN's parts (DI06): 0.17's bulk queue and its kept holds onto the journal's rows, before the turns take the holds up.
+    app::step_018::run(&app.journal, data_dir.as_deref().map(std::path::Path::new), &served.userdata, app::moment::now_secs()).context("cannot finish 0.18's step")?;
+    // Every outside service's hold kept across a restart taken up before anything is asked (OQ-T3), Bandcamp's day after its bot
+    // check among them (Y8); their holds kept from now on, in the journal's file (RN's R4).
+    app::turn::keep_all(&app.journal, &[&app::discogs::TURN, &app::lastfm::FM]);
+    // The runner's jobs (RN): those a stop cut off read back and said so, before any job begins; the finished pruned each hour.
+    runner::runner().attach(app.journal.clone()).context("cannot read the runner's jobs")?;
+    runner::runner().prune_hourly();
     // Before the first build and the first request: which copy plays turns on them.
     served.library.set_kinds(app.library.folder_kinds());
     served.set_rules(app.library.folder_rules());
@@ -344,6 +352,9 @@ async fn main() -> Result<()> {
     app::scrobble::run(served.clone());
     // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, records fetched on a tick, once a library takes them.
     app::soulseek::start(&app);
+    // The single fetches a stop cut off followed again by their batches (RN's DQ3, DQ5); the bulk queue's worker with them.
+    crate::run::spawn(async { app::track_fetch::resume().await });
+    app::track_intake::resume(&app);
     // Records not had that nothing keeps and nobody saw for six months, forgotten once a day (RT01), with their kept lists and
     // the artists left with nothing (RT01b): after Soulseek's list is read, whose items keep theirs (read sooner, an empty list
     // would be begun and written over the kept one), and the catalogue attached.

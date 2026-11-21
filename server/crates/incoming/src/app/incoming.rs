@@ -826,13 +826,13 @@ impl IncomingService {
             let (title, _) = entry.event.album();
             if happened
                 && matches!(entry.event, Event::AlbumCopied { .. })
-                && let Err((_, e)) = self.finish_copy(entry.id, &entry.event, None).await
+                && let Err((_, e)) = self.finish_copy(entry.id, &entry.event, None, None).await
             {
                 tracing::warn!("could not finish copying {title}: {e:#}");
                 continue;
             }
             if happened && matches!(entry.event, Event::AlbumReplacedFromCopy { .. }) {
-                match self.finish_from_copy(entry.id, &entry.event, false, None).await {
+                match self.finish_from_copy(entry.id, &entry.event, false, None, None).await {
                     Ok(()) => {}
                     Err((true, e)) => {
                         tracing::warn!("could not finish replacing {title}: {e:#}");
@@ -1497,11 +1497,12 @@ impl IncomingService {
         // Its progress where long work shows it (the owner's light rule for 0.17: `app::tasks`), as its account's: its files to
         // copy, then done. A second copy of the account's at once copies all the same, with no task of its own.
         let (files, doing) = (plan.moves.len() as u64, format!("Copying {}", at.album.title));
-        let task = crate::serve::who::current().and_then(|w| super::tasks::tasks().begin(Self::COPY_TASK, &w.user, false).ok());
+        let task = crate::serve::who::current().and_then(|w| crate::runner::runner().begin(Self::COPY_TASK, &w.user, false).ok());
         if let Some(t) = &task {
             t.step(&doing, 0, Some(files));
         }
-        let copied = self.finish_copy(id, &event, Some(underway.clone())).await;
+        let told = task.as_ref().map(|t| (t.stepper(), doing.clone(), files));
+        let copied = self.finish_copy(id, &event, Some(underway.clone()), told).await;
         if let Some(t) = task {
             if copied.is_ok() {
                 t.step(&doing, files, Some(files));
@@ -1527,14 +1528,19 @@ impl IncomingService {
     /// A Copy to's files and rows (C40), safe to repeat: every file copied (`Files::copy_all`: all or none, the original's time
     /// kept), then the copies' rows made from the originals' (`Catalogue::copy_rows`), each shared as its copy is. `held`: the
     /// action's mark as under way, kept through it. A failure says whether the copies were written by then (T4).
-    async fn finish_copy(&self, id: EventId, event: &Event, held: Option<Underway>) -> Result<(), (bool, anyhow::Error)> {
+    async fn finish_copy(&self, id: EventId, event: &Event, held: Option<Underway>, told: Option<(crate::runner::Stepper, String, u64)>) -> Result<(), (bool, anyhow::Error)> {
         let Event::AlbumCopied { copies, .. } = event else { return Ok(()) };
         let (before, after) = (|e: anyhow::Error| (false, e), |e: anyhow::Error| (true, e));
         let steps = self.steps(event).ok_or_else(|| before(anyhow::anyhow!("the folders are not in use any more")))?;
         let files = self.files.clone();
         let (shared, made) = crate::run::spawn_blocking(move || -> anyhow::Result<(Vec<bool>, Vec<Option<(u64, i64)>>)> {
             let _held = held;
-            let shared = files.copy_all(&steps)?;
+            // Each file counted as it lands (RN's TU2, RA8), where a task follows it.
+            let shared = files.copy_all_told(&steps, &|n| {
+                if let Some((s, doing, of)) = &told {
+                    s.step(doing, n as u64, Some(*of));
+                }
+            })?;
             Ok((shared, steps.iter().map(|s| stamp_of(&s.to.0.join(&s.to.1))).collect()))
         })
         .await
@@ -2539,7 +2545,7 @@ mod tests {
         const ACCOUNT: &str = "c40-copier";
         let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
         let done = crate::serve::who::acting_as(who, svc.copying(&at, 2, None, None)).await.unwrap();
-        let tasks = crate::app::tasks::tasks().of(ACCOUNT);
+        let tasks = crate::runner::runner().of(ACCOUNT);
         assert!(tasks.iter().any(|t| t.kind == "copy" && t.finished.is_some() && t.error.is_none()), "its progress a task of its account's: {} tasks", tasks.len());
         assert_eq!((done.folder.as_str(), done.queued), ("A/Album", false));
         assert_eq!(lying(&music), before, "the original as it was, nothing written into or beside it");
@@ -3821,7 +3827,7 @@ mod tests {
         };
         let underway = svc.intend(epoch_now(), &event).unwrap();
         let id = underway.id();
-        svc.finish_copy(id, &event, None).await.unwrap();
+        svc.finish_copy(id, &event, None, None).await.unwrap();
         svc.journal.applied(id).unwrap();
         drop(underway);
         svc.undo(&id.to_string()).await.unwrap();

@@ -717,11 +717,12 @@ impl IncomingService {
         // Its progress where long work shows it, as its account's: its files to copy, then done. A second of the account's at once
         // goes on all the same, with no task of its own.
         let (files, doing) = (planned.files as u64, format!("Copying {}", at.album.title));
-        let task = crate::serve::who::current().and_then(|w| crate::app::tasks::tasks().begin(Self::REPLACE_TASK, &w.user, false).ok());
+        let task = crate::serve::who::current().and_then(|w| crate::runner::runner().begin(Self::REPLACE_TASK, &w.user, false).ok());
         if let Some(t) = &task {
             t.step(&doing, 0, Some(files));
         }
-        let done = self.finish_from_copy(id, &event, playing.is_some(), Some(underway.clone())).await;
+        let told = task.as_ref().map(|t| (t.stepper(), doing.clone(), files));
+        let done = self.finish_from_copy(id, &event, playing.is_some(), Some(underway.clone()), told).await;
         if let Some(t) = task {
             if done.is_ok() {
                 t.step(&doing, files, Some(files));
@@ -825,7 +826,7 @@ impl IncomingService {
     /// stands written (false). Where the old files cannot be put back, an error is logged and it says written (true), so the intent
     /// stays for the next pass: never Music's album in its trash with no entry. A failure once the copies stand says so too (true).
     /// `held`: the action's mark as under way, kept through its files. The servers hear of the main library's folders alone.
-    pub(super) async fn finish_from_copy(&self, id: EventId, event: &Event, hold_gone: bool, held: Option<super::Underway>) -> Result<(), (bool, anyhow::Error)> {
+    pub(super) async fn finish_from_copy(&self, id: EventId, event: &Event, hold_gone: bool, held: Option<super::Underway>, told: Option<(crate::runner::Stepper, String, u64)>) -> Result<(), (bool, anyhow::Error)> {
         let Event::AlbumReplacedFromCopy { replaced, title, stamps, .. } = event else { return Ok(()) };
         let (before, after) = (|e: anyhow::Error| (false, e), |e: anyhow::Error| (true, e));
         // A library out of use moves nothing: the intent stays for the pass, which forgets it where nothing went.
@@ -836,7 +837,13 @@ impl IncomingService {
             let _held = held;
             // An old file in the trash under this token already went (a try cut short): a copy may lie at its name by now.
             let left: Vec<crate::moves::Step> = out.iter().filter(|s| !s.to.0.join(&s.to.1).exists()).cloned().collect();
-            match files.move_all(&left).and_then(|()| files.copy_all(&ins)) {
+            // Each file counted as it lands (RN's TU2, RA8), where a task follows it.
+            let count = |n: usize| {
+                if let Some((s, doing, of)) = &told {
+                    s.step(doing, n as u64, Some(*of));
+                }
+            };
+            match files.move_all(&left).and_then(|()| files.copy_all_told(&ins, &count)) {
                 Ok(shared) => Ok((shared, ins.iter().map(|s| super::stamp_of(&s.to.0.join(&s.to.1))).collect())),
                 Err(e) => {
                     for (s, was) in ins.iter().zip(&stamps) {
@@ -1367,7 +1374,7 @@ mod tests {
         }
         assert!(!c.has_row(0, &ry01_file(RY01_DIR, 1, "flac")));
         assert!(svc.journal.intents().unwrap().is_empty() && svc.journal.album_events_since(0).unwrap().is_empty(), "no entry");
-        let tasks = crate::app::tasks::tasks().of(ACCOUNT);
+        let tasks = crate::runner::runner().of(ACCOUNT);
         assert!(tasks.iter().any(|t| t.kind == "replace" && t.finished.is_some() && t.error.as_deref().is_some_and(|e| e.contains("is not there"))), "its task ended with the error: {tasks:?}");
         assert_eq!(lying(&bob), theirs, "Bob's files untouched");
         for d in [music, inc, ann, bob] {
@@ -1483,7 +1490,7 @@ mod tests {
         let (svc, music, inc, ann, bob) = with_three_own("ry01-task", RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
         let at = bobs_copy(&svc, &bob, RY01_DIR).await;
         const ACCOUNT: &str = "ry01-root";
-        let mut told = crate::app::tasks::tasks().subscribe();
+        let mut told = crate::runner::runner().subscribe();
         let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
         crate::serve::who::acting_as(who.clone(), svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None)).await.unwrap();
         let mut seen = Vec::new();
@@ -1501,9 +1508,9 @@ mod tests {
         // Another of its kind running for the account: the action goes on, with no task of its own.
         let undo = svc.journal.album_events_since(0).unwrap()[0].0;
         svc.undo(&undo.to_string()).await.unwrap();
-        let running = crate::app::tasks::tasks().begin("replace", ACCOUNT, false).unwrap();
+        let running = crate::runner::runner().begin("replace", ACCOUNT, false).unwrap();
         crate::serve::who::acting_as(who, svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None)).await.unwrap();
-        let mine: Vec<u64> = crate::app::tasks::tasks().of(ACCOUNT).iter().filter(|t| t.finished.is_none()).map(|t| t.id).collect();
+        let mine: Vec<u64> = crate::runner::runner().of(ACCOUNT).iter().filter(|t| t.finished.is_none()).map(|t| t.id).collect();
         assert_eq!(mine, [running.id()], "no task of its own, and none left running");
         running.finish(Ok::<(), anyhow::Error>(()));
         for d in [music, inc, ann, bob] {
