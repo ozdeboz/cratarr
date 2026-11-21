@@ -1645,19 +1645,27 @@ pub(crate) mod tests {
         let j = kept_in();
         let first_ti9 = j.intake(KIND).unwrap().1.into_iter().find(|(r, _)| r.id == "ti-9").unwrap();
         let mut told = crate::app::track_fetch::subscribe();
+        // Each step waits for the state it expects, within a bound, never on fixed sleeps (lane C's `all`, 2026-11-21: under load
+        // twelve milliseconds a percent read the state before the fetch had followed it).
+        async fn until(what: &str, done: impl Fn() -> bool) {
+            let started = std::time::Instant::now();
+            while !done() {
+                assert!(started.elapsed() < Duration::from_secs(20), "never {what} within 20 s");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        let fetch_of = || queue(|q| q.items.iter().find(|i| i.id == "ti-2").and_then(|i| i.fetch.clone()));
+        let percent_of = |f: &str| crate::app::track_fetch::fetch_view(f).map_or(0.0, |v| v.percent);
         let (counts, ()) = tokio::join!(
             async {
-                let batch = loop {
-                    if let Some(b) = slskd.going().first().cloned() {
-                        break b;
-                    }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                };
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                until("a batch going", || slskd.going().first().is_some()).await;
+                let batch = slskd.going().first().cloned().unwrap();
+                until("its fetch followed", || fetch_of().is_some_and(|f| crate::app::track_fetch::fetch_view(&f).is_some())).await;
+                let fid = fetch_of().unwrap();
                 let at_start = j.total_changes();
                 for p in 2..=100 {
                     slskd.at(&batch, p as f64);
-                    tokio::time::sleep(Duration::from_millis(12)).await;
+                    until("its percent read", || percent_of(&fid) >= (p as f64).min(99.0)).await;
                 }
                 let at_end = j.total_changes();
                 slskd.release(&batch);
@@ -1666,6 +1674,7 @@ pub(crate) mod tests {
             fetch_with("ti-2", &intake),
         );
         assert_eq!(counts.0, counts.1, "a hundred reads of its percent wrote nothing");
+        until("ti-2 added or ended", || j.intake(KIND).unwrap().1.iter().any(|(r, _)| r.id == "ti-2" && !matches!(r.state.as_str(), "fetching" | "checking"))).await;
         let mut percents = Vec::new();
         loop {
             match told.try_recv() {
