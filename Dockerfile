@@ -21,6 +21,9 @@ FROM rust:1.99.0-alpine@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d646
 RUN apk add --no-cache musl-dev build-base cmake
 # The page's target, for the test stage. Here and not there, as `COPY server/` below would fetch it again at every commit.
 RUN rustup target add wasm32-unknown-unknown
+# sccache (the owner, 2026-11-21): compiles keyed on their content, not their files' times, so `$FRESH` below keeps its
+# guard while the server's own crates that did not change are taken from the cache. Local disk only (no backend features).
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry cargo install --locked --no-default-features --version 0.8.2 sccache
 ARG CARGO_BUILD_JOBS
 WORKDIR /app
 COPY server/ server/
@@ -28,6 +31,7 @@ WORKDIR /app/server
 # The same build settings in every stage that compiles the server's own crates (tests, e2e): a stage that differs
 # compiles them again (0.13: the e2e stage rebuilt them for 15 minutes beside the tests'). Release is not incremental.
 ENV CARGO_INCREMENTAL=0
+ENV RUSTC_WRAPPER=sccache SCCACHE_DIR=/sccache
 # Every compile starts by giving the sources the time now (2026-11-02). All builds share one target cache, and COPY
 # keeps the times the files had (a git archive's: the commit's), so a source older than the last build's artifacts (a
 # branch built before another, built again) was judged unchanged and the other branch's binary was tested or shipped.
@@ -37,7 +41,7 @@ ENV FRESH="find /app -path /app/server/target -prune -o -path /app/web -prune -o
 
 FROM source AS build
 # The crates and what was compiled before are kept between builds (BuildKit caches): only what changed is built again.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo build --release --locked && cp target/release/cratarr-server /cratarr-server
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     --mount=type=cache,id=cratarr-sccache,target=/sccache     sh -c "$FRESH" && cargo build --release --locked && cp target/release/cratarr-server /cratarr-server && sccache --show-stats
 
 # The tests, in the build's own toolchain and cache (the shipped binary's libc and allocator: musl's). The shared
 # examples the web is held to too are read from ../web/tests/fixtures.
@@ -52,7 +56,7 @@ COPY Dockerfile /app/Dockerfile
 # The end-to-end suite runs after them on the same compile (0.14, faster previews: as a stage of its own after the
 # tests it compiled the server's own crates a second time). The rules crate for the page goes first (`cargo check-wasm`):
 # seconds, and nothing else compiles it for that target until the next module for a player is built.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo check-wasm && cargo test --locked --workspace && cargo test --locked --workspace -- --ignored fixtures:: end_to_end --nocapture
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     --mount=type=cache,id=cratarr-sccache,target=/sccache     sh -c "$FRESH" && cargo check-wasm && cargo test --locked --workspace && cargo test --locked --workspace -- --ignored fixtures:: end_to_end --nocapture && sccache --show-stats
 
 # The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library, driven through
 # its API. The test stage runs it too; this stage runs it alone: `docker build --target e2e .`. Rust filters by name, so
@@ -64,7 +68,7 @@ COPY shared /app/shared
 COPY Dockerfile /app/Dockerfile
 # Unoptimised and on the test stage's cache, as the tests are; its sources freshly timed as theirs are, so run after
 # the tests it compiles the server's own crates again (a preview build runs it alone, before the image).
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace -- --ignored fixtures:: end_to_end --nocapture
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     --mount=type=cache,id=cratarr-sccache,target=/sccache     sh -c "$FRESH" && cargo test --locked --workspace -- --ignored fixtures:: end_to_end --nocapture && sccache --show-stats
 
 # The binary alone, to take out (the test server runs on it, with CRATARR_WEB_DIR at a built web/dist).
 FROM scratch AS binary
