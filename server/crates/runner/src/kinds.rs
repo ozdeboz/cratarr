@@ -1,6 +1,7 @@
 //! The job kinds the runner knows (C.8's carriers): what each is called where it has no step yet, whether a restart lets it go on
-//! from its own checkpoints, and the rough peak of memory it declares (OQ-RN-1 (a), measured with the tests' stand-ins:
-//! RN-REPORT.md). A kind not listed is a person's long work with no checkpoints, nothing declared.
+//! from its own checkpoints, and the rough peak of memory it declares (OQ-RN-1 (a): the plan's rough figures; the tests' stand-ins
+//! reach far less, RN-REPORT.md, and production's own peaks are DM7's rehearsal's). A kind not listed is a person's long work with no
+//! checkpoints, nothing declared.
 
 /// A kind's facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +23,7 @@ const fn k(kind: &'static str, named: &'static str, resumes: bool, peak_mb: u64,
     Kind { kind, named, resumes, peak_mb, decodes }
 }
 
-/// Every kind (the peaks: RN-REPORT.md's measurements, rounded up).
+/// Every kind (the peaks: the plan's rough figures, until the rehearsal measures production's).
 pub const KINDS: [Kind; 16] = [
     k("import:lastfm", "Reading scrobbles", false, 120, false),
     k("import:listenbrainz", "Reading listens", false, 120, false),
