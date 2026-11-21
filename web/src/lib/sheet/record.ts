@@ -24,6 +24,24 @@ export type Card = { group: EntryGroup; items: Item[] };
 const ofAction = (a: ActionView): Item => ({ name: a.name, title: a.title, icon: a.icon, group: a.group, action: a });
 const ofLink = (l: LinkView): Item => ({ name: l.name, title: l.title, icon: l.icon, group: l.group, link: l });
 
+/** The record's own page's opener (RS1: the `page` place counts its opener's libraries), derived from the panel's stack (the
+ *  coordinator, 2026-11-21): what the panel views below the record names it first (an artist, a crate, a label, a playlist), else
+ *  the page it shows over; none where neither names a place, so the server's Library fallback stays (Home's shelves are no
+ *  crate). The prefixes are the panel's subjects' own (panel.svelte.ts, crates.svelte.ts, labelPage.ts). */
+export function openerOf(below: string | null, page: string, searching: boolean): PlaceWord | undefined {
+  if (below?.startsWith('artist:') || below?.startsWith('artist-tracks:')) return 'artist';
+  if (below?.startsWith('crate:')) return 'crate';
+  if (below?.startsWith('label:')) return 'label';
+  if (below?.startsWith('server-playlist:') || (below && /^pl-/.test(below))) return 'playlist';
+  if (searching) return 'search';
+  const byPage: Partial<Record<string, PlaceWord>> = { library: 'library', discover: 'discover', crates: 'crate', playlists: 'playlist', health: 'problem' };
+  return byPage[page];
+}
+
+/** The yes an action asks at a step (RS25, decision 0034): the server's words for it, in order, each asked before anything is
+ *  sent (a main library's Delete asks twice); none left, it is sent. The page works out no step of its own. */
+export const askAt = (a: Pick<ActionView, 'confirm'>, step: number): string | null => a.confirm?.[step] ?? null;
+
 /** The Play row (RS3, CN4): the play section's actions in the order sent, Want last, or first from Discover. */
 export const playRow = (e: RecordEntity): ActionView[] => e.actions.filter((a) => a.section === 'play');
 
@@ -56,6 +74,14 @@ export function versionLines(e: RecordEntity): Line[] {
 
 /** The Head's state line (RS2): its words as sent, its time said by the page's one when() (RV8). */
 export const stateLine = (e: RecordEntity, say: (s: number) => string = when) => (e.state.at ? `${e.state.words} ${say(e.state.at)}` : e.state.words);
+
+/** The record's type with what it is by (VR39), as the References sheet says it: "EP · by its sources", the server's words; none
+ *  while the type has no value (none until a hand picks). */
+export function typeLine(p: RecordEntity['properties']): string | null {
+  if (!p.type.value) return null;
+  const word = recordWord(p.type.value);
+  return [word.charAt(0).toUpperCase() + word.slice(1), p.type_why].filter(Boolean).join(' · ');
+}
 
 /** The Head's chips (RS2): its artists by the one formatter (`credit`), its type's word, its year. */
 export function headChips(e: RecordEntity): string[] {

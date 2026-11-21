@@ -203,6 +203,9 @@ export function placeHere() {
 const steps = $state({ n: 0, how: 'view' as Step['how'] });
 /** How many levels the panel's history has: Back goes to the one before where there is more than one. */
 export const panelDepth = () => steps.n;
+/** What the panel views one level below what it views now (its first name), or none: where the viewed was opened from (the record
+ *  page's opener, lib/sheet/record `openerOf`). */
+export const viewedBelow = (): string | null => (trail.length > 1 ? (trail[trail.length - 2].names[0] ?? null) : null);
 /** Whether the panel shows beside the page, and whether it is a page's own beside its list (`split`), both set by App. */
 const layout = $state({ beside: false, split: false });
 /** Levels of the trail Back leaves alone: a split page's own part, which its page fills again (BACK). */
