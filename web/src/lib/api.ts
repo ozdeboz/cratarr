@@ -2603,7 +2603,9 @@ export const getRelatedArtists = (nameOrId: string) =>
   quietly<{ artists: RelatedArtist[]; looking: boolean } & ListRead>(`/api/artists/related?${new URLSearchParams(artistAsk(nameOrId))}`);
 /** An artist Beyond listed opened (C57, Z8): Cratarr's artist who holds their MusicBrainz id, made now where none does. Refused
  *  (403) to one who is no administrator for an artist Beyond did not list within the day. */
-export const openArtist = (mbid: string, name: string) => post<{ artist: string }>('/api/artists/open', { mbid, name });
+/** The open (W10; SCENARIOS-LOOKUPS LK.P1): the name's one artist at once, and, where MusicBrainz' question is still to ask,
+ *  its job's task, whose result names the artist it decided on. */
+export const openArtist = (mbid: string, name: string) => post<{ artist: string; task?: Task }>('/api/artists/open', { mbid, name });
 export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
 /** Everything an artist has on Bandcamp to hear as previews (New to you's Listen; the owner, 2026-10-27): their own
