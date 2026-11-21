@@ -1743,7 +1743,7 @@ fn not_listed(e: &anyhow::Error, now: i64) -> Listing {
 async fn search(id: &str) {
     let Some(served) = crate::serve::instance() else { return };
     let ready = async { super::track_fetch::slskd_ready().await.map(|(s, _)| s) };
-    search_in(id, served.catalogue(), super::references::read_reference, ready).await;
+    search_in(id, served.catalogue(), super::references_door::read, ready).await;
 }
 
 /// [`search`], its list read through `read`, slskd as `ready` gives it (the tests' stand in).

@@ -385,6 +385,12 @@ mod tests {
         Ref::new("musicbrainz", "release", id)
     }
 
+    /// A search's phrase: its quotes and backslashes escaped (matching's, moved with the search into the door).
+    #[test]
+    fn a_search_phrase_is_escaped() {
+        assert_eq!(phrase(r#"He said "hi"\"#), r#""He said \"hi\"\\""#);
+    }
+
     /// CU15.4: Soulseek's list through the door (`references::tracklist`, its reader the door): C51a's order, MusicBrainz's release
     /// asked first, then Discogs', then Bandcamp's (decision 0105 rule 1: the order says only who is asked first); a source switched
     /// off passed over; "no such release" giving way to the next; C51a's own cases answered by the stand-in as by their readers. A

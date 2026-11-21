@@ -6,17 +6,17 @@
 //! album, so it runs as a task, each album's result kept (`UserData::album_match`) and asked again after `AGAIN`.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use anyhow::Result;
-use serde_json::Value;
+use anyhow::{Context, Result};
 
 use super::fixes_base::Fix;
-use crate::catalogue::identity::RefTrack;
-use super::musicbrainz::Asked as _;
+use super::references_door::{Listing, References};
+use crate::catalogue::identity::{Ref, RefTrack};
 pub use super::matching_base::Match;
 
-/// The task's kind (`app::tasks`).
-pub const KIND: &str = "match";
+/// The job's kind, as the runner's table names it (`runner::kinds`: Activity calls it "Matching").
+pub const KIND: &str = "matching";
 /// Every track this close to its release's length makes a certain match (s); this close, a likely one.
 const CERTAIN_SECS: i64 = 2;
 const LIKELY_SECS: i64 = 5;
@@ -44,52 +44,11 @@ struct Release {
     list: Vec<RefTrack>,
 }
 
-fn credit(v: &Value) -> (String, Option<String>) {
-    let parts = v.as_array().cloned().unwrap_or_default();
-    let name = parts.iter().map(|c| format!("{}{}", c["name"].as_str().unwrap_or_default(), c["joinphrase"].as_str().unwrap_or_default())).collect::<String>();
-    (name.trim().to_string(), parts.first().and_then(|c| c["artist"]["id"].as_str()).map(str::to_string))
-}
-
-fn release_of(v: &Value) -> Release {
-    let (artist, artist_id) = credit(&v["artist-credit"]);
-    let media = v["media"].as_array().cloned().unwrap_or_default();
-    let list = media
-        .iter()
-        .zip(1..)
-        .flat_map(|(m, disc)| {
-            let disc = m["position"].as_u64().map_or(disc, |p| p as u32);
-            m["tracks"].as_array().cloned().unwrap_or_default().into_iter().zip(1..).map(move |(t, at)| RefTrack {
-                disc,
-                position: t["position"].as_u64().map_or(at, |p| p as u32),
-                title: t["title"].as_str().unwrap_or_default().to_string(),
-                length_ms: t["length"].as_i64(),
-                recording: t["recording"]["id"].as_str().map(str::to_string),
-            })
-        })
-        .collect();
-    Release {
-        list,
-        id: v["id"].as_str().unwrap_or_default().to_string(),
-        group: v["release-group"]["id"].as_str().map(str::to_string),
-        title: v["title"].as_str().unwrap_or_default().to_string(),
-        artist,
-        artist_id,
-        year: v["date"].as_str().and_then(|d| d.get(..4)).and_then(|y| y.parse().ok()),
-        format: media.first().and_then(|m| m["format"].as_str()).unwrap_or_default().to_string(),
-        tracks: media
-            .iter()
-            .flat_map(|m| m["tracks"].as_array().cloned().unwrap_or_default())
-            .map(|t| {
-                let (_, by) = credit(&t["artist-credit"]);
-                (
-                    t["title"].as_str().unwrap_or_default().to_string(),
-                    t["length"].as_i64().map(|ms| (ms + 500) / 1000),
-                    t["recording"]["id"].as_str().unwrap_or_default().to_string(),
-                    by,
-                )
-            })
-            .collect(),
-    }
+/// A release as the door read it (`references_door::Listing`): its list, and what it says of itself besides.
+fn release_of(id: &str, l: Listing) -> Release {
+    let about = l.about.unwrap_or_default();
+    let tracks = l.tracks.iter().enumerate().map(|(i, t)| (t.title.clone(), t.length_ms.map(|ms| (ms + 500) / 1000), t.recording.clone().unwrap_or_default(), about.by.get(i).cloned().flatten())).collect();
+    Release { id: id.to_string(), group: about.group, title: about.title, artist: about.artist, artist_id: about.artist_id, year: about.year, format: about.format, tracks, list: l.tracks }
 }
 
 /// How the album's tracks (file name, title, length s) meet a release's: each file at the release's track of the same
@@ -197,53 +156,45 @@ pub fn likely_words(title: &str, year: Option<u32>, format: &str, differ: &[(usi
     }
 }
 
-/// A Lucene phrase, its quotes and backslashes escaped.
-fn phrase(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-async fn lookup(http: &reqwest::Client, release: &str) -> Result<Release> {
-    let v: Value = http
-        .get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=recordings+artist-credits+release-groups&fmt=json"))
-        .asked()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(release_of(&v))
+/// A MusicBrainz release read through the door (CU15.3): none where MusicBrainz has no such release.
+async fn read(door: &dyn References, release: &str) -> Result<Option<Release>> {
+    Ok(door.tracklist(Ref::new("musicbrainz", "release", release)).await?.map(|l| release_of(release, l)))
 }
 
 /// What `find` found: the match, the release's own list, and whether the files name that release.
 type Found = (Match, Vec<RefTrack>, bool);
 
 /// An album's best match: its own release where its files name one, else the best of what a search by its name and
-/// artist finds (certain before likely, the first found among equals).
-async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Found>> {
+/// artist finds (certain before likely, the first found among equals). Its files read from the library; asked through the door.
+async fn find(door: Arc<dyn References>, album: &str) -> Result<Option<Found>> {
     let a = album.to_string();
     let (tracks, release, artist, name) = crate::run::spawn_blocking(move || super::renumber_base::tracks_of(&a)).await??;
     let files: Vec<(String, String, i64)> = tracks.iter().map(|t| (t.file.clone(), t.title.clone(), i64::from(t.secs))).collect();
+    find_in(door.as_ref(), &files, release.as_deref(), &artist, &name).await
+}
+
+/// `find` for these files (file name, title, length s): the release they name read through the door, else MusicBrainz's search by
+/// the album's `name` and `artist` through the door, its candidates (a score of `LEAST_SCORE` and the files' count of tracks, the
+/// first `CANDIDATES`) each read through it and scored (CU15.3). Nothing asked of MusicBrainz but through the door.
+async fn find_in(door: &dyn References, files: &[(String, String, i64)], release: Option<&str>, artist: &str, name: &str) -> Result<Option<Found>> {
     if let Some(r) = release {
-        let read = lookup(http, &r).await?;
-        return Ok(score(&files, &read).map(|m| (m, read.list, true)));
+        let read = read(door, r).await?.with_context(|| format!("MusicBrainz has no release {r}"))?;
+        return Ok(score(files, &read).map(|m| (m, read.list, true)));
     }
-    let query = format!("release:{} AND artist:{}", phrase(&name), phrase(&artist));
-    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release")?;
-    url.query_pairs_mut().append_pair("query", &query).append_pair("limit", "10").append_pair("fmt", "json");
-    let v: Value = http.get(url).asked().await?.error_for_status()?.json().await?;
-    let ids: Vec<String> = v["releases"]
-        .as_array()
+    let ids: Vec<String> = door
+        .find(artist, name)
+        .await?
         .into_iter()
-        .flatten()
-        .filter(|r| r["score"].as_i64().unwrap_or(0) >= LEAST_SCORE && r["track-count"].as_u64().is_none_or(|n| n as usize == files.len()))
-        .filter_map(|r| r["id"].as_str().map(str::to_string))
+        .filter(|c| c.score >= LEAST_SCORE && c.tracks.is_none_or(|n| n == files.len()))
+        .map(|c| c.id)
         .take(CANDIDATES)
         .collect();
     let mut best: Option<Found> = None;
     // How many editions fit with every track within a few seconds (the words' "several fit").
     let mut fits = 0;
     for id in ids {
-        let read = lookup(http, &id).await?;
-        let Some(m) = score(&files, &read) else { continue };
+        let Some(read) = read(door, &id).await? else { continue };
+        let Some(m) = score(files, &read) else { continue };
         fits += m.fits;
         if best.as_ref().is_none_or(|(b, ..)| m.certain && !b.certain) {
             let certain = m.certain;
@@ -256,21 +207,21 @@ async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Found>> {
     Ok(best.map(|(mut m, list, named)| {
         m.fits = fits;
         if !m.certain && fits > 1 {
-            let differ = differing(m.tracks.iter().zip(&m.lengths).zip(&files).enumerate().map(|(i, ((_, theirs), (_, _, secs)))| (i + 1, *secs, *theirs)));
+            let differ = differing(m.tracks.iter().zip(&m.lengths).zip(files).enumerate().map(|(i, ((_, theirs), (_, _, secs)))| (i + 1, *secs, *theirs)));
             m.why = likely_words(&m.title, m.year, &m.format, &differ, true);
         }
         (m, list, named)
     }))
 }
 
-/// How the matching task finds an album's match (`find`; the tests' stand in for it, V6).
-type Finder = fn(reqwest::Client, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>>;
+/// How the matching task finds an album's match through the door (`find`; the tests' stand in for it, V6).
+type Finder = fn(Arc<dyn References>, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>>;
 
 /// The matches of these albums as kept; those never matched, or matched long ago, matched in a task (one at a time for
 /// the account), each kept as it is found. One album (an intake card, a one-album fix) is a page's question (V6); a whole finding's
 /// list goes behind the pages, as the background reads do, and stops at "Pause background reading" (U8). Blocking parts apart.
 pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: Vec<String>) -> Result<Vec<(String, Match)>> {
-    kept_or_find_by(served, albums, |http, album| Box::pin(async move { find(&http, &album).await })).await
+    kept_or_find_by(served, albums, |door, album| Box::pin(async move { find(door, &album).await })).await
 }
 
 /// `kept_or_find`, each album's match found by `finder`.
@@ -290,8 +241,10 @@ async fn kept_or_find_by(served: &std::sync::Arc<crate::serve::Serve>, albums: V
         // lacking ids) asks behind the pages, as the background reads do, and the pause holds it (U8). One album asked, not one left
         // of many by the matches kept (T13.4): a finding whose other albums are matched already is still the background's.
         let page = albums.len() == 1;
+        // The door as installed here (CU15): every question of the matching goes through it.
+        let door = super::references_door::door();
         let _ = crate::runner::spawn(KIND, &account, false, move |h| async move {
-            let matching = match_each(h, due, ud, served, finder);
+            let matching = match_each(h, due, ud, served, door, finder);
             if page { matching.await } else { super::musicbrainz::behind(matching).await }
         });
     }
@@ -300,12 +253,11 @@ async fn kept_or_find_by(served: &std::sync::Arc<crate::serve::Serve>, albums: V
 
 /// The matching task's work (`kept_or_find_by`): each album's match found by `finder` and kept, with the release's own list in its
 /// references, as the task's steps say.
-async fn match_each(h: std::sync::Arc<crate::runner::Handle>, due: Vec<String>, ud: std::sync::Arc<crate::userdata::UserData>, served: std::sync::Arc<crate::serve::Serve>, finder: Finder) -> Result<()> {
-    let http = super::discover::http()?;
+async fn match_each(h: std::sync::Arc<crate::runner::Handle>, due: Vec<String>, ud: std::sync::Arc<crate::userdata::UserData>, served: std::sync::Arc<crate::serve::Serve>, door: Arc<dyn References>, finder: Finder) -> Result<()> {
     let total = due.len() as u64;
     for (i, album) in due.into_iter().enumerate() {
         h.step("Matching albums with MusicBrainz", i as u64, Some(total));
-        let found = match finder(http.clone(), album.clone()).await {
+        let found = match finder(door.clone(), album.clone()).await {
             Ok(m) => m,
             Err(e) => {
                 tracing::debug!("matching: {album}: {e:#}");
@@ -427,7 +379,7 @@ mod tests {
         use crate::app::switches::{BACKGROUND, MUSICBRAINZ, TEST_STATE, set_for_tests};
         static AT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
         static WENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        fn asking(_: reqwest::Client, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+        fn asking(_: Arc<dyn References>, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
             use crate::app::musicbrainz::Asked as _;
             Box::pin(async {
                 let at = AT.lock().unwrap().clone();
@@ -467,7 +419,7 @@ mod tests {
         use crate::app::switches::{BACKGROUND, MUSICBRAINZ, TEST_STATE, set_for_tests};
         static AT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
         static WENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        fn asking(_: reqwest::Client, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+        fn asking(_: Arc<dyn References>, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
             use crate::app::musicbrainz::Asked as _;
             Box::pin(async {
                 let at = AT.lock().unwrap().clone();
@@ -509,7 +461,7 @@ mod tests {
         use crate::app::switches::{BACKGROUND, MUSICBRAINZ, TEST_STATE, set_for_tests};
         static AT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
         static WENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        fn asking(_: reqwest::Client, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+        fn asking(_: Arc<dyn References>, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
             use crate::app::musicbrainz::Asked as _;
             Box::pin(async {
                 let at = AT.lock().unwrap().clone();
@@ -554,7 +506,7 @@ mod tests {
             { "position": 1, "tracks": [{ "position": 1, "title": "Slack Water", "length": 181_234, "recording": { "id": "rec1" } }] },
             { "position": 2, "tracks": [{ "position": 1, "title": "Neap", "recording": { "id": "rec2" } }, { "title": "Ebb", "length": 90_000 }] }
         ]});
-        let list = release_of(&v).list;
+        let list = super::super::references::list_of_release(&super::super::track_fetch_records::release_of(&v));
         let rec = |disc: u32, position: u32, title: &str, length_ms: Option<i64>, recording: Option<&str>| RefTrack { disc, position, title: title.into(), length_ms, recording: recording.map(str::to_string) };
         assert_eq!(list, [rec(1, 1, "Slack Water", Some(181_234), Some("rec1")), rec(2, 1, "Neap", None, Some("rec2")), rec(2, 2, "Ebb", Some(90_000), None)]);
     }
@@ -602,8 +554,50 @@ mod tests {
         }
     }
 
+    /// The runner's table names matching's job (Activity's "Matching", never "Working"): the kind matching runs as is the one the
+    /// table lists, by its whole name.
     #[test]
-    fn a_search_phrase_is_escaped() {
-        assert_eq!(phrase(r#"He said "hi"\"#), r#""He said \"hi\"\\""#);
+    fn the_runners_table_names_matchings_kind() {
+        let kind = crate::runner::kinds::of(KIND);
+        assert_eq!((kind.kind, kind.named), (KIND, "Matching"));
+    }
+
+    /// CU15.3: matching finds through the door. An untagged album of 9 tracks; a stand-in door whose `find("Glass Harbour", "Tide
+    /// Tables")` gives release R, and whose `tracklist(R)` gives 9 tracks within 2 s. Matching it (`kept_or_find`): the match is
+    /// certain, kept as today (`album_matches`). Never MusicBrainz asked but through the door.
+    #[tokio::test]
+    async fn matching_finds_through_the_door() {
+        use crate::app::references_door::{About, Asked, Candidate, StandIn};
+        fn nine() -> Vec<(String, String, i64)> {
+            (1..=9).map(|n| (format!("{n:02}.flac"), format!("Tide {n}"), 200 + n)).collect()
+        }
+        fn tide(door: Arc<dyn References>, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+            Box::pin(async move { find_in(door.as_ref(), &nine(), None, "Glass Harbour", "Tide Tables").await })
+        }
+        let tracks: Vec<RefTrack> = (1..=9).map(|n| RefTrack { disc: 1, position: n as u32, title: format!("Tide {n}"), length_ms: Some((200 + n) * 1000 + 1_500), recording: Some(format!("rec-{n}")) }).collect();
+        let about = About { title: "Tide Tables".into(), artist: "Glass Harbour".into(), year: Some(2012), format: "CD".into(), group: Some("rg-r".into()), by: vec![None; 9], ..About::default() };
+        let listing = Listing { tracks, about: Some(about), ..Listing::default() };
+        let door = StandIn::new()
+            .find("Glass Harbour", "Tide Tables", vec![Candidate { id: "R".into(), score: 100, tracks: Some(9) }])
+            .tracklist(Ref::new("musicbrainz", "release", "R"), Some(listing))
+            .install();
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        const ACCOUNT: &str = "matching-through-the-door";
+        let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+        let kept = crate::serve::who::acting_as(who, kept_or_find_by(&serve, vec!["al-1".to_string()], tide)).await;
+        for _ in 0..500 {
+            if !running(ACCOUNT) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(kept.unwrap().is_empty(), "none kept before");
+        let matched = serve.userdata.album_matches(&["al-1".to_string()]).unwrap();
+        let m: Match = serde_json::from_str(matched["al-1"].1.as_deref().expect("a match kept")).unwrap();
+        assert!(m.certain, "every track within 2 s: {m:?}");
+        assert_eq!((m.release.as_str(), m.release_group.as_deref(), m.title.as_str()), ("R", Some("rg-r"), "Tide Tables"));
+        assert_eq!(door.asked(), [Asked::Find("Glass Harbour".into(), "Tide Tables".into()), Asked::Tracklist(Ref::new("musicbrainz", "release", "R"))]);
+        assert!(door.violations().is_empty(), "{:?}", door.violations());
     }
 }

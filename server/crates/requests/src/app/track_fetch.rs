@@ -41,7 +41,7 @@ pub use rows::{keep_in, restarted};
 pub const SLSKD_URL: &str = "slskd:url";
 pub const SLSKD_KEY: &str = "slskd:key";
 pub const SLSKD_FOLDER: &str = "slskd:folder";
-pub const ACOUSTID_KEY: &str = "acoustid:key";
+pub use super::references_door::ACOUSTID_KEY;
 /// A file's length within this of the release's track places it there (s), as `incomplete` places them.
 const PLACE_SECS: i64 = 5;
 /// How long a search is waited for at most.
@@ -79,9 +79,8 @@ pub fn slskd_set(ud: &crate::userdata::UserData) -> Result<Option<SlskdSet>> {
     })
 }
 
-pub fn acoustid_key(ud: &crate::userdata::UserData) -> Result<Option<String>> {
-    choice(ud, ACOUSTID_KEY)
-}
+/// The server's AcoustID key, where set: the door's (`references_door`), which asks AcoustID with it.
+pub use super::references_door::acoustid_key;
 
 fn served() -> Result<Arc<crate::serve::Serve>> {
     crate::serve::instance().context("Cratarr's own library is not open")
@@ -715,11 +714,9 @@ pub async fn slskd_ready() -> Result<(Slskd, PathBuf)> {
     slskd().await
 }
 
-/// What AcoustID knows of a file, asked with the server's key.
-async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid::Found>> {
-    let ud = served()?.userdata.clone();
-    let key = crate::run::spawn_blocking(move || acoustid_key(&ud)).await??.context("AcoustID is not set up: Settings › Server")?;
-    crate::acoustid::lookup(&key, &print).await
+/// What AcoustID knows of a file, asked through the door as installed (CU15: `references_door`, with the server's key).
+fn looked_up(print: crate::acoustid::Print) -> impl std::future::Future<Output = Result<Vec<crate::acoustid::Found>>> + Send + 'static {
+    super::references_door::recordings(print)
 }
 
 /// The gate stopped short of a verdict, and what it found wrong with a file itself: moved down for the turn's class
@@ -735,10 +732,12 @@ where
     judged(printed(file).await?, track, refused_for, lookup).await
 }
 
-/// The file decoded whole and heard (`acoustid::print`), off the runtime's threads.
+/// The file decoded whole and heard (`acoustid::print`), off the runtime's threads, once there is room for a decode
+/// (`memwatch::room`, CU15.1). A file that cannot be heard (gone, unreadable, not sound) is the file's fault (`Unfit`: TN.1's File).
 async fn printed(file: &Path) -> Result<crate::acoustid::Print> {
+    crate::memwatch::wait_for_room().await;
     let f = file.to_path_buf();
-    crate::run::spawn_blocking(move || crate::acoustid::print(&f)).await?
+    crate::run::spawn_blocking(move || crate::acoustid::print(&f)).await?.map_err(|e| Unfit(format!("{e:#}")).into())
 }
 
 /// A heard file judged: refused by `refused` before AcoustID is asked (single-track fetch's rule, or Soulseek's), else held against

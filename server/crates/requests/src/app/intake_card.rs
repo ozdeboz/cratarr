@@ -463,6 +463,8 @@ pub fn hear(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>) {
         return;
     }
     let album = album.to_string();
+    // The door as installed here (CU15): AcoustID is asked through it.
+    let door = super::references_door::door();
     let _ = crate::runner::spawn(KIND, &account, false, move |h| async move {
         let (tracks, ..) = crate::run::spawn_blocking({
             let (a, at) = (album.clone(), at.clone());
@@ -471,28 +473,7 @@ pub fn hear(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>) {
         .await??;
         let ud = served.userdata.clone();
         let key = crate::run::spawn_blocking(move || super::track_fetch::acoustid_key(&ud)).await??;
-        let mut heard = Heard { no_acoustid: key.is_none(), ..Heard::default() };
-        let total = tracks.len() as u64;
-        for (i, t) in tracks.iter().enumerate() {
-            h.step("Hearing the record's tracks", i as u64, Some(total));
-            let path = t.path.clone();
-            let mut one = HeardTrack { file: t.file.clone(), ..HeardTrack::default() };
-            match crate::run::spawn_blocking(move || crate::acoustid::print(&path)).await? {
-                Ok(print) => {
-                    one.damaged = print.damaged;
-                    one.flaw = print.flaws.why();
-                    one.flaw_at_ms = print.flaws.clicks.first().copied().or(print.flaws.first_clip).map(|s| (s * 1000.0) as i64);
-                    if let Some(k) = &key {
-                        match crate::acoustid::lookup(k, &print).await {
-                            Ok(found) => one.recordings = found.iter().filter(|f| f.score >= crate::acoustid::SURE).flat_map(|f| f.recordings.iter().map(|r| r.id.clone())).collect(),
-                            Err(e) => tracing::debug!("intake: AcoustID for {}: {e:#}", t.file),
-                        }
-                    }
-                }
-                Err(e) => one.failed = Some(super::plain(format!("{e:#}"))),
-            }
-            heard.tracks.push(one);
-        }
+        let heard = hearing(door.as_ref(), &tracks, key.is_some(), |i, total| h.step("Hearing the record's tracks", i, Some(total))).await?;
         let (ud, json, a) = (served.userdata.clone(), serde_json::to_string(&heard)?, album.clone());
         let folder = at.map(|p| p.0);
         crate::run::spawn_blocking(move || ud.set_intake_heard(&a, folder, super::moment::now_secs(), &json)).await??;
@@ -500,9 +481,65 @@ pub fn hear(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>) {
     });
 }
 
+/// A copy's tracks heard (`hear`'s work): each decoded whole and, where AcoustID is set (`asks`), its recordings asked through the
+/// door (CU15.2), those it is sure of (`acoustid::SURE`) kept. Each step told to `step` (done, of).
+async fn hearing(door: &dyn super::references_door::References, tracks: &[Track], asks: bool, step: impl Fn(u64, u64)) -> Result<Heard> {
+    let mut heard = Heard { no_acoustid: !asks, ..Heard::default() };
+    let total = tracks.len() as u64;
+    for (i, t) in tracks.iter().enumerate() {
+        step(i as u64, total);
+        let path = t.path.clone();
+        let mut one = HeardTrack { file: t.file.clone(), ..HeardTrack::default() };
+        match crate::run::spawn_blocking(move || crate::acoustid::print(&path)).await? {
+            Ok(print) => {
+                one.damaged = print.damaged;
+                one.flaw = print.flaws.why();
+                one.flaw_at_ms = print.flaws.clicks.first().copied().or(print.flaws.first_clip).map(|s| (s * 1000.0) as i64);
+                if asks {
+                    match door.recordings(&print).await {
+                        Ok(found) => one.recordings = found.iter().filter(|f| f.score >= crate::acoustid::SURE).flat_map(|f| f.recordings.iter().map(|r| r.id.clone())).collect(),
+                        Err(e) => tracing::debug!("intake: AcoustID for {}: {e:#}", t.file),
+                    }
+                }
+            }
+            Err(e) => one.failed = Some(super::plain(format!("{e:#}"))),
+        }
+        heard.tracks.push(one);
+    }
+    Ok(heard)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CU15.2: a card hears AcoustID through the door. A card's copy of 3 tracks; a stand-in door expecting their recordings. The
+    /// hearing kept names the door's recordings at 0.9 and over, per track. Never a question the stand-in did not expect, nor a
+    /// lookup outside the door.
+    #[tokio::test]
+    async fn a_card_hears_acoustid_through_the_door() {
+        use crate::acoustid::{Found, Recording};
+        use crate::app::references_door::{Asked, StandIn};
+        let tide = crate::fixtures::gate::TIDE_TABLES;
+        let folder = crate::fixtures::gate::gate_cases_once().join(crate::fixtures::gate::CLEAN).join(tide.folder());
+        let tracks: Vec<Track> = (1..=3)
+            .map(|n| {
+                let file = tide.file(n);
+                Track { id: format!("tr-{n}"), path: folder.join(&file), place: (1, file.clone()), file, title: tide.tracks[n - 1].0.into(), ms: i64::from(tide.tracks[n - 1].1) * 1000, disc: Some(1), no: Some(n as u32) }
+            })
+            .collect();
+        let found = |score: f32, id: &str| Found { score, recordings: vec![Recording { id: id.into() }] };
+        let door = StandIn::new().recordings(vec![found(0.95, "rec-sure"), found(0.6, "rec-unsure")]).install();
+        let heard = hearing(&*crate::app::references_door::door(), &tracks, true, |_, _| {}).await.unwrap();
+        let kept: Heard = serde_json::from_str(&serde_json::to_string(&heard).unwrap()).unwrap();
+        assert_eq!(kept.tracks.len(), 3);
+        assert!(kept.tracks.iter().all(|t| t.recordings == ["rec-sure"]), "the door's recordings at 0.9 and over, per track: {:?}", kept.tracks);
+        assert!(!kept.no_acoustid);
+        let asked = door.asked();
+        assert_eq!(asked.len(), 3, "one question a track: {asked:?}");
+        assert!(asked.iter().all(|a| matches!(a, Asked::Recordings { .. })));
+        assert!(door.violations().is_empty(), "{:?}", door.violations());
+    }
 
     /// The owner (2026-11-19): the Reference line says what was compared, never MusicBrainz as the authority. A likely match names its
     /// edition and the tracks whose lengths differ, by the card's own track numbers, the file's length against the edition's; several
