@@ -94,8 +94,8 @@ pub fn files_agree_in(db: &Connection, record: i64, sure: &dyn Fn(i64) -> bool) 
     let mut copies: std::collections::BTreeMap<i64, Vec<Present>> = std::collections::BTreeMap::new();
     for (folder, rel, ms) in files {
         let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), None);
-        copies.entry(folder).or_default().push(Present { disc: facts.disc, number: facts.number, key: rel, title: facts.title, ms: ms.filter(|m| *m > 0) });
+        let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), &rel, None);
+        copies.entry(folder).or_default().push(facts.side(rel, ms.filter(|m| *m > 0)));
     }
     Ok(copies.into_iter().any(|(folder, mut copy)| {
         copy.sort_by_key(|f| (f.disc.unwrap_or(1), f.number.unwrap_or(0)));

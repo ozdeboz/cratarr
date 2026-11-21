@@ -65,6 +65,19 @@ CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, recor
 CREATE TABLE IF NOT EXISTS expected (
   folder INTEGER NOT NULL, dir TEXT NOT NULL, record INTEGER NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, dir)) WITHOUT ROWID;
+-- COU.18, WM.13 (T-WM-3, T-COU-16, T-COU-17): what Cratarr placed and for what, said before the files appear under their names. A
+-- copy's placing folder (`path`, `track` and its place NULL) and its record; or a placed file (`path` its own), its record, the
+-- track it was fetched for where the record has one, and its place on the list it was fetched by, with its size and time as
+-- placed (filled at its first read). Kept for good: it outlives C50's week and the fetcher's item. A copy placed is gathered by it,
+-- never by the tag hash (COU.17); an arrival joins its record by it, the strongest evidence (WM.8); a placed file pairs at its told
+-- place while it is as placed (WM.25 (e)). It decides only for files under its own path.
+CREATE TABLE IF NOT EXISTS placements (
+  folder INTEGER NOT NULL, path TEXT NOT NULL, record INTEGER NOT NULL, track INTEGER, disc INTEGER, number INTEGER,
+  size INTEGER, mtime INTEGER, at INTEGER NOT NULL,
+  PRIMARY KEY (folder, path)) WITHOUT ROWID;
+-- WM.12 (DOMAIN-CORE §12: an edition, one card): a record linked to another as its edition by evidence stored at the join (an
+-- arrival fetched for `of` whose tracks differ from a copy already whole: `how` 'placement'). Display only, as editions are.
+CREATE TABLE IF NOT EXISTS edition_links (record INTEGER PRIMARY KEY, of INTEGER NOT NULL, how TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
 -- RT01: what was forgotten and when, by its subject: `al-<record>` (a record not had nobody saw or opened for six months,
 -- `Catalogue::forget_quiet`), `ar-<artist>` (an artist left with nothing, RT01b, `Catalogue::forget_quiet_artists`). Its id is
@@ -909,6 +922,10 @@ pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], rec
 /// record and the had rule read them.
 pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<Vec<String>> {
     let first = first_ranked(albums, records);
+    // WM.5 (b): a copy whose files name no album (none, or a site's stamp: the one tag rule) says nothing of its record's title,
+    // and the next copy in the owner's order that names it speaks.
+    let named_copies: Vec<Option<i64>> = albums.iter().zip(records).map(|(a, r)| r.filter(|_| !a.facts.title.is_empty())).collect();
+    let titled = first_ranked(albums, &named_copies);
     // R1 (A2.1, A2.2): an album artist the files give a MusicBrainz id for is the artist who holds it (`artist_of_files_id`); one they
     // give none for, the first artist of the name (C55), as before. The names most files pair with each id in this pass (R6).
     let mut paired: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>> = std::collections::BTreeMap::new();
@@ -951,7 +968,7 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
             "UPDATE records SET title = ?2, artist = ?3, named_rank = ?4
              WHERE id = ?1 AND ?2 <> '' AND ?4 >= COALESCE(named_rank, 0) AND (title IS NOT ?2 OR artist IS NOT ?3 OR named_rank IS NOT ?4)",
         )?
-        .execute(params![record, a.title, a.artist, a.rank])?;
+        .execute(params![record, titled.get(&record).map_or("", |t| t.title.as_str()), a.artist, a.rank])?;
         let mut ids: Vec<i64> = Vec::new();
         let ided = files_ids(a);
         for name in &a.artists {
@@ -3760,8 +3777,40 @@ impl Catalogue {
         )? > 0;
         if !kept {
             tracing::warn!(target: "library", folder, dir, record, "a folder another record is expected in: not expected for this one too");
+        } else {
+            // The placement row, which outlives the week (WM.13, COU.18): said with the expectation, by the fetcher's one call.
+            self.place_copy(folder, dir, record)?;
         }
         Ok(kept)
+    }
+
+    /// COU.18 (T-COU-16, T-WM-3): a copy Cratarr places, said before its files appear: its placing folder `dir` in catalogue folder
+    /// `folder`, and the record it was fetched for. Its files are gathered by it and join that record by it (WM.8), for good. A
+    /// later placing of the same folder says it again. Blocking.
+    pub fn place_copy(&self, folder: i64, dir: &str, record: i64) -> Result<()> {
+        let dir = dir.trim_matches('/');
+        self.db().execute(
+            "INSERT INTO placements (folder, path, record, at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (folder, path) DO UPDATE SET record = excluded.record, track = NULL, disc = NULL, number = NULL, at = excluded.at",
+            params![folder, dir, record, now()],
+        )?;
+        Ok(())
+    }
+
+    /// COU.18 (T-COU-17): a file Cratarr places into a record's copy (a fetched track, a better copy), said before it appears under
+    /// its name: its path, its record, the track it was fetched for where the record has one, and its place on that record's list. It
+    /// takes that track at its first read (as a handover), and pairs at that place while it is as placed (WM.25 (e)): its size and
+    /// time as first read. Blocking.
+    pub fn place_file(&self, folder: i64, rel: &str, record: i64, track: Option<i64>, place: (u32, u32)) -> Result<()> {
+        let db = self.db();
+        db.execute(
+            "INSERT OR REPLACE INTO placements (folder, path, record, track, disc, number, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![folder, rel, record, track, place.0, place.1, now()],
+        )?;
+        if let Some(track) = track {
+            db.execute("INSERT OR REPLACE INTO handovers (folder, rel, track, at, replaces) VALUES (?1, ?2, ?3, ?4, NULL)", params![folder, rel, track, now()])?;
+        }
+        Ok(())
     }
 
     /// The record the album a fetcher placed in `dir` (as Cratarr sees it) went to, once a record pass has read it (X4): the one
@@ -4277,7 +4326,7 @@ fn first_copy_in(tx: &Connection, record: i64, only: &dyn Fn(i64) -> bool) -> Re
     let mut out = Vec::with_capacity(copy.len());
     for (folder, rel, track, ms) in copy {
         let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        out.push((track, crate::incoming::TrackFacts::of(&crate::naming::Tags(read), ms.and_then(|ms| u64::try_from(ms).ok()).filter(|ms| *ms > 0))));
+        out.push((track, crate::incoming::TrackFacts::of(&crate::naming::Tags(read), &rel, ms.and_then(|ms| u64::try_from(ms).ok()).filter(|ms| *ms > 0))));
     }
     Ok(Some(out))
 }

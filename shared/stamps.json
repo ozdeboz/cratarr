@@ -1,0 +1,4 @@
+{
+  "about": "Tag hygiene (SCENARIOS-WM WM.1, decision 0105 as amended 2026-11-20): the endings a bare domain stamped into a tag by a download site ends in. A value that is only a web address, a bare domain ending in one of these, or \"ripped by\" is no value; one leading or trailing a real value is cut. Closed (T-WM-8): a domain added is a table change, listed by the upgrade's rehearsal first. Read by the rules crate (hygiene.rs), for the server, the page and the device alike.",
+  "domains": ["com", "net", "org", "info", "biz", "ru", "to", "cc", "ws", "xyz", "club", "online", "site", "top"]
+}

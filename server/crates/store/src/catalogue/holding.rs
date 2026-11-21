@@ -114,9 +114,9 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
         for row in rows {
             let (folder, rel, track, header, decoded, complete) = row?;
             let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), None);
+            let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), &rel, None);
             let ms = served_ms(header, decoded, complete);
-            folders.entry(folder).or_default().push(Present { track, file: cratarr_domain::facts::Present { disc: facts.disc, number: facts.number, key: rel, title: facts.title, ms } });
+            folders.entry(folder).or_default().push(Present { track, file: facts.side(rel, ms) });
         }
         // A guess today's pairing confirms is none (RV-22): a copy in a main library or own music, never an Incoming arrival not
         // yet added (C15), whose files and the list pair one for one, both ways. Worked out at each read, never stored.

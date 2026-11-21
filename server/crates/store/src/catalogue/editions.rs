@@ -160,11 +160,11 @@ fn tracks_in(db: &Connection, record: i64) -> Result<Vec<TrackFacts>> {
             continue;
         }
         last = Some(track);
-        let named: Vec<(String, String)> = match (folder, rel) {
+        let named: Vec<(String, String)> = match (folder, &rel) {
             (Some(folder), Some(rel)) => tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?,
             _ => Vec::new(),
         };
-        let mut facts = TrackFacts::of(&crate::naming::Tags(named), ms.and_then(|m| u64::try_from(m).ok()).filter(|m| *m > 0));
+        let mut facts = TrackFacts::of(&crate::naming::Tags(named), rel.as_deref().unwrap_or_default(), ms.and_then(|m| u64::try_from(m).ok()).filter(|m| *m > 0));
         facts.disc = facts.disc.or(disc.and_then(|d| u32::try_from(d).ok()));
         facts.number = facts.number.or(number.and_then(|n| u32::try_from(n).ok()));
         out.push(facts);

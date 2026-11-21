@@ -22,6 +22,8 @@ mod join_tests;
 mod judging_tests;
 #[cfg(test)]
 mod step_018_tests;
+#[cfg(test)]
+mod wm_tests;
 pub mod labels;
 pub mod lists;
 pub mod normalise;
@@ -276,6 +278,15 @@ fn copy_row(tx: &Connection, table: &str, from: (i64, &str), to: (i64, &str), se
 }
 
 /// Whether a folder shows nothing, or is not there: how a mount that is not up looks, and no sign its files are gone.
+/// A fact field's value through the one tag rule (WM.1, WM.2; the rules crate's `hygiene`): a site's stamp is none, one beside a
+/// value is cut. Any other tag as it is.
+pub fn fact_value(name: &str, value: &str) -> Option<String> {
+    match cratarr_rules::hygiene::Field::of(name) {
+        Some(field) => cratarr_rules::hygiene::value(field, value).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()),
+        None => Some(value.to_string()),
+    }
+}
+
 fn holds_nothing(path: &str) -> bool {
     std::fs::read_dir(path).map_or(true, |mut d| !d.any(|e| e.is_ok_and(|e| !e.file_name().to_string_lossy().starts_with('.'))))
 }
@@ -2041,9 +2052,9 @@ impl Catalogue {
                 for (n, v) in &tags {
                     let (into, parts): (&mut Vec<String>, Vec<String>) = match n.as_str() {
                         "genre" => (&mut genres, encoding.words(v)),
-                        // A compilation's album artist is no artist (as the radio has it).
-                        "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, vec![v.clone()]),
-                        "artists" if !crate::crates::various(v) => (&mut listed, vec![v.clone()]),
+                        // A compilation's album artist is no artist (as the radio has it); a site's stamp none either (WM.2).
+                        "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, fact_value(n, v).into_iter().collect()),
+                        "artists" if !crate::crates::various(v) => (&mut listed, fact_value(n, v).into_iter().collect()),
                         "mood" => (&mut file_moods, encoding.words(v)),
                         "style" => (&mut file_styles, encoding.words(v)),
                         "grouping" => (&mut file_tags, encoding.words(v)),
@@ -2246,12 +2257,12 @@ impl Catalogue {
                 let (mut original, mut date, mut bpm) = (None, None, None);
                 for t in found {
                     let (name, value) = t?;
-                    // The first value of each (a tag can hold several).
+                    // The first value of each (a tag can hold several), a fact through the one tag rule (WM.2).
                     match name.as_str() {
-                        "title" => drop(row.title.get_or_insert(value)),
-                        "artist" => drop(row.artist.get_or_insert(value)),
-                        "album" => drop(row.album.get_or_insert(value)),
-                        "albumartist" => drop(row.album_artist.get_or_insert(value)),
+                        "title" => drop(fact_value(&name, &value).map(|v| row.title.get_or_insert(v))),
+                        "artist" => drop(fact_value(&name, &value).map(|v| row.artist.get_or_insert(v))),
+                        "album" => drop(fact_value(&name, &value).map(|v| row.album.get_or_insert(v))),
+                        "albumartist" => drop(fact_value(&name, &value).map(|v| row.album_artist.get_or_insert(v))),
                         "tracknumber" => row.track = row.track.or_else(|| number(&value)),
                         "discnumber" => row.disc = row.disc.or_else(|| number(&value)),
                         "originaldate" => original = original.or_else(|| year(&value)),
@@ -2320,7 +2331,10 @@ impl Catalogue {
                 "artist" => &mut e.artist,
                 _ => &mut e.release_group,
             };
-            if slot.is_none() && !value.trim().is_empty() {
+            let value = if name == "musicbrainz_releasegroupid" { Some(value) } else { fact_value(&name, &value) };
+            if let Some(value) = value.filter(|v| !v.trim().is_empty())
+                && slot.is_none()
+            {
                 *slot = Some(value);
             }
         }
@@ -2336,10 +2350,13 @@ impl Catalogue {
     /// One copy's audio files as Replace pairs them (RF2): each present file under `dir` of catalogue folder `folder`, in path order,
     /// with its named tags (`album_tags`) and its length where read (`album_lengths`). On a reader, never the writer's lock: the
     /// Library and Health ask it of copies waiting while a build runs. Blocking.
-    pub fn copy_read(&self, folder: i64, dir: &str) -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
-        let read = |db: &Connection| -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
+    pub fn copy_read(&self, folder: i64, dir: &str) -> Result<Vec<(String, Vec<(String, String)>, Option<u64>)>> {
+        let read = |db: &Connection| -> Result<Vec<(String, Vec<(String, String)>, Option<u64>)>> {
             let lengths = album_lengths_in(db, folder, dir)?;
-            Ok(album_tags_in(db, folder, dir)?.into_iter().map(|(rel, tags)| (tags, lengths.get(&rel).copied())).collect())
+            Ok(album_tags_in(db, folder, dir)?.into_iter().map(|(rel, tags)| {
+                let ms = lengths.get(&rel).copied();
+                (rel, tags, ms)
+            }).collect())
         };
         match self.reader() {
             Some(c) => read(&c),

@@ -27,6 +27,8 @@
 //!   excluded everywhere ([`excluded_artists`]). How a library makes its ids is the caller's.
 //! - **A record's tracklist paired with a copy's files** ([`assign`], PAIR01): the best one-to-one pairing, for Soulseek's
 //!   folders and the holding's copies alike.
+//! - **Where a file's tags become facts** ([`hygiene`], WM's layer 1): a download site's stamp is no value, one beside a real value
+//!   is cut; a file's titles from its name where it has none of its own.
 //! - **What a record is to a viewer** ([`holding`], the one had rule): Had, Partly, Arrived, Elsewhere, Retired or not had,
 //!   from its copies' facts, so the device's "whole" is the server's.
 
@@ -39,6 +41,7 @@ pub mod excluded_artists;
 pub mod fresh;
 pub mod genres;
 pub mod holding;
+pub mod hygiene;
 pub mod ids;
 pub mod index;
 pub mod matcher;

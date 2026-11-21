@@ -735,7 +735,7 @@ impl Serve {
             return Ok(out);
         }
         let facts = |folder: i64, dir: &str| -> Result<Vec<crate::incoming::TrackFacts>> {
-            Ok(self.catalogue().copy_read(folder, dir)?.into_iter().map(|(tags, ms)| crate::incoming::TrackFacts::of(&crate::naming::Tags(tags), ms)).collect())
+            Ok(self.catalogue().copy_read(folder, dir)?.into_iter().map(|(rel, tags, ms)| crate::incoming::TrackFacts::of(&crate::naming::Tags(tags), &rel, ms)).collect())
         };
         for (album, waiting) in waiting {
             let Some(others) = ids::record_number(album).and_then(|r| editions.get(&r)) else { continue };
@@ -1050,8 +1050,10 @@ impl Serve {
         }
         let Some((_, artist, name)) = self.library.album_names(album)? else { return Ok(None) };
         let tags: Vec<crate::naming::Tags> = self.catalogue().album_tags(folder, dir)?.into_iter().map(|(_, t)| crate::naming::Tags(t)).collect();
-        let on_all = |n: &str| tags.iter().all(|t| t.first(n).is_some());
-        let on_any = |n: &str| tags.iter().any(|t| t.first(n).is_some());
+        // A fact field's value through the one tag rule: a stamped ALBUMARTIST is one the files lack (WM.3).
+        let has = |t: &crate::naming::Tags, n: &str| t.first(n).and_then(|v| crate::catalogue::fact_value(n, v)).is_some();
+        let on_all = |n: &str| tags.iter().all(|t| has(t, n));
+        let on_any = |n: &str| tags.iter().any(|t| has(t, n));
         let first = self.library.first_file_of(album, folder, dir)?;
         let lacks = library::Lacks {
             id: album.to_string(),

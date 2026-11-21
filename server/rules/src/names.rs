@@ -127,13 +127,16 @@ pub fn credit_text(names: &[&str], phrase: Option<&str>) -> String {
 }
 
 /// A track's title as every surface names it (OBJ5, OB2: one name for a track): its name, else its file's name without its
-/// extension, never a "…" for an empty one.
+/// extension, never a "…" for an empty one. Each read through the one tag rule (WM.2): a site's stamp is no name, and one beside a
+/// name is cut ("T2 www." reads "T2", "02 - www.electronicfresh.com.flac" reads "02").
 pub fn track_title(name: Option<&str>, file: &str) -> String {
-    if let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) {
-        return name.to_string();
+    use crate::hygiene::{Field, value};
+    if let Some(name) = name.and_then(|n| value(Field::Title, n)).map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+        return name;
     }
     let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
-    base.rsplit_once('.').map_or(base, |(stem, _)| stem).trim().to_string()
+    let stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem).trim();
+    value(Field::Title, stem).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| stem.to_string())
 }
 
 /// A track's second line (OBJ5): its credit (by `credit_text`, NAMES.24), then " · " and its record's title line; either alone where
