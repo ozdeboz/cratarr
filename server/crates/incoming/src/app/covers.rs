@@ -115,13 +115,13 @@ pub async fn candidates(album: &str) -> Result<Covers> {
 /// the task's result is `Covers`, as `GET …/covers` gives them, and while it runs the covers found so far. Stopped
 /// (`DELETE /api/tasks/{id}`), it ends before its next outside call with what it found. A look running for the album is
 /// that one.
-pub fn start(account: &str, album: &str) -> Result<super::tasks::Task, String> {
+pub fn start(account: &str, album: &str) -> Result<crate::runner::Task, String> {
     let kind = format!("covers:{album}");
-    if let Some(t) = super::tasks::tasks().of(account).into_iter().find(|t| t.kind == kind && t.finished.is_none()) {
+    if let Some(t) = crate::runner::runner().of(account).into_iter().find(|t| t.kind == kind && t.finished.is_none()) {
         return Ok(t);
     }
     let a = album.to_string();
-    super::tasks::spawn(&kind, account, false, move |h| async move {
+    crate::runner::spawn(&kind, account, false, move |h| async move {
         let (h1, h2, h3) = (h.clone(), h.clone(), h);
         let progress = move |name: &str, done: u64, total: Option<u64>| h1.step(name, done, total);
         let found = move |c: &Covers| h2.found(c);

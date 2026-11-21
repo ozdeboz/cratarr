@@ -568,18 +568,30 @@ pub fn start_on(app: Arc<dyn IncomingHost>, p: Proposal) -> Status {
 /// kept as a run done (decision 0092's writers' map, 0.14): in Changes to files, its Undo the run's. `work` gives the
 /// proposal of what it wrote (its files as written). Returns the run's status, its Undo the kept run's.
 pub async fn made<H: IncomingHost>(app: &Arc<H>, work: impl FnOnce() -> Result<Proposal> + Send + 'static) -> Result<Status> {
-    made_on(&**app, work).await
+    made_on(&**app, work, None).await
+}
+
+/// `made`, `also` written in the run's own transaction, given its Undo (RN's R2: a step that journals commits its row with its
+/// entry, or neither).
+pub async fn made_with<H: IncomingHost>(app: &Arc<H>, work: impl FnOnce() -> Result<Proposal> + Send + 'static, also: Option<crate::intake::Also>) -> Result<Status> {
+    made_on(&**app, work, also).await
 }
 
 /// `made`, on its host.
-async fn made_on(app: &dyn IncomingHost, work: impl FnOnce() -> Result<Proposal> + Send + 'static) -> Result<Status> {
+async fn made_on(app: &dyn IncomingHost, work: impl FnOnce() -> Result<Proposal> + Send + 'static, also: Option<crate::intake::Also>) -> Result<Status> {
     let _turn = turn(app.journal()).await;
     let p = crate::run::spawn_blocking(work).await??;
     let at = super::moment::now_secs();
     let account = crate::serve::who::current().map(|w| w.user);
     let keep = i64::from(app.incoming().trash_days()) * 86_400;
     let run = FileRun { what: p.kind.clone(), title: p.title.clone(), records: p.records.clone(), files: p.files.clone(), failed: p.failed.clone(), planned: Vec::new() };
-    let j = app.journal().record_run(at, &run, account.as_deref(), keep)?;
+    let j = app.journal().write(|tx| {
+        let j = tx.record_run(at, &run, account.as_deref(), keep)?;
+        if let Some(also) = also {
+            also(tx, &format!("{RUN}{j}"))?;
+        }
+        Ok(j)
+    })?;
     let id = format!("{RUN}{j}");
     for (album, files) in albums_of(&p.files) {
         set_state(&album, FilesState { facts: None, state: "written".into(), done: Some(files.len()), of: Some(files.len()), run: Some(id.clone()), at: Some(at) });

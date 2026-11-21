@@ -26,8 +26,9 @@ pub trait RequestsHost: Send + Sync + 'static {
     fn lidarr_add_with(&self) -> crate::lidarr::AddWith;
     /// The house's copy of a record into an account's own music, as a Want's hands take it (`App::copy_for`).
     fn house(&self) -> &dyn super::requests::House;
-    /// A passed fetch's proposal made a run on the one path (`file_runs::made`).
-    fn made(self: Arc<Self>, work: Box<dyn FnOnce() -> Result<super::file_runs_base::Proposal> + Send>) -> Asked<'static, Result<super::file_runs_base::Status>>;
+    /// A passed fetch's proposal made a run on the one path (`file_runs::made`); `also` written in its run's own transaction, given
+    /// its Undo (RN's R2).
+    fn made(self: Arc<Self>, work: Box<dyn FnOnce() -> Result<super::file_runs_base::Proposal> + Send>, also: Option<crate::intake::Also>) -> Asked<'static, Result<super::file_runs_base::Status>>;
     /// The requests' marks (`requests::marks`).
     fn request_marks<'a>(&'a self, serve: &'a crate::serve::Serve) -> Asked<'a, Result<Arc<super::requests::Marks>>>;
     /// The records waiting in Incoming with their intake cards (`intake_card::waiting`).

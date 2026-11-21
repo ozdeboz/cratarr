@@ -34,9 +34,6 @@ pub static TURN: crate::app::turn::Turn = crate::app::turn::Turn::new(crate::app
 const BACK_OFF: Duration = crate::app::turn::BANDCAMP.first;
 /// How long Bandcamp is left alone after its bot check (O4): a day, nothing done to get past it.
 pub const CHECK_HOLD_SECS: i64 = crate::app::turn::BANDCAMP.longest.as_secs() as i64;
-/// Where its hold is kept across a restart (Y8, OQ-T3): the user data's server choices, epoch seconds.
-#[cfg(test)]
-const HELD_CHOICE: &str = "bandcamp:held_until";
 
 /// A Bandcamp album page as a view offers it for its preview (G1): none while Bandcamp is switched off, as its preview would only
 /// fail. Every view that carries one goes through here: a record not had's page, the missing lists and search's rows from them,
@@ -64,7 +61,7 @@ pub fn hold() {
 
 /// `hold`, its turn holding every reader for the day, kept in `ud` where given (else where the turn is kept: Y8), so a restart the
 /// evening of a check still leaves Bandcamp alone until the day is out (`Turn::keep`).
-pub fn hold_in(ud: Option<&crate::userdata::UserData>) {
+pub fn hold_in(ud: Option<&crate::journal::Journal>) {
     let now = crate::app::moment::now_secs();
     if held_until(now).is_none() {
         tracing::warn!(target: "bandcamp", "Bandcamp asked for a browser check: Cratarr stopped asking it for a day");
@@ -77,14 +74,14 @@ pub fn hold_in(ud: Option<&crate::userdata::UserData>) {
 /// is out, and Health says so. Never longer than the check's own day from now (V8): one kept while the clock ran ahead is cut to that,
 /// in the user data too, so the next start does not take it up again.
 #[cfg(any(test, feature = "test-support"))]
-pub fn hold_kept(ud: &crate::userdata::UserData) {
+pub fn hold_kept(ud: &crate::journal::Journal) {
     TURN.take_up(ud);
 }
 
 /// Bandcamp switched on or off by an administrator (O4): switched on, its bot check's hold is lifted (V8) through its turn, in memory
 /// and in the user data `ud` where there is one, so it is asked again at once and a restart takes up nothing. Switched off, the hold
 /// stays.
-pub fn switched(ud: Option<&crate::userdata::UserData>, on: bool) {
+pub fn switched(ud: Option<&crate::journal::Journal>, on: bool) {
     if on {
         TURN.lift(ud);
     }
@@ -839,12 +836,12 @@ mod tests {
         assert_eq!(played.unwrap_err().to_string(), "Bandcamp is switched off");
     }
 
-    /// Y8: the day's hold after the check survives a restart: kept in the user data as it is set, taken up again at start.
+    /// Y8: the day's hold after the check survives a restart: kept in its row as it is set (RN's R4), taken up again at start.
     #[tokio::test]
     async fn the_bandcamp_hold_survives_a_restart() {
         let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
-        let ud = crate::userdata::UserData::open(None).unwrap();
+        let ud = crate::journal::Journal::open(None).unwrap();
         let now = crate::app::moment::now_secs();
         hold_in(Some(&ud));
         TURN.lift(None);
@@ -855,19 +852,19 @@ mod tests {
     }
 
     /// V8 (the review of run 8b, finding 8): a kept hold is taken up for a day from now at most: one kept while the clock ran a month
-    /// ahead is cut to a day, in the user data too.
+    /// ahead is cut to a day, in its row too.
     #[tokio::test]
     async fn a_kept_hold_beyond_a_day_is_cut_to_a_day() {
         let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
-        let ud = crate::userdata::UserData::open(None).unwrap();
+        let ud = crate::journal::Journal::open(None).unwrap();
         let now = crate::app::moment::now_secs();
-        ud.set_import_choice(HELD_CHOICE, &(now + 30 * 86_400).to_string()).unwrap();
+        ud.set_pause(&crate::intake::Pause { source: "bandcamp".into(), until: now + 30 * 86_400, why: None, own: true }).unwrap();
         TURN.lift(None);
         hold_kept(&ud);
         let until = held_until(now);
         TURN.put_back(was);
-        let kept = ud.import_choice(HELD_CHOICE).unwrap().and_then(|v| v.parse::<i64>().ok());
+        let kept = ud.pause("bandcamp").unwrap().map(|p| p.until);
         let a_day = now + CHECK_HOLD_SECS..=now + CHECK_HOLD_SECS + 60;
         assert!(until.is_some_and(|u| a_day.contains(&u)), "a day from now: {until:?}");
         assert!(kept.is_some_and(|k| a_day.contains(&k)), "kept cut too: {kept:?}");
@@ -898,13 +895,13 @@ mod tests {
         assert_eq!(shown_if(None, true), None);
     }
 
-    /// V8: an administrator switching Bandcamp on again lifts its hold, in memory and in the user data: it is asked again at once,
-    /// and a restart takes up nothing. Switched off, the hold stays.
+    /// V8: an administrator switching Bandcamp on again lifts its hold, in memory and in its row: it is asked again at once, and a
+    /// restart takes up nothing. Switched off, the hold stays.
     #[tokio::test]
     async fn switching_bandcamp_on_again_lifts_its_hold() {
         let _one = crate::app::switches::TEST_STATE.write().await;
         let was = TURN.as_held();
-        let ud = crate::userdata::UserData::open(None).unwrap();
+        let ud = crate::journal::Journal::open(None).unwrap();
         let now = crate::app::moment::now_secs();
         hold_in(Some(&ud));
         switched(Some(&ud), false);

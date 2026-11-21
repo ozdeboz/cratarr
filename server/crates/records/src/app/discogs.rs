@@ -455,12 +455,21 @@ pub async fn release_group_cover(rg: &str) -> Result<Option<String>> {
 /// The background asker for albums whose files carry no genre (the owner: fill gaps only, files never written):
 /// their master's genres and styles, kept by album; the library is built with them (`Library::set_extra_genres`).
 pub fn start() {
+    // Bandcamp's own hold (its bot check's day) seen in Activity while it holds (AC4): no job of its own asks Bandcamp meanwhile.
+    crate::runner::runner().provide("sources", std::sync::Arc::new(sources_held));
     crate::run::spawn(async {
         tokio::time::sleep(Duration::from_secs(600)).await;
         loop {
-            // The background reading paused (O5): looked at again in a while.
+            // The background reading paused (O5): looked at again in a while, its pass saying so in Activity (AC4, TN.12: no deadline).
             if super::switches::background_paused() {
+                let held = crate::runner::runner().begin_keyed(TYPING, TYPING, None).ok();
+                if let Some(j) = &held {
+                    j.wait_for(crate::runner::words::word("background_off").unwrap_or_default(), None);
+                }
                 tokio::time::sleep(Duration::from_secs(600)).await;
+                if let Some(j) = held {
+                    j.finish(Ok::<_, anyhow::Error>(()));
+                }
                 continue;
             }
             if let Err(e) = genres_pass().await {
@@ -476,6 +485,40 @@ pub fn start() {
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });
+}
+
+/// Discogs' typing pass's job kind and key on the runner (A1.1, C.8: a background job on its service's turn).
+pub const TYPING: &str = "discogs:type";
+
+/// A job on a service's turn (RL2): while the turn is held, the job says until when and counts no try; else it runs. The turn is the
+/// one limit: the job waits in it, never in a gate of its own.
+pub fn on_turn(job: &crate::runner::Handle, turn: &Turn) {
+    match turn.paused_until() {
+        Some(until) => job.wait_for("", Some(until)),
+        None => job.go(),
+    }
+}
+
+/// The sources held by a deadline of their own (Bandcamp's bot check's day), as Activity lists them: "Bandcamp · Paused until …".
+fn sources_held() -> Vec<crate::runner::Row> {
+    let now = super::moment::now_secs();
+    let Some(until) = crate::bandcamp::TURN.own_until(now) else { return Vec::new() };
+    vec![crate::runner::Row {
+        id: "source:bandcamp".into(),
+        kind: "source:bandcamp".into(),
+        state: crate::runner::State::Waiting,
+        what: "Bandcamp".into(),
+        detail: None,
+        done: None,
+        of: None,
+        unit: None,
+        waits: Some(crate::runner::Wait { what: String::new(), until: Some(until) }),
+        at: None,
+        tries: None,
+        whose: None,
+        started: 0,
+        finished: None,
+    }]
 }
 
 /// A background pass's albums in turn while background reading is not paused (Y7): looked at before each, so a pass paused meanwhile
@@ -512,9 +555,14 @@ async fn types_pass() -> Result<()> {
     if due.is_empty() {
         return Ok(());
     }
+    // One pass at a time, a job of Cratarr's own (JR3: asked twice, one): Activity says how far, and its turn's pause (RL2).
+    let Ok(job) = crate::runner::runner().begin_keyed(TYPING, TYPING, None) else { return Ok(()) };
+    let total = due.len() as u64;
     let http = super::discover::http()?;
     let mut found = Vec::new();
-    for (album, release, artist, title, tracks, duration_ms) in until_paused(due, "discogs: release types") {
+    for (n, (album, release, artist, title, tracks, duration_ms)) in until_paused(due, "discogs: release types").enumerate() {
+        job.step("Typing records", n as u64, Some(total));
+        on_turn(&job, &TURN);
         let rg = match is_mbid(&release) {
             true => release_group_of(&http, &release).await.unwrap_or_default(),
             false => None,
@@ -537,6 +585,7 @@ async fn types_pass() -> Result<()> {
     let ud = served.userdata.clone();
     crate::run::spawn_blocking(move || ud.set_release_types(&found, super::moment::now_secs())).await??;
     tracing::info!("discogs: release types asked for {n} albums");
+    job.finish(Ok::<_, anyhow::Error>(n));
     Ok(())
 }
 
@@ -1516,5 +1565,62 @@ mod facts_tests {
         set_for_tests(BACKGROUND, was);
         assert_eq!(asked, [1]);
         assert_eq!(all, [1, 2, 3]);
+    }
+
+    /// RL2: Discogs' typing pass a job on the runner, waiting in Discogs' one turn (its TN turn, the runner's resource for its calls).
+    /// Discogs answers 429 with Retry-After 60 at t0: the turn holds the pass and a page's read to t0+60, its row in `source_pauses`;
+    /// the job says "Paused until …", its step kept, no try counted, not failed; the page is told until when within its patience;
+    /// the pass's next question goes at t0+60, from the turn alone, and the job runs again. Never two limits for one answer, the job
+    /// failed for a pause, nor Discogs asked by the job outside its turn (the scan: `every_work_limit_is_the_runners_or_named`).
+    #[tokio::test(start_paused = true)]
+    async fn discogs_turn_is_the_runners_resource() {
+        use crate::app::turn::{DISCOGS, Paused, Turn};
+        let _one = crate::app::switches::TEST_STATE.write().await;
+        let t0 = 1_800_000_000;
+        let _pinned = crate::app::turn::Pinned(t0);
+        crate::app::moment::PINNED.store(t0, std::sync::atomic::Ordering::Relaxed);
+        let journal = std::sync::Arc::new(crate::journal::Journal::open(None).unwrap());
+        let turn = Turn::new(DISCOGS);
+        turn.keep(journal.clone());
+        let r: &'static crate::runner::Runner = Box::leak(Box::new(crate::runner::Runner::new()));
+        let job = r.begin_keyed(super::TYPING, super::TYPING, None).unwrap();
+        job.step("Typing records", 30, Some(300));
+        let said = turn.heard_answer(reqwest::StatusCode::TOO_MANY_REQUESTS, &crate::app::turn::fakes::headers(&[("retry-after", "60".into())]));
+        assert_eq!(said, Err(Paused { source: "discogs", until: t0 + 60 }));
+        super::on_turn(&job, &turn);
+        let row = r.rows()[0].clone();
+        assert_eq!((row.state, row.done, row.waits.as_ref().and_then(|w| w.until)), (crate::runner::State::Waiting, Some(30), Some(t0 + 60)), "waits, its step kept");
+        assert_eq!(row.words(&|_| "14:05".to_string()), "Typing records · 30 of 300 · Paused until 14:05");
+        assert_eq!(journal.pause("discogs").unwrap().map(|p| p.until), Some(t0 + 60), "its row in source_pauses");
+        assert_eq!(turn.take_within(false, std::time::Duration::from_secs(10)).await, Err(Paused { source: "discogs", until: t0 + 60 }), "a page told until when");
+        let start = tokio::time::Instant::now();
+        turn.take(true).await;
+        assert!(start.elapsed() >= std::time::Duration::from_secs(60), "the pass's next question from the turn alone, at its time");
+        crate::app::moment::PINNED.store(t0 + 60, std::sync::atomic::Ordering::Relaxed);
+        super::on_turn(&job, &turn);
+        let row = r.rows()[0].clone();
+        assert_eq!((row.state, row.done, row.waits.clone()), (crate::runner::State::Running, Some(30), None), "runs again: no try counted, never failed");
+        drop(job);
+    }
+
+    /// AC4: the sources' background reading with their holds: Discogs' typing paused until 14:05 says only until when (RL2's), Bandcamp
+    /// held for its bot check reads "Bandcamp · Paused until …" (the page's one `when()`), and background reading switched off reads
+    /// "Background reading is paused" with no deadline (TN.12). Never a pause shown as a failure, nor a switch shown with a deadline.
+    #[tokio::test]
+    async fn activity_shows_the_sources_reading_and_their_holds() {
+        let _one = crate::app::switches::TEST_STATE.write().await;
+        let when = |_: i64| "21 Nov".to_string();
+        let now = crate::app::moment::now_secs();
+        let was = crate::bandcamp::hold_for_tests(now + 3_600);
+        let held = super::sources_held();
+        crate::bandcamp::hold_for_tests(was);
+        assert_eq!(held.iter().map(|r| (r.state, r.words(&when))).collect::<Vec<_>>(), [(crate::runner::State::Waiting, "Bandcamp · Paused until 21 Nov".to_string())]);
+        let r: &'static crate::runner::Runner = Box::leak(Box::new(crate::runner::Runner::new()));
+        let job = r.begin_keyed(super::TYPING, super::TYPING, None).unwrap();
+        job.step("Typing records", 12, Some(43));
+        job.wait_for(crate::runner::words::word("background_off").unwrap(), None);
+        let row = r.rows()[0].clone();
+        assert_eq!((row.state, row.words(&when), row.waits.and_then(|w| w.until)), (crate::runner::State::Waiting, "Typing records · 12 of 43 · Background reading is paused".to_string(), None), "a switch, no deadline");
+        job.finish(Ok::<_, anyhow::Error>(()));
     }
 }

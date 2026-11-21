@@ -376,7 +376,7 @@ async fn card_on(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>,
         })
         .await??;
     let matched = super::matching::kept_or_find(&served, vec![a.clone()]).await?.into_iter().next().map(|(_, m)| m);
-    let looking = matched.is_none() && super::tasks::tasks().of(&served.current_user().unwrap_or_default()).iter().any(|t| t.kind == super::matching::KIND && t.finished.is_none());
+    let looking = matched.is_none() && crate::runner::runner().of(&served.current_user().unwrap_or_default()).iter().any(|t| t.kind == super::matching::KIND && t.finished.is_none());
     if heard.is_none() {
         hear(app, &a, at.clone());
     }
@@ -459,11 +459,11 @@ pub async fn waiting<H: RequestsHost>(app: &Arc<H>) -> Vec<Waiting> {
 pub fn hear(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>) {
     let Some(served) = app.serve().clone() else { return };
     let Some(account) = served.current_user() else { return };
-    if super::tasks::tasks().of(&account).iter().any(|t| t.kind == KIND && t.finished.is_none()) {
+    if crate::runner::runner().of(&account).iter().any(|t| t.kind == KIND && t.finished.is_none()) {
         return;
     }
     let album = album.to_string();
-    let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
+    let _ = crate::runner::spawn(KIND, &account, false, move |h| async move {
         let (tracks, ..) = crate::run::spawn_blocking({
             let (a, at) = (album.clone(), at.clone());
             move || tracks_of(&a, at.as_ref())

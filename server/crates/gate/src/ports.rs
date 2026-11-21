@@ -29,6 +29,12 @@ pub trait Files: Send + Sync {
     /// the original's blocks, in the plan's order.
     #[allow(dead_code)] // Copy to's action (C40) is its first caller.
     fn copy_all(&self, plan: &[crate::moves::Step]) -> Result<Vec<bool>>;
+    /// `copy_all`, `told` how many of its files are there as each lands (RN's TU2). Where a port copies all at once: told at its end.
+    fn copy_all_told(&self, plan: &[crate::moves::Step], told: &dyn Fn(usize)) -> Result<Vec<bool>> {
+        let shared = self.copy_all(plan)?;
+        told(plan.len());
+        Ok(shared)
+    }
     /// Whether a copy from folder `from` into folder `to` shares its blocks: tried once, and kept. Read below the disk floor, where a
     /// Want's copy is made only if it takes no new space (AL03.1).
     fn shares(&self, from: &Path, to: &Path) -> bool;
@@ -68,6 +74,10 @@ impl Files for Disk {
 
     fn copy_all(&self, plan: &[crate::moves::Step]) -> Result<Vec<bool>> {
         crate::moves::copy(plan)
+    }
+
+    fn copy_all_told(&self, plan: &[crate::moves::Step], told: &dyn Fn(usize)) -> Result<Vec<bool>> {
+        crate::moves::copy_told(plan, told)
     }
 
     fn shares(&self, from: &Path, to: &Path) -> bool {

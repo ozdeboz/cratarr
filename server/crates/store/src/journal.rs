@@ -334,6 +334,19 @@ pub struct Journal {
 /// The next journal's key: one a journal opened, never twice in a process.
 static NEXT_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// The server's journal, once its start opened it (`set_instance`): what the saved queues and the runner keep their rows in.
+static INSTANCE: std::sync::OnceLock<std::sync::Arc<Journal>> = std::sync::OnceLock::new();
+
+/// The server's journal, opened at its start before anything asks a source (RN): kept for the parts that have no app to ask.
+pub fn set_instance(journal: std::sync::Arc<Journal>) {
+    let _ = INSTANCE.set(journal);
+}
+
+/// The server's journal, where its start set one (none in tests that open their own).
+pub fn instance() -> Option<std::sync::Arc<Journal>> {
+    INSTANCE.get().cloned()
+}
+
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
     // A test's step (`between`), on its own thread alone.
@@ -363,7 +376,7 @@ fn let_in() {
 
 /// The journal's database while a step holds it (tests): `between`'s step comes once it is let go.
 #[cfg(any(test, feature = "test-support"))]
-struct Held<'a>(Option<std::sync::MutexGuard<'a, Connection>>);
+pub(crate) struct Held<'a>(Option<std::sync::MutexGuard<'a, Connection>>);
 
 #[cfg(any(test, feature = "test-support"))]
 impl std::ops::Deref for Held<'_> {
@@ -394,6 +407,8 @@ impl Journal {
         let conn = crate::db::open(file)?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA).context("creating the journal")?;
+        // DI01's tables (RN): the saved queues, the sources' pauses and the runner's jobs, in this file (R1).
+        conn.execute_batch(crate::intake::SCHEMA).context("creating the saved queues")?;
         for (table, column) in ADDED_COLUMNS {
             let name = column.split_whitespace().next().unwrap_or_default();
             let has: bool = conn
@@ -403,6 +418,7 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
+        conn.execute_batch(crate::intake::AT_OPEN).context("opening the saved queues")?;
         let key = NEXT_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default(), key })
     }
@@ -414,13 +430,13 @@ impl Journal {
     }
 
     #[cfg(not(any(test, feature = "test-support")))]
-    fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// As above, with the step a test set (`between`) before the database is taken and once it is let go.
     #[cfg(any(test, feature = "test-support"))]
-    fn db(&self) -> Held<'_> {
+    pub(crate) fn db(&self) -> Held<'_> {
         let_in();
         Held(Some(self.db.lock().unwrap_or_else(|p| p.into_inner())))
     }
@@ -689,7 +705,7 @@ impl Journal {
     }
 
     /// A run into the journal, those older than `keep` seconds out.
-    fn keep_run(db: &Connection, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
+    pub(crate) fn keep_run(db: &Connection, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
         db.execute("DELETE FROM file_runs WHERE at < ?1", [at - keep])?;
         db.execute("INSERT INTO file_runs (at, run, account) VALUES (?1, ?2, ?3)", params![at, serde_json::to_string(run)?, account])?;
         Ok(db.last_insert_rowid())

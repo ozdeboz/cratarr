@@ -1,0 +1,465 @@
+{
+ "next": 40,
+ "items": [
+  {
+   "id": "ti-28",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 1,
+   "title": "Harbour Lights",
+   "recording": "rec-1",
+   "state": "queued",
+   "candidates": [],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": []
+  },
+  {
+   "id": "ti-29",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 2,
+   "title": "Low Water",
+   "recording": "rec-2",
+   "state": "queued",
+   "candidates": [],
+   "failed": [
+    "peer-q"
+   ],
+   "misses": 0,
+   "due": 0,
+   "set_aside": []
+  },
+  {
+   "id": "ti-30",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 3,
+   "title": "Neap",
+   "recording": "rec-3",
+   "state": "searching",
+   "candidates": [],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": []
+  },
+  {
+   "id": "ti-31",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 4,
+   "title": "Ferry Bell",
+   "recording": "rec-4",
+   "state": "found",
+   "candidates": [
+    {
+     "id": 0,
+     "user": "peer-x",
+     "file": "Glass Harbour\\Night Ferry\\04 Ferry Bell.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000000,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 1,
+     "user": "peer-y",
+     "file": "Glass Harbour\\Night Ferry\\04 Ferry Bell.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000001,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 2,
+     "user": "peer-z",
+     "file": "Glass Harbour\\Night Ferry\\04 Ferry Bell.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000002,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    }
+   ],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": [],
+   "chosen": 0
+  },
+  {
+   "id": "ti-32",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 5,
+   "title": "Sandbar",
+   "recording": "rec-5",
+   "state": "found",
+   "candidates": [
+    {
+     "id": 0,
+     "user": "peer-x",
+     "file": "Glass Harbour\\Night Ferry\\05 Sandbar.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000000,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 1,
+     "user": "peer-y",
+     "file": "Glass Harbour\\Night Ferry\\05 Sandbar.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000001,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 2,
+     "user": "peer-z",
+     "file": "Glass Harbour\\Night Ferry\\05 Sandbar.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000002,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    }
+   ],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": [],
+   "chosen": 1
+  },
+  {
+   "id": "ti-33",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 6,
+   "title": "Gulls",
+   "recording": "rec-6",
+   "state": "none",
+   "candidates": [],
+   "failed": [],
+   "misses": 2,
+   "due": 1800014400,
+   "set_aside": []
+  },
+  {
+   "id": "ti-34",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 7,
+   "title": "Tide Tables",
+   "recording": "rec-7",
+   "state": "failed",
+   "candidates": [],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": [],
+   "why": "The search did not finish."
+  },
+  {
+   "id": "ti-35",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 8,
+   "title": "Slack Water",
+   "recording": "rec-8",
+   "state": "approved",
+   "candidates": [
+    {
+     "id": 0,
+     "user": "peer-x",
+     "file": "Glass Harbour\\Night Ferry\\08 Slack Water.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000000,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 1,
+     "user": "peer-y",
+     "file": "Glass Harbour\\Night Ferry\\08 Slack Water.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000001,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 2,
+     "user": "peer-z",
+     "file": "Glass Harbour\\Night Ferry\\08 Slack Water.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000002,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    }
+   ],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": [],
+   "chosen": 2
+  },
+  {
+   "id": "ti-36",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 9,
+   "title": "Spring Tide",
+   "recording": "rec-9",
+   "state": "fetching",
+   "candidates": [
+    {
+     "id": 0,
+     "user": "peer-x",
+     "file": "Glass Harbour\\Night Ferry\\09 Spring Tide.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000000,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 1,
+     "user": "peer-y",
+     "file": "Glass Harbour\\Night Ferry\\09 Spring Tide.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000001,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 2,
+     "user": "peer-z",
+     "file": "Glass Harbour\\Night Ferry\\09 Spring Tide.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000002,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    }
+   ],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": [],
+   "chosen": 0
+  },
+  {
+   "id": "ti-37",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 10,
+   "title": "Night Ferry",
+   "recording": "rec-10",
+   "state": "checking",
+   "candidates": [
+    {
+     "id": 0,
+     "user": "peer-x",
+     "file": "Glass Harbour\\Night Ferry\\10 Night Ferry.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000000,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 1,
+     "user": "peer-y",
+     "file": "Glass Harbour\\Night Ferry\\10 Night Ferry.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000001,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    },
+    {
+     "id": 2,
+     "user": "peer-z",
+     "file": "Glass Harbour\\Night Ferry\\10 Night Ferry.flac",
+     "format": "flac",
+     "lossless": true,
+     "sampleRate": 44100,
+     "bitDepth": 16,
+     "size": 30000002,
+     "lengthMs": 240000,
+     "freeSlot": true,
+     "queue": 0,
+     "speed": 1000000
+    }
+   ],
+   "failed": [],
+   "misses": 0,
+   "due": 1800000900,
+   "set_aside": [],
+   "chosen": 1,
+   "why": "AcoustID asked Cratarr to wait"
+  },
+  {
+   "id": "ti-38",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 11,
+   "title": "Lantern",
+   "recording": "rec-11",
+   "state": "added",
+   "candidates": [],
+   "failed": [],
+   "misses": 0,
+   "due": 0,
+   "set_aside": [],
+   "undo": "run:7"
+  },
+  {
+   "id": "ti-39",
+   "album": {
+    "source": "cratarr",
+    "id": "al-42",
+    "title": "Night Ferry",
+    "artist": "Glass Harbour"
+   },
+   "disc": 1,
+   "position": 12,
+   "title": "Breakwater",
+   "recording": "rec-12",
+   "state": "refused",
+   "candidates": [],
+   "failed": [
+    "peer-x",
+    "peer-y"
+   ],
+   "misses": 0,
+   "due": 0,
+   "set_aside": [
+    "/data/track-intake-set-aside/f1/12 Breakwater.flac",
+    "/data/track-intake-set-aside/f2/12 Breakwater.flac"
+   ],
+   "why": "2 frames would not decode"
+  }
+ ]
+}

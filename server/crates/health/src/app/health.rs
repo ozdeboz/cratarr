@@ -482,7 +482,10 @@ impl Checks<'_> {
         findings.extend(self.check_players());
         checked.insert("players", at);
         findings.extend(or_failed("library", self.check_missing().await));
-        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at, self.0.served().as_deref())), ("requests", check_requests(self.0.served().as_deref())), ("connections", Ok(check_connections(at)))] {
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at, self.0.served().as_deref())), ("requests", check_requests(self.0.served().as_deref()).map(|mut v| {
+            v.extend(bulk_queue_set_aside(self.0.served().as_deref().and_then(|s| s.data_dir.as_deref())));
+            v
+        })), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }
@@ -787,6 +790,8 @@ impl Checks<'_> {
         }
         let mut f = finding("analysis", "analysis:audiomuse", Level::Info, heard, format!("{} of {} tracks analysed", thousands(heard), thousands(tracks)));
         f.of = Some(tracks);
+        // AudioMuse's, imported from the PC (RN's AC5): no job of Cratarr's, and nothing of its own analysis pass (Activity's).
+        f.detail = Some(AUDIOMUSE.into());
         // The album folders with the most tracks not heard yet.
         let mut by: HashMap<&str, (u64, u64)> = HashMap::new();
         let mut unheard: HashMap<&str, Vec<String>> = HashMap::new();
@@ -964,6 +969,21 @@ fn check_server(at: i64, served: Option<&crate::serve::Serve>) -> anyhow::Result
         out.push(f);
     }
     Ok(out)
+}
+
+/// What AudioMuse's row says it is (AC5): AudioMuse's sound of the tracks, imported from the PC, not Cratarr's own analysis.
+pub const AUDIOMUSE: &str = "AudioMuse's analysis, imported from the PC. Cratarr's own analysis pass is in Activity.";
+
+/// RN's DM4: the bulk queue 0.18's step could not read, set aside whole: said while the file lies there, its detail how to try again.
+pub fn bulk_queue_set_aside(data: Option<&std::path::Path>) -> Option<Finding> {
+    let aside = super::step_018::queues_set_aside(data?);
+    let (latest, _) = aside.first()?;
+    let mut f = finding("requests", "requests:bulk-set-aside", Level::Warning, aside.len() as u64, "The bulk queue was set aside");
+    f.detail = Some(format!(
+        "It could not be read at the upgrade, so nothing of it was moved and it was set aside as {latest}. To try again: stop Cratarr,          rename {latest} in the data folder to track-intake.json, and start Cratarr. Or remove {latest}."
+    ));
+    f.items = aside.iter().map(|(name, at)| Item { title: name.clone(), line: Some("set aside".into()), since: *at, ..Item::default() }).collect();
+    Some(f)
 }
 
 #[cfg(test)]

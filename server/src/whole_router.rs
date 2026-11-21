@@ -280,6 +280,30 @@ async fn show_all_gives_every_track_once_where_the_ranking_is_not_the_index_s_or
     assert!(titles[..30].iter().all(|t| t.starts_with("Cloud")), "the direct hits first, from the first page: {:?}", &titles[..30]);
 }
 
+/// AC7 (kind 6, R8): Health › Activity is administrators', as Health is. root sees every job, alice's import among them, said whose;
+/// alice and a reading key get 403; alice sees her own import on her pages (`/api/tasks`) as today. Never a user seeing another's job,
+/// nor Activity's route answering a user.
+#[tokio::test]
+async fn activity_is_administrators() {
+    let w = Whole::open("activity").await;
+    w.served.users.from_directory("alice", false, None).unwrap();
+    let import = crate::runner::runner().begin("import:lastfm", "alice", false).unwrap();
+    import.step("Reading scrobbles", 120, Some(400));
+    let (alice, me) = (w.session("alice"), w.session("me"));
+    assert_eq!(w.ask(&alice, Method::GET, "/api/activity").await.0, StatusCode::FORBIDDEN, "a user");
+    assert_eq!(w.send(("authorization", &w.key("me", "read")), Method::GET, "/api/activity", Body::empty()).await.0, StatusCode::FORBIDDEN, "a reading key");
+    let (status, seen) = w.ask(&me, Method::GET, "/api/activity").await;
+    assert_eq!(status, StatusCode::OK);
+    let jobs = seen["jobs"].as_array().unwrap();
+    assert!(jobs.iter().any(|j| j["kind"] == "import:lastfm" && j["whose"] == "alice" && j["done"] == 120 && j["of"] == 400 && j["what"] == "Reading scrobbles"), "{jobs:#?}");
+    let (status, own) = w.ask(&alice, Method::GET, "/api/tasks").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(own["tasks"].as_array().unwrap().iter().any(|t| t["kind"] == "import:lastfm" && t["id"] == import.id()), "her own on her pages: {own}");
+    let (_, roots) = w.ask(&me, Method::GET, "/api/tasks").await;
+    assert!(roots["tasks"].as_array().unwrap().iter().all(|t| t["id"] != import.id()), "not another account's on root's pages");
+    drop(import);
+}
+
 #[tokio::test]
 async fn sharing_playlists_in_a_batch_is_behind_the_administrators_fence() {
     let w = Whole::open("link").await;

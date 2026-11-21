@@ -293,13 +293,13 @@ async fn look(album: &str, progress: &(dyn Fn(&str, u64, Option<u64>) + Send + S
 
 /// Looks up the album's order as a task (Discogs is paced); its result is the `Preview`. A look running for the album is
 /// that one.
-pub fn start(account: &str, album: &str) -> Result<super::tasks::Task, String> {
+pub fn start(account: &str, album: &str) -> Result<crate::runner::Task, String> {
     let kind = format!("renumber:{album}");
-    if let Some(t) = super::tasks::tasks().of(account).into_iter().find(|t| t.kind == kind && t.finished.is_none()) {
+    if let Some(t) = crate::runner::runner().of(account).into_iter().find(|t| t.kind == kind && t.finished.is_none()) {
         return Ok(t);
     }
     let a = album.to_string();
-    super::tasks::spawn(&kind, account, false, move |h| async move {
+    crate::runner::spawn(&kind, account, false, move |h| async move {
         let progress = move |name: &str, done: u64, total: Option<u64>| h.step(name, done, total);
         let preview = look(&a, &progress).await?;
         // Matched to a release (the owner, 2026-10-26): its gaps are tracks not held; Health leaves them out.

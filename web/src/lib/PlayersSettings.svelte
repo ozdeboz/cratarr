@@ -12,7 +12,7 @@
   import { removeMyDevice, setPlayerDelay, setPlayerShared, type PlayOnPlayer } from './api';
   import { backFromThing, openThing } from './panel.svelte';
   import { nameThing } from './settingsSections.svelte';
-  import { when } from './settings/when';
+  import { lastSeen } from './settings/when';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import Icon from './Icon.svelte';
   import KodiSettings from './KodiSettings.svelte';
@@ -40,7 +40,8 @@
   const apps = $derived(own.filter((p) => !p.kind || p.kind === 'app').sort(byName));
   const browsers = $derived(own.filter((p) => p.kind === 'browser').sort(byName));
   const KIND = { app: 'App', kodi: 'Kodi', browser: 'Browser' } as const;
-  const seen = (p: PlayOnPlayer) => (p.online ? 'Online' : p.seen ? `Seen ${when(p.seen)}` : 'Offline');
+  /** Its row's line: its own page's Last seen, a time said as "Seen …". */
+  const seen = (p: PlayOnPlayer) => (!p.online && p.seen ? 'Seen ' : '') + lastSeen(p.online, p.seen);
 
   // A device's own page.
   const DEVICE = 'device:';
@@ -132,7 +133,7 @@
   {@const p = shown}
   <Group>
     <Item name="Kind" value={KIND[p.kind ?? 'app']} />
-    <Item name="Last seen" value={p.online ? 'Online' : p.seen ? when(p.seen) : 'Never'} />
+    <Item name="Last seen" value={lastSeen(p.online, p.seen)} />
   </Group>
   <!-- A browser plays only while it is open, never in a group: no delay. -->
   {#if p.kind !== 'browser'}<Group>{@render delayRow(p.name)}</Group>{/if}

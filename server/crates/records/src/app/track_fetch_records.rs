@@ -10,14 +10,14 @@ use serde_json::Value;
 use super::musicbrainz::Asked as _;
 
 /// The file that holds a release's track.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
 pub struct Have {
     pub source: String,
     pub id: String,
 }
 
 /// One of the release's tracks, as the page lists them.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseTrack {
     pub disc: u32,

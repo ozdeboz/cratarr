@@ -34,8 +34,8 @@ impl RequestsHost for App {
         self
     }
 
-    fn made(self: Arc<Self>, work: Box<dyn FnOnce() -> Result<super::file_runs_base::Proposal> + Send>) -> Asked<'static, Result<super::file_runs_base::Status>> {
-        Box::pin(async move { super::file_runs::made(&self, work).await })
+    fn made(self: Arc<Self>, work: Box<dyn FnOnce() -> Result<super::file_runs_base::Proposal> + Send>, also: Option<crate::intake::Also>) -> Asked<'static, Result<super::file_runs_base::Status>> {
+        Box::pin(async move { super::file_runs::made_with(&self, work, also).await })
     }
 
     fn request_marks<'a>(&'a self, serve: &'a crate::serve::Serve) -> Asked<'a, Result<Arc<super::requests::Marks>>> {

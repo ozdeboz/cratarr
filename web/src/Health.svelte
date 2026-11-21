@@ -20,6 +20,9 @@
   import { CHANGES, fileRuns, loadRuns, openChanges, openReview } from './lib/fileRuns.svelte';
   import { AREAS } from './lib/health';
   import { me } from './lib/me.svelte';
+  import { activity, loadActivity } from './lib/activity.svelte';
+  import { activityItem } from './lib/activityRows';
+  import { when } from './lib/settings/when';
 
   $effect(loadHealth);
   // The pill's search (the owner, 2026-10-25): a problem whose words, or one of its items', hold every word.
@@ -49,8 +52,11 @@
   });
   // Activity shows only while something runs or ran this month (the owner, 2026-11-01: only what matters shows).
   const showChanges = $derived(me.admin && !!fileRuns.list?.length);
+  // Every job that runs or waits (RN): what it does now, how far, whose; followed on the live channel.
+  $effect(() => loadActivity());
+  const jobs = $derived(me.admin ? (activity.jobs ?? []).map((j) => activityItem(j, when)) : []);
   const opened = (thing: string | null) => panelBeside() && healthOf(panel.viewed) === CHANGES && healthThing(panel.viewed) === thing;
-  const facts = $derived(differ > 0 || showChanges);
+  const facts = $derived(differ > 0 || showChanges || jobs.length > 0);
   // A run ended: how many differ is counted again.
   const ended = $derived((fileRuns.list ?? []).filter((r) => r.state === 'done').length);
   $effect(() => {
@@ -99,17 +105,20 @@
             />
           {/each}
           {#if g.area === LIBRARY}{@render differItem()}{/if}
-          {#if g.area === ACTIVITY}{@render changesItem()}{/if}
+          {#if g.area === ACTIVITY}{@render jobItems()}{@render changesItem()}{/if}
         </Group>
       {/each}
       {#if differ > 0 && !groups.some((g) => g.area === LIBRARY)}<Group title={LIBRARY}>{@render differItem()}</Group>{/if}
-      {#if showChanges && !groups.some((g) => g.area === ACTIVITY)}<Group title={ACTIVITY}>{@render changesItem()}</Group>{/if}
+      {#if (showChanges || jobs.length) && !groups.some((g) => g.area === ACTIVITY)}<Group title={ACTIVITY}>{@render jobItems()}{@render changesItem()}</Group>{/if}
     </div>
   {/if}
 </main>
 
 {#snippet differItem()}
   {#if differ > 0}<Item lead="off" name="Files that differ from their types and years" line="Review before writing" value={differ.toLocaleString()} open={opened('types')} onclick={() => openReview('types')} />{/if}
+{/snippet}
+{#snippet jobItems()}
+  {#each jobs as j (j.key)}<Item lead={j.waiting ? 'warn' : 'off'} name={j.name} line={j.line} value={j.value} progress={j.progress} />{/each}
 {/snippet}
 {#snippet changesItem()}
   {#if showChanges}<Item lead="off" name="Changes to files" line={changesLine} progress={changesProgress} open={opened(null)} onclick={openChanges} />{/if}

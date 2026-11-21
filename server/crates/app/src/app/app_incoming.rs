@@ -32,7 +32,7 @@ impl IncomingHost for App {
         super::requests::fetcher(self)
     }
 
-    fn add_fetched(self: Arc<Self>, fetch: String) -> Asked<'static, Result<super::file_runs::Status>> {
-        Box::pin(async move { super::track_fetch::add(&self, &fetch).await })
+    fn add_fetched(self: Arc<Self>, fetch: String, also: Option<crate::intake::Also>) -> Asked<'static, Result<super::file_runs::Status>> {
+        Box::pin(async move { super::track_fetch::add_with(&self, &fetch, also).await })
     }
 }
