@@ -17,6 +17,8 @@ test-support = ["cratarr-health/test-support", "cratarr-search/test-support"]
 [dependencies]
 cratarr-health.workspace = true
 cratarr-search.workspace = true
+# The record as one object (DC1a): the domain's entity, card, row and chip, worked out from what this crate reads.
+cratarr-domain.workspace = true
 anyhow.workspace = true
 flate2.workspace = true
 image.workspace = true
@@ -34,5 +36,6 @@ zip.workspace = true
 cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
 cratarr-health = { workspace = true, features = ["test-support"] }
 cratarr-search = { workspace = true, features = ["test-support"] }
+cratarr-domain = { workspace = true, features = ["ts"] }
 ts-rs.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

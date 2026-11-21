@@ -255,17 +255,21 @@ pub mod said {
     pub const KEY: &str = "This key can't change anything.";
     pub const OWNER: &str = "This is for the owner of this music.";
     pub const ASKERS: &str = "This is for administrators and whoever asked for it.";
-    pub const UNDOER: &str = "Only whoever did it can undo it.";
+    /// CHECK-DC1's ruling 3 (AMENDMENTS 2026-11-20 23:59): shared data is undone by its maker or any administrator.
+    pub const UNDOER: &str = "That isn't yours to undo.";
     pub const HIDDEN: &str = "Not found.";
     pub const NOTHING_PLAYS: &str = "Nothing of it plays here.";
     pub const NOT_HAD: &str = "Not in your library";
     pub const HAD: &str = "In your library";
     pub const REQUESTED: &str = "Requested";
     pub const NOT_REQUESTED: &str = "No request of yours is open.";
-    pub const NO_COPY: &str = "That copy isn't there.";
+    /// RS19's words: a copy gone while its sheet was open.
+    pub const NO_COPY: &str = "That copy is gone";
     pub const CONVERTING: &str = "Its copy is being converted.";
     pub const NOT_CONVERTING: &str = "Its copy isn't being converted.";
     pub const NOT_A_TARGET: &str = "It can't go there.";
+    /// F34: an Incoming library is filled by its fetcher alone (today's words, move_refused's).
+    pub const INTO_INCOMING: &str = "It can't be copied into Incoming";
     pub const NOTHING_TO_REPLACE: &str = "No copy there to replace.";
     pub const UPLOAD_REPLACES_NOTHING: &str = "An upload replaces nothing.";
     pub const NOT_WAITING: &str = "It isn't waiting to be added.";
@@ -333,7 +337,13 @@ fn unconverted(c: &RecordCopy) -> Result<(), &'static str> {
 
 /// A copy may go into a main library or someone's own music, never into Incoming (F34) nor where it is.
 fn target(c: &RecordCopy, to: &Target) -> Result<(), &'static str> {
-    if to.folder == c.folder || matches!(to.library, Library::Incoming { .. }) { Err(said::NOT_A_TARGET) } else { Ok(()) }
+    if matches!(to.library, Library::Incoming { .. }) {
+        Err(said::INTO_INCOMING)
+    } else if to.folder == c.folder {
+        Err(said::NOT_A_TARGET)
+    } else {
+        Ok(())
+    }
 }
 
 /// A main library's copy to replace: present there, and not being converted.
@@ -401,7 +411,9 @@ fn state(v: &Viewer, a: &Action, r: &Record) -> Result<(), &'static str> {
             let c = copy_at(r, *copy)?;
             unconverted(c)?;
             // Between main libraries only (§5): into own music is a Save, into Incoming never (F34).
-            if matches!(c.library, Library::Main) && matches!(to.library, Library::Main) && to.folder != c.folder {
+            if matches!(to.library, Library::Incoming { .. }) {
+                Err(said::INTO_INCOMING)
+            } else if matches!(c.library, Library::Main) && matches!(to.library, Library::Main) && to.folder != c.folder {
                 Ok(())
             } else {
                 Err(said::NOT_A_TARGET)
@@ -436,6 +448,37 @@ fn state(v: &Viewer, a: &Action, r: &Record) -> Result<(), &'static str> {
 /// The key's scope: what changes anything takes a sign-in or a full key.
 fn full(v: &Viewer) -> Result<(), &'static str> {
     if v.scope == Scope::Full { Ok(()) } else { Err(said::KEY) }
+}
+
+/// What a key that controls may do besides (CHECK-DC1's rulings 1 and 2): play (a reading key never: it is GET-only); and, an
+/// administrator's control key alone, what Home Assistant does to a record (HA-CONTRACT-0.18 exactly: the review of an arrival and
+/// its Undo; a track's heart and an album's tags are no record action). No record heart, no rating (RECHECK-DC1-VR01).
+fn controls(v: &Viewer) -> Result<(), &'static str> {
+    if v.scope == Scope::Read { Err(said::KEY) } else { Ok(()) }
+}
+
+/// Where what a Change changed is kept (AMENDMENTS 2026-11-20 23:59): per account (playlists, crates, hearts, Out, Discover answers,
+/// excluded tracks, imports), or shared (the library, arrivals, requests, Soulseek, Health's runs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kept {
+    PerAccount,
+    Shared,
+}
+
+/// Who may undo a Change (the 23:59 rule, as one function GF's Change-based `may_undo` calls): what is kept per account, its account
+/// alone; shared data, whoever made the Change or any administrator. Else 403 "That isn't yours to undo."
+pub fn may_undo(v: &Viewer, maker: Option<&str>, kept: Kept) -> Result<(), &'static str> {
+    let made = maker == Some(v.account.as_str());
+    match kept {
+        Kept::PerAccount if made => Ok(()),
+        Kept::Shared if made || v.role.administers() => Ok(()),
+        Kept::PerAccount | Kept::Shared => Err(said::UNDOER),
+    }
+}
+
+/// Home Assistant's: a full key, or an administrator's control key.
+fn reviews(v: &Viewer) -> Result<(), &'static str> {
+    if v.scope == Scope::Full || (v.scope == Scope::Control && v.role.administers()) { Ok(()) } else { Err(said::KEY) }
 }
 
 fn administers(v: &Viewer) -> Result<(), &'static str> {
@@ -489,13 +532,8 @@ fn into_own(v: &Viewer, to: &Target) -> bool {
 /// Whether the viewer may (a 403 where not), once the state allows it.
 fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
     match a {
-        // Reading and playing: anyone, a key of any scope too (§5: "a reading key too").
+        // Reading: anyone, a key of any scope too (§5: "a reading key too"). Play and Play from read the record's tracks (a GET).
         Action::Play
-        | Action::Shuffle
-        | Action::PlayNext
-        | Action::AddToQueue
-        | Action::StartRadio
-        | Action::Resume
         | Action::SoundsLike
         | Action::PlayFrom { .. }
         | Action::Share
@@ -505,6 +543,8 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
         | Action::View
         | Action::Requested
         | Action::RemoveFromDevice => Ok(Decision::Allow),
+        // Queued or started on a player (a POST): never a reading key.
+        Action::Shuffle | Action::PlayNext | Action::AddToQueue | Action::StartRadio | Action::Resume => controls(v).map(|()| Decision::Allow),
         Action::Favourite | Action::Rating => full(v).map(|()| Decision::Allow),
         Action::Want => {
             full(v)?;
@@ -537,12 +577,13 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
             administers(v).map(|()| Decision::Allow)
         }
         Action::Delete { copy } | Action::DeleteArrival { copy } => {
-            full(v)?;
+            // An arrival's Delete is the review's reject: Home Assistant's too.
+            if matches!(a, Action::DeleteArrival { .. }) { reviews(v)? } else { full(v)? }
             may_delete(v, copy_at(r, *copy)?)?;
             Ok(Decision::AskFirst(Plan::Delete { copy: *copy }))
         }
         Action::AddTo { copy, to } => {
-            full(v)?;
+            reviews(v)?;
             if v.role.administers() {
                 return Ok(Decision::Allow);
             }
@@ -552,10 +593,12 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
             // Its asker adds it to their own music only, its default target.
             if into_own(v, to) { Ok(Decision::Allow) } else { Err(said::ADMINISTRATORS) }
         }
+        // An arrival's answer is shared data: undone by whoever gave it, or any administrator (AMENDMENTS 2026-11-20 23:59). What is
+        // kept per account (playlists, crates, hearts, Out…) is its account's alone: GF's `may_undo`, no record action yet.
         Action::Undo { copy } => {
-            full(v)?;
+            reviews(v)?;
             let by = copy_at(r, *copy)?.arrival.as_ref().and_then(|x| x.by.as_deref());
-            if by == Some(v.account.as_str()) { Ok(Decision::Allow) } else { Err(said::UNDOER) }
+            may_undo(v, by, Kept::Shared).map(|()| Decision::Allow)
         }
     }
 }
@@ -782,10 +825,24 @@ mod tests {
         assert_eq!(decide(&alice(), &Action::Play, &preview), Decision::Allow);
         assert!(refused_state(decide(&alice(), &Action::Play, &not_had())));
         assert!(refused_state(decide(&alice(), &Action::Shuffle, &preview)), "the preview's Play row is Play alone");
-        // The reading key: the Play row.
-        for action in [Action::Play, Action::Shuffle, Action::PlayNext, Action::AddToQueue, Action::StartRadio] {
-            assert_eq!(decide(&key(), &action, &night_ferry(Some(0))), Decision::Allow, "{action:?}");
+        // The reading key: Play and Play from (a GET); never what is queued or started on a player (a POST: CHECK-DC1's ruling 1).
+        assert_eq!(decide(&key(), &Action::Play, &night_ferry(Some(0))), Decision::Allow);
+        assert_eq!(decide(&key(), &Action::PlayFrom { copy: 1 }, &night_ferry(Some(0))), Decision::Allow);
+        for action in [Action::Shuffle, Action::PlayNext, Action::AddToQueue, Action::StartRadio] {
+            assert!(refused_right(decide(&key(), &action, &night_ferry(Some(0)))), "{action:?}");
         }
+    }
+
+    /// The 23:59 rule (CHECK-DC1's ruling 3), as GF will call it: what is kept per account is its account's alone, an administrator's
+    /// too; shared data is its maker's or any administrator's; the refusal says "That isn't yours to undo.".
+    #[test]
+    fn undo_is_the_makers_or_for_shared_data_any_administrators() {
+        let admin2 = Viewer::new("admin2", true, None, May::default(), None);
+        assert_eq!(may_undo(&alice(), Some("alice"), Kept::PerAccount), Ok(()));
+        assert_eq!(may_undo(&root(), Some("alice"), Kept::PerAccount), Err(said::UNDOER), "her playlist: hers alone");
+        assert_eq!(may_undo(&admin2, Some("root"), Kept::Shared), Ok(()), "any administrator");
+        assert_eq!(may_undo(&bob(), Some("root"), Kept::Shared), Err("That isn't yours to undo."));
+        assert_eq!(may_undo(&bob(), Some("bob"), Kept::Shared), Ok(()), "its maker");
     }
 
     /// CN6's `decide` half (its test, `library_actions_name_their_copy_and_follow_the_server`, is the records crate's: the

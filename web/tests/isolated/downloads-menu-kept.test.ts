@@ -17,11 +17,11 @@ test('Downloads reads the menu as opened, kept while it closes, never the closed
 test('search, Health and a work hand the record menu the value as opened', () => {
   const search = read('GlobalResults.svelte');
   assert.ok(search.includes('const shownMenu = $derived((opened = menu ?? opened));'));
-  assert.ok(search.includes("{@const m = shownMenu as Extract<Menu, { kind: 'album' }>}\n  <AlbumMenu source={m.source} album={{ id: m.id"));
+  assert.ok(search.includes("{@const m = shownMenu as Extract<Menu, { kind: 'album' }>}\n  {#if opensRecord(m.source)}<RecordMenu id={m.id}"));
   const health = read('HealthPanel.svelte');
   assert.ok(health.includes('const shownCover = $derived((openedCover = coverOf ?? openedCover));'));
-  assert.ok(health.includes('{@const c = shownCover!}\n  <AlbumMenu source="cratarr" album={{ id: c.id'));
+  assert.ok(health.includes('{@const c = shownCover!}\n  <RecordMenu id={c.id}'));
   const work = read('WorkSheet.svelte');
   assert.ok(work.includes('const shownAlbum = $derived((openedAlbum = albumMenu ?? openedAlbum));'));
-  assert.ok(work.includes('{#if albumMenu}{@const r = shownAlbum!}<AlbumMenu'));
+  assert.ok(work.includes('{#if albumMenu}{@const r = shownAlbum!}{#if opensRecord(SOURCE)}<RecordMenu'));
 });

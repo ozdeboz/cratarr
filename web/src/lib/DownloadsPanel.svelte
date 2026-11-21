@@ -35,6 +35,7 @@
   import SelectSheet from './SelectSheet.svelte';
   import ContentControls from './ContentControls.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
+  import RecordMenu, { opensRecord } from './sheet/Record.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -380,6 +381,8 @@
         {/if}
       </div>
     </MenuSheet>
+  {:else if ownMenu(m) && m.kind === 'album' && opensRecord(m.source)}
+    <RecordMenu id={m.id} from="downloads" title={m.name} credit={m.artist ?? null} onclose={() => (menu = null)} />
   {:else if ownMenu(m) && m.kind === 'album'}
     <AlbumMenu source={m.source} album={{ id: m.id, title: m.name, artist: m.artist ?? '' }} cover={m.cover} onclose={() => (menu = null)} />
   {:else if ownMenu(m)}

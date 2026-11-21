@@ -30,6 +30,9 @@ pub enum ToggleError {
     /// Not this account's to do (decision 0051): an administrator's, or another user's.
     #[error("{0}")]
     Forbidden(String),
+    /// Not there for whoever asks (CN1: an upload hidden from all but its uploader and the administrators), said as is.
+    #[error("{0}")]
+    NotFound(String),
     /// What was there and is no more, said as is (RT01: a record not had that was forgotten, its id never given again).
     #[error("{0}")]
     Gone(String),

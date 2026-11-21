@@ -1,0 +1,29 @@
+{
+  "about": "What each state of a record says (SCENARIOS-DC1 RS2), written by cratarr-domain's tests: its words with their blanks; a time beside them is the page's to say.",
+  "states": [
+    {
+      "is": "not_had",
+      "words": "Not in your library"
+    },
+    {
+      "is": "partly",
+      "words": "Partly there · {has} of {of}"
+    },
+    {
+      "is": "arrived",
+      "words": "Arrived"
+    },
+    {
+      "is": "had",
+      "words": "In your library"
+    },
+    {
+      "is": "elsewhere",
+      "words": "In {owner}'s music"
+    },
+    {
+      "is": "retired",
+      "words": "Was in {library} until"
+    }
+  ]
+}

@@ -231,6 +231,8 @@ pub fn router(app: Arc<App>) -> Router {
         // A label's page (C56), and a list's row opened: its record, made at open (Q33); a label About shows, opened (F9).
         .route("/api/labels/{id}", get(label_page))
         .route("/api/records/open", post(open_record))
+        // A record as one object (DC1a): its entity for the viewer asking, from the place asked (SCENARIOS-DC1 RV1).
+        .route("/api/records/{id}", get(crate::serve::views::record::record))
         .route("/api/labels/open", post(open_label))
         .route("/api/artists/open", post(open_artist))
         .route("/api/discover/missing", get(discover_missing))
@@ -2198,7 +2200,7 @@ async fn export_token(ctx: Ctx, Path(token): Path<String>) -> Result<Response, A
 }
 
 /// `application/x-www-form-urlencoded` value: `+` is a space, `%XX` a byte (UTF-8 as a whole).
-fn form_decode(s: &str) -> String {
+pub(crate) fn form_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -4036,13 +4038,10 @@ struct NamedCopy {
     from: Option<String>,
 }
 
-async fn delete_incoming(
-    State(app): State<Arc<App>>,
-    Path((source, album)): Path<(String, String)>,
-    body: Option<Json<NamedCopy>>,
-) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+async fn delete_incoming(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(app.incoming.delete(&source, &album, b.from.as_deref()).await?))
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::DeleteArrival, b.from.as_deref(), None).await?;
+    Ok(Json(ctx.app.incoming.delete(&source, &album, b.from.as_deref()).await?))
 }
 
 
@@ -4087,9 +4086,10 @@ struct MoveTo {
     from_dir: Option<String>,
 }
 
-async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+async fn delete_album(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(app.delete_album(&source, &album, b.from.as_deref()).await?))
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Delete, b.from.as_deref(), None).await?;
+    Ok(Json(ctx.app.delete_album(&source, &album, b.from.as_deref()).await?))
 }
 
 /// An album of someone's own music deleted from the Users panel (the administrators' only way, the owner, 2026-11-04).
@@ -4102,7 +4102,9 @@ async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(
     Ok(Json(app.move_preview(&source, &album, q.from.as_deref(), &q.to, q.year.as_deref()).await?))
 }
 
-async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
+async fn move_album(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Move, b.from.as_deref(), Some(&b.to)).await?;
+    let app = ctx.app.clone();
     let sheet = match (b.folder, b.files, b.from_dir) {
         (Some(folder), Some(files), Some(from_dir)) => Some(crate::app::CopySheet { folder, files, from_dir }),
         _ => None,
@@ -4118,13 +4120,10 @@ async fn keep_preview(
     Ok(Json(app.incoming.keep_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
 }
 
-async fn keep_incoming(
-    State(app): State<Arc<App>>,
-    Path((source, album)): Path<(String, String)>,
-    body: Option<Json<KeepInto>>,
-) -> Result<Json<crate::app::KeepResult>, ApiError> {
+async fn keep_incoming(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<KeepInto>>) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(app.incoming.keep(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref()).await?))
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Keep, b.from.as_deref(), b.to.as_deref()).await?;
+    Ok(Json(ctx.app.incoming.keep(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref()).await?))
 }
 
 async fn replace_preview(
@@ -4164,12 +4163,10 @@ struct ReplaceBody {
     from_dir: Option<String>,
 }
 
-async fn replace_incoming(
-    State(app): State<Arc<App>>,
-    Path((source, album)): Path<(String, String)>,
-    body: Option<Json<ReplaceBody>>,
-) -> Result<Json<crate::app::KeepResult>, ApiError> {
+async fn replace_incoming(ctx: Ctx, Path((source, album)): Path<(String, String)>, body: Option<Json<ReplaceBody>>) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::Replace, b.from.as_deref(), b.to.as_deref()).await?;
+    let app = ctx.app.clone();
     if !matches!(b.cover.as_deref(), None | Some("keep" | "new")) {
         return Err(ToggleError::Refused("cover is keep or new".into()).into());
     }
@@ -7418,7 +7415,9 @@ struct SetCover {
 }
 
 /// An album's cover set to one of its candidates: beside its tracks and inside each; Undo puts the old one back.
-async fn set_album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+async fn set_album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::ChangeCover, None, None).await?;
+    let app = ctx.app.clone();
     own_album(&source)?;
     // A run on the one path (0.14): the choice is the yes, Undo the run's.
     Ok(Json(crate::app::covers::run(&app, &album, Some(&b.url), None).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
@@ -7760,7 +7759,7 @@ impl IntoResponse for ApiError {
             ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder | ToggleError::NameTaken(_) => {
                 StatusCode::CONFLICT
             }
-            ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
+            ToggleError::UnknownPlaylist | ToggleError::NotFound(_) => StatusCode::NOT_FOUND,
             ToggleError::Gone(_) => StatusCode::GONE,
             ToggleError::Forbidden(_) | ToggleError::Fenced => StatusCode::FORBIDDEN,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,

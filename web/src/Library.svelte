@@ -10,6 +10,7 @@
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
   import AlbumMenu from './lib/AlbumMenu.svelte';
+  import RecordMenu, { opensRecord } from './lib/sheet/Record.svelte';
   import { library, readLibrary } from './lib/albums.svelte';
   import { whenReadsMove } from './lib/deviceIndex.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -237,12 +238,8 @@
 
 {#if menuShown && menu}
   {@const m = menu}
-  <AlbumMenu
-    source={m.source}
-    album={m.a}
-    onclose={() => (menuShown = false)}
-    onundone={reload}
-  />
+  {#if opensRecord(m.source)}<RecordMenu id={m.a.id} from="library" title={m.a.title} credit={m.a.artist} onclose={() => (menuShown = false)} onundone={reload} />
+  {:else}<AlbumMenu source={m.source} album={m.a} onclose={() => (menuShown = false)} />{/if}
 {/if}
 
 {#if uploading}<UploadSheet onclose={() => (uploading = false)} />{/if}

@@ -111,9 +111,38 @@ fn fold(c: char) -> char {
     }
 }
 
+/// A record's artists as one text, where only text fits (a card's line, the notification): the one formatter the server, the page
+/// (index.wasm) and the device (rules-ffi) share (NAMES.24; the owner, 2026-11-20 ~18:35, "A & B", "A, B & C"). A source that
+/// confirms the credit and gives its own phrase ("Commodo x Alfa Mist") is said as it gives it. An empty name is no artist.
+pub fn credit_text(names: &[&str], phrase: Option<&str>) -> String {
+    if let Some(phrase) = phrase.map(str::trim).filter(|p| !p.is_empty()) {
+        return phrase.to_string();
+    }
+    let names: Vec<&str> = names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()).collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [rest @ .., last] => format!("{} & {last}", rest.join(", ")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// NAMES.24's formatter (its rules half; the surfaces are DC3's SPLIT): every artist named, "A & B", "A, B & C", one alone, a
+    /// confirming source's own phrase as it gives it. Red first: a card names the album artist alone (records.rs's artist line).
+    #[test]
+    fn one_formatter_names_a_records_artists() {
+        assert_eq!(credit_text(&["Commodo", "Alfa Mist"], None), "Commodo & Alfa Mist");
+        assert_eq!(credit_text(&["Commodo", "Alfa Mist", "Anz"], None), "Commodo, Alfa Mist & Anz");
+        assert_eq!(credit_text(&["Secede", "Kettel"], None), "Secede & Kettel");
+        assert_eq!(credit_text(&["Glass Harbour"], None), "Glass Harbour");
+        assert_eq!(credit_text(&[], None), "");
+        assert_eq!(credit_text(&["Commodo", " ", "Alfa Mist"], None), "Commodo & Alfa Mist", "an empty name is no artist");
+        assert_eq!(credit_text(&["Commodo", "Alfa Mist"], Some("Commodo x Alfa Mist")), "Commodo x Alfa Mist");
+        assert_eq!(credit_text(&["Commodo", "Alfa Mist"], Some("  ")), "Commodo & Alfa Mist", "an empty phrase is none");
+    }
 
     #[test]
     fn loosely_accents_brackets_feat_and_the_count_for_nothing() {

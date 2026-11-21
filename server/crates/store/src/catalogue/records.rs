@@ -729,7 +729,7 @@ fn row_of(r: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
     })
 }
 
-fn record_in(db: &Connection, id: i64) -> Result<Option<RecordRow>> {
+pub(super) fn record_in(db: &Connection, id: i64) -> Result<Option<RecordRow>> {
     Ok(db.prepare_cached(&format!("SELECT {RECORD_COLUMNS} FROM records WHERE id = ?1"))?.query_row([id], row_of).optional()?)
 }
 

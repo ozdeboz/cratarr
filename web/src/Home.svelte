@@ -24,6 +24,7 @@
     type PlaylistRow,
   } from './lib/api';
   import AlbumMenu from './lib/AlbumMenu.svelte';
+  import RecordMenu, { opensRecord } from './lib/sheet/Record.svelte';
   import { longpress } from './lib/longpress';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import QueuesSheet from './lib/QueuesSheet.svelte';
@@ -561,7 +562,8 @@
 
 {#if albumMenu}
   {@const m = albumMenu}
-  <AlbumMenu source={m.source} album={{ id: m.id, title: m.title, artist: m.artist }} onclose={() => (albumMenu = null)} />
+  {#if opensRecord(m.source)}<RecordMenu id={m.id} from="library" title={m.title} credit={m.artist} onclose={() => (albumMenu = null)} />
+  {:else}<AlbumMenu source={m.source} album={{ id: m.id, title: m.title, artist: m.artist }} onclose={() => (albumMenu = null)} />{/if}
 {/if}
 {#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
 {#if playlistOfMenu}<PlaylistMenu playlists={[playlistOfMenu]} onclose={() => (playlistMenu = null)} />{/if}

@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@jellyfin/sdk": "1.0.1",
+    "@tanstack/query-core": "5.107.1",
     "@xyflow/svelte": "1.7.0",
     "axios": "1.19.0",
     "d3-force": "3.0.0",

@@ -2362,6 +2362,45 @@ fn tracks_at(data: &Path, library: &Path, dir: &str) -> Vec<String> {
     rows.map(Result::unwrap).collect()
 }
 
+/// Home Assistant's review of an arrival, with its key (HA-CONTRACT-0.18 §3; CHECK-DC1's ruling 2): an administrator's control-scope
+/// key rejects an arrival, takes that back (its Undo), and promotes it, each answered as Home Assistant reads it. The guard that no
+/// move of the review onto `decide()` locks Home Assistant out: a failure here is Home Assistant's.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn home_assistant_reviews_an_arrival_with_its_control_key_end_to_end() {
+    let (s, _root, music, _incoming) = on_music_and_incoming("ha-review").await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "root", "password": "root pw", "admin": true })).await;
+    s.act_as("root", "root pw").await;
+    let made = s.ok(reqwest::Method::POST, "/api/auth/keys", json!({ "name": "Home Assistant", "password": "root pw", "scope": "control" })).await;
+    let key = made["key"].as_str().expect("a control key").to_string();
+    let id = s.incoming_album("Just Arrived").await["id"].as_str().unwrap().to_string();
+    let ha = |method: reqwest::Method, path: String| {
+        let request = s.http.request(method, format!("{}{path}", s.base)).bearer_auth(&key);
+        async move {
+            let r = request.send().await.unwrap();
+            let status = r.status().as_u16();
+            (status, r.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (status, rejected) = ha(reqwest::Method::POST, format!("/api/library/albums/{id}/reject")).await;
+    assert_eq!((status, rejected["review"].as_str()), (200, Some("rejected")), "Home Assistant's reject, with its control key: {rejected}");
+    let (status, back) = ha(reqwest::Method::DELETE, format!("/api/library/albums/{id}/review")).await;
+    assert_eq!((status, back["review"].as_str()), (200, Some("unreviewed")), "Home Assistant's Undo of its reject: {back}");
+    s.incoming_album("Just Arrived").await;
+    // Once the library holds it in Incoming again.
+    let start = Instant::now();
+    let promoted = loop {
+        let (status, answer) = ha(reqwest::Method::POST, format!("/api/library/albums/{id}/promote")).await;
+        if status == 200 {
+            break answer;
+        }
+        assert!(start.elapsed() < Duration::from_secs(120), "Home Assistant's promote, with its control key: {status} {answer}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    assert_eq!(promoted["review"].as_str(), Some("promoted"), "{promoted}");
+    assert!(folder_named(&music, "Just Arrived").is_some(), "promoted into Music");
+}
+
 /// Keep: the album leaves Incoming for Music with its track ids and every byte, and is on the list of runs. Its Undo puts each
 /// file back where it was, under its old name, and Music holds nothing of it.
 #[tokio::test(flavor = "multi_thread")]
@@ -2638,7 +2677,8 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
 
     let (dir, deleting) = ("Salt Meridian/Both Shores (2018)", format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()));
     let kept = as_it_lies(&music.join(dir));
-    assert_eq!(bob.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 409, "not his");
+    // A right missing is a 403 (CN1, CN9: the handler decides first, in the table's words; never a 409 for a right, CN2).
+    assert_eq!(bob.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 403, "not his");
     assert!(as_it_lies(&music.join(dir)) == kept, "the kept files are there");
     bob.ok(reqwest::Method::POST, &deleting, json!({ "from": path(&incoming) })).await;
     assert!(!incoming.join(dir).exists(), "his own request");

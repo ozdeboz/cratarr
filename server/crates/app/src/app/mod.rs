@@ -18,6 +18,8 @@ pub use cratarr_search::app::{search, search_host};
 
 mod app_albums;
 pub mod capabilities;
+// The record as one object, read for its views (DC1a: OBJECT-MAP-2 §2.1).
+pub mod core;
 mod app_served;
 mod app_base;
 mod app_protected;
