@@ -83,7 +83,7 @@ pub mod tests {
     // Shared with the tests of the crates above (test-support): the helpers only its own tests call are idle there.
     #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
-    use crate::catalogue::Rules;
+    use crate::catalogue::FolderRules;
     use crate::serve::copies::Kind;
     use crate::source::CRATARR;
 
@@ -124,8 +124,8 @@ pub mod tests {
         cat.identify().unwrap();
         let lib = Arc::new(Library::open(None).unwrap());
         lib.set_kinds(vec![(0, Kind::Main), (1, Kind::Main)]);
-        let (_, print) = lib.change(&cat, &Rules::default()).unwrap();
-        lib.build_from(&cat, &Rules::default(), &print).unwrap();
+        let (_, print) = lib.change(&cat, &FolderRules::default()).unwrap();
+        lib.build_from(&cat, &FolderRules::default(), &print).unwrap();
         let (song, album): (String, String) = lib.db().query_row("SELECT song, album FROM copy_files WHERE folder = 0", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         lib.db()
             .execute_batch(&format!(
@@ -194,8 +194,8 @@ pub mod tests {
         cat.identify().unwrap();
         let lib = Library::open(None).unwrap();
         lib.set_kinds(vec![(0, Kind::Main)]);
-        let (_, print) = lib.change(&cat, &Rules::default()).unwrap();
-        lib.build_from(&cat, &Rules::default(), &print).unwrap();
+        let (_, print) = lib.change(&cat, &FolderRules::default()).unwrap();
+        lib.build_from(&cat, &FolderRules::default(), &print).unwrap();
         (root, cat, lib)
     }
 

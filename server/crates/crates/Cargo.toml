@@ -17,6 +17,8 @@ test-support = ["cratarr-playlists/test-support"]
 [dependencies]
 cratarr-playlists.workspace = true
 cratarr-rules.workspace = true
+# The one path's Change and who may undo it (artist Out's kind, GF).
+cratarr-domain.workspace = true
 anyhow.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

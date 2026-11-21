@@ -393,7 +393,7 @@ mod tests {
             ..crate::catalogue::ServedRow::default()
         };
         let folders = [super::super::library::FolderRows { folder: 0, root: "/music".into(), rows: vec![row(1, "01", "So What"), row(2, "02", "Freddie Freeloader")] }];
-        s.library.refresh(&folders, &crate::catalogue::Rules::default()).unwrap();
+        s.library.refresh(&folders, &crate::catalogue::FolderRules::default()).unwrap();
         s
     }
 

@@ -5,7 +5,8 @@
 //!
 //! - **Write**: genre, type and year by default (the decision); style, mood and tags leave the files' own. Type and year
 //!   are one switch, 0.13's "Write types and years into files" (`file_facts`): one run writes both.
-//! - **Sources** by kind as the store has them (`store`): mood is AudioMuse's (and the hand's); the hand is always on.
+//! - **Sources** by kind as the store has them (`store`): AudioMuse's in every kind it feeds, Bandcamp's in each but mood; mood
+//!   is AudioMuse's (and the hand's); the hand is always on.
 //! - **Aliases**: genre's are the tag rules' (file fixes use them too); the others' are kept here.
 //!
 //! Kept as server choices (`words:write:<kind>`, `words:off:<kind>`, `words:aliases:<kind>`); the store is built again
@@ -23,12 +24,13 @@ use crate::app::base_host::BaseHost;
 /// Every kind the sheet lists, in its order.
 pub const ALL: [&str; 6] = ["type", "year", "genre", "style", "mood", "tag"];
 
-/// The sources that can say a kind, strongest first.
+/// The sources that can say a kind, strongest first, each switchable per kind but the hand: AudioMuse's words in every kind it
+/// feeds (its heard styles sorted by the word into genres, styles and tags; its moods), Bandcamp's tags in each kind but mood
+/// (GEN.59, OQ-GEN-25), like Last.fm's. Mood is AudioMuse's and the hand's.
 fn sources_of(kind: Kind) -> &'static [Source] {
     use Source::*;
     match kind {
-        Kind::Genre | Kind::Tag => &[Hand, Files, Household, Musicbrainz, Discogs, Lastfm],
-        Kind::Style => &[Hand, Files, Audiomuse, Household, Musicbrainz, Discogs, Lastfm],
+        Kind::Genre | Kind::Style | Kind::Tag => &[Hand, Files, Audiomuse, Household, Musicbrainz, Discogs, Lastfm, Bandcamp],
         Kind::Mood => &[Hand, Audiomuse],
     }
 }
@@ -43,6 +45,7 @@ fn named(s: Source) -> &'static str {
         Source::Musicbrainz => "MusicBrainz",
         Source::Discogs => "Discogs",
         Source::Lastfm => "Last.fm",
+        Source::Bandcamp => "Bandcamp",
     }
 }
 
@@ -118,7 +121,7 @@ pub fn off(serve: &crate::serve::Serve) -> HashMap<Kind, HashSet<Source>> {
 
 /// Each kind's aliases: the word, and the spellings that are it (genre's the tag rules').
 pub fn aliases(serve: &crate::serve::Serve) -> HashMap<Kind, Vec<(String, Vec<String>)>> {
-    let mut out = HashMap::from([(Kind::Genre, serve.rules().genre_aliases.iter().map(|a| (a.to.clone(), a.from.clone())).collect::<Vec<_>>())]);
+    let mut out = HashMap::from([(Kind::Genre, serve.rules().install().genre_aliases.iter().map(|a| (a.to.clone(), a.from.clone())).collect::<Vec<_>>())]);
     for k in [Kind::Style, Kind::Mood, Kind::Tag] {
         out.insert(k, kept_aliases(serve, k.name()).into_iter().map(|a| (a.word, a.aliases)).collect());
     }
@@ -131,7 +134,7 @@ fn kept_aliases(serve: &crate::serve::Serve, kind: &str) -> Vec<AliasRow> {
 
 fn alias_rows(serve: &crate::serve::Serve, kind: Kind) -> Vec<AliasRow> {
     match kind {
-        Kind::Genre => serve.rules().genre_aliases.iter().map(|a| AliasRow { word: a.to.clone(), aliases: a.from.clone() }).collect(),
+        Kind::Genre => serve.rules().install().genre_aliases.iter().map(|a| AliasRow { word: a.to.clone(), aliases: a.from.clone() }).collect(),
         k => kept_aliases(serve, k.name()),
     }
 }
@@ -277,7 +280,69 @@ mod tests {
     fn the_sheet_lists_every_kind_and_mood_says_only_audiomuse_and_the_hand() {
         assert_eq!(ALL, ["type", "year", "genre", "style", "mood", "tag"]);
         assert_eq!(sources_of(Kind::Mood), &[Source::Hand, Source::Audiomuse]);
-        assert!(sources_of(Kind::Genre).contains(&Source::Files) && !sources_of(Kind::Genre).contains(&Source::Audiomuse));
+        assert!(sources_of(Kind::Genre).contains(&Source::Files));
         assert!(kind_name("colour").is_err());
+    }
+
+    /// The coordinator's ruling, by coherence (2026-11-21): GEN made AudioMuse a source of genres, styles and tags by its scores
+    /// (each word sorted by the word), so it is among the Catalogue sheet's sources of every kind it feeds, after the files, and
+    /// switchable per kind like Bandcamp: switched off for a kind there, its words leave that kind, and come back when it is on.
+    /// Mood stays AudioMuse's and the hand's.
+    #[test]
+    fn audiomuse_is_a_source_switchable_per_kind() {
+        use super::super::store::{KINDS, Library, RecordIn, TrackIn, record};
+        for k in KINDS {
+            assert!(sources_of(k).contains(&Source::Audiomuse), "{}", k.name());
+        }
+        for k in [Kind::Genre, Kind::Style, Kind::Tag] {
+            assert_eq!(&sources_of(k)[..3], &[Source::Hand, Source::Files, Source::Audiomuse], "{}: strongest first", k.name());
+        }
+        assert_eq!(sources_of(Kind::Mood), &[Source::Hand, Source::Audiomuse], "mood: AudioMuse's and the hand's");
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let on = |kind: &str| super::row(&serve, kind).unwrap().sources.iter().find(|s| s.id == "audiomuse").map(|s| (s.name, s.on));
+        let switch = |kind: &str, on: bool| set_kind(&serve, kind, None, Some(&HashMap::from([("audiomuse".to_string(), on)])));
+        for kind in ["genre", "style", "mood", "tag"] {
+            assert_eq!(on(kind), Some(("AudioMuse", true)), "{kind}");
+        }
+        switch("genre", false).unwrap();
+        assert_eq!((on("genre"), on("style"), on("mood"), on("tag")), (Some(("AudioMuse", false)), Some(("AudioMuse", true)), Some(("AudioMuse", true)), Some(("AudioMuse", true))), "off for genres alone");
+        // A heard track: AudioMuse's "electronic" a genre, "night drive" a tag (no caller says it), "calm" its mood.
+        let heard = TrackIn { id: "t1".into(), heard: true, heard_styles: vec![("electronic".into(), 0.6), ("night drive".into(), 0.6)], heard_moods: vec!["calm".into()], ..TrackIn::default() };
+        let r = RecordIn { id: "r".into(), tracks: vec![heard], ..RecordIn::default() };
+        let words = |serve: &crate::serve::Serve| {
+            let lib = Library::of(std::slice::from_ref(&r), &HashMap::new()).with_off(off(serve));
+            let w = record(&lib, &r);
+            KINDS.map(|k| w.kinds.iter().filter(|x| x.kind == k).flat_map(|x| x.words.iter().map(|w| w.word.clone())).collect::<Vec<_>>())
+        };
+        assert_eq!(words(&serve), [vec![], vec![], vec!["calm".to_string()], vec!["night drive".to_string()]], "off: its genre leaves the kind, its tag and mood stay");
+        switch("genre", true).unwrap();
+        assert_eq!(on("genre"), Some(("AudioMuse", true)));
+        assert_eq!(words(&serve)[0], ["Electronic"], "on again: back");
+    }
+
+    /// GEN.59 (OQ-GEN-25): Bandcamp among the Catalogue sheet's sources of Genre, Style and Tag, never Mood; switched off for a
+    /// kind there, its words leave that kind, and come back when it is on.
+    #[test]
+    fn bandcamp_is_a_source_switchable_per_kind() {
+        use super::super::store::{Library, RecordIn, Said, TrackIn, record};
+        for k in [Kind::Genre, Kind::Style, Kind::Tag] {
+            assert!(sources_of(k).contains(&Source::Bandcamp), "{}", k.name());
+        }
+        assert!(!sources_of(Kind::Mood).contains(&Source::Bandcamp));
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let on = |kind: &str| super::row(&serve, kind).unwrap().sources.iter().find(|s| s.id == "bandcamp").map(|s| (s.name, s.on));
+        let switch = |kind: &str, on: bool| set_kind(&serve, kind, None, Some(&HashMap::from([("bandcamp".to_string(), on)])));
+        assert_eq!(on("tag"), Some(("Bandcamp", true)));
+        switch("tag", false).unwrap();
+        assert_eq!((on("tag"), on("genre"), on("style")), (Some(("Bandcamp", false)), Some(("Bandcamp", true)), Some(("Bandcamp", true))), "off for tags alone");
+        assert!(switch("mood", true).is_err(), "Bandcamp says no mood");
+        let r = RecordIn { id: "r".into(), tracks: vec![TrackIn::default()], said: vec![Said { source: Source::Bandcamp, word: "Paris".into(), raw_kind: "tag".into(), weight: 1.0 }], ..RecordIn::default() };
+        let tags = |serve: &crate::serve::Serve| {
+            let lib = Library::of(std::slice::from_ref(&r), &HashMap::new()).with_off(off(serve));
+            record(&lib, &r).kinds.iter().filter(|k| k.kind == Kind::Tag).flat_map(|k| k.words.iter().map(|w| w.word.clone())).collect::<Vec<_>>()
+        };
+        assert!(tags(&serve).is_empty(), "off: its words leave the kind");
+        switch("tag", true).unwrap();
+        assert_eq!((on("tag"), tags(&serve)), (Some(("Bandcamp", true)), vec!["Paris".to_string()]), "on again: back");
     }
 }

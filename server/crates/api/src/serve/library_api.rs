@@ -283,7 +283,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalogue::{Catalogue, Rules, ServedRow};
+    use crate::catalogue::{Catalogue, FolderRules, Rules, ServedRow};
     use crate::serve::library::FolderRows;
     use axum::body::Body;
     use axum::http::Request;
@@ -308,7 +308,7 @@ mod tests {
             ],
             ..ServedRow::default()
         };
-        serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![row(1), row(2)] }], &Rules::default()).unwrap();
+        serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![row(1), row(2)] }], &FolderRules::default()).unwrap();
         serve.users.set("owner", "pw").unwrap();
         serve.sessions.set_required(false).unwrap();
         serve

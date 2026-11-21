@@ -223,16 +223,30 @@ async fn listens(app: &Arc<App>, served: &Serve, account: &str, turn: usize, son
     for (k, song) in heard.iter().take(15).step_by(4).enumerate() {
         ud.count_play(account, (song, song), &albums[song], &[], now - 86_400 * (30 + k as i64)).unwrap();
     }
-    for (k, song) in every(5).iter().enumerate() {
+    let cat = app.library.catalogue();
+    let list = ["Mix", "Road"][turn];
+    let lines: Vec<String> = every(4).iter().filter_map(|s| crate::serve::playlists::line_of_song(&cat, s)).collect();
+    app.playlists.create_with(list, &lines).await.unwrap();
+    // Skipped three times each: every fifth track, and the tracks that fit its taste best (its taste's share) that it neither
+    // hearted nor listed, Second chance's own case, so that crate holds one however the words sort the library (GEN's sort
+    // moved every fit, 2026-11-21).
+    let fits = app.crates.taste_fits(account, &[]).await.unwrap();
+    let mut fitting: Vec<(&String, f64)> = songs.iter().filter_map(|s| Some((s, *fits.get(s)?))).collect();
+    fitting.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let share = (songs.len() as f64 * crates::FITS_SHARE).ceil() as usize;
+    let (hearted, listed) = (every(7), every(4));
+    let mut skipped = every(5);
+    for (song, _) in fitting.into_iter().take(share) {
+        if !hearted.contains(song) && !listed.contains(song) && !skipped.contains(song) {
+            skipped.push(song.clone());
+        }
+    }
+    for (k, song) in skipped.iter().enumerate() {
         for n in 0..3 {
             let skipped = Heard { ended: Ended::Skipped, counts: false, ..Heard::counted(now - 3600 * (3 * k as i64 + n + 1)) };
             ud.record(account, (song, song), &albums[song], &[], &skipped).unwrap();
         }
     }
-    let cat = app.library.catalogue();
-    let list = ["Mix", "Road"][turn];
-    let lines: Vec<String> = every(4).iter().filter_map(|s| crate::serve::playlists::line_of_song(&cat, s)).collect();
-    app.playlists.create_with(list, &lines).await.unwrap();
     let calm = vec![Condition::new("energy", false, Value::Range { min: None, max: Some(60.0) })];
     let (own, _) = app.crates.crate_save(None, "Calm", calm).await.unwrap();
     let like = Value::Like { of: vec![album.clone()], count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: crates::Avoid::default() };

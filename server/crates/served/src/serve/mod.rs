@@ -41,7 +41,7 @@ use anyhow::Result;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
-use crate::catalogue::{Catalogue, Rules};
+use crate::catalogue::{Catalogue, FolderRules, Rules};
 use crate::userdata::UserData;
 
 /// How often the library is checked against the catalogue (a cheap check; it is built again only when files changed).
@@ -99,7 +99,8 @@ pub struct Serve {
     catalogue_cell: std::sync::OnceLock<Arc<Catalogue>>,
     /// Imports from media servers into the user data (decision 0030, amended 2026-10-15).
     pub import: import_job::Importer,
-    rules: RwLock<Rules>,
+    /// Each catalogue folder's tag rules (OQ-GEN-22): its library's encoding, the install's default and aliases.
+    rules: RwLock<FolderRules>,
     /// When the library was last built, epoch seconds (`getIndexes`' `lastModified`).
     built_at: RwLock<i64>,
     /// Told each time the library is built (its time): views kept from the built-in source can read it again.
@@ -217,7 +218,7 @@ impl Serve {
             throttle: Default::default(),
             catalogue_cell: Default::default(),
             import: import_job::Importer::default(),
-            rules: RwLock::new(rules),
+            rules: RwLock::new(FolderRules::from(rules)),
             built_at: RwLock::new(now()),
             built: tokio::sync::watch::channel(0).0,
             checked: Default::default(),
@@ -512,8 +513,6 @@ impl Serve {
     /// Records a view shows that changed, moved from what the catalogue owes into the change log and told (`subscribe_records`).
     /// A failure is logged; what is owed stays owed for the next check. Blocking.
     fn records_logged(&self) {
-        use crate::catalogue::record_log::Now;
-        use crate::userdata::offline::Op;
         loop {
             let owed = match self.catalogue().owed_records(OWED_AT_ONCE) {
                 Ok(owed) if !owed.is_empty() => owed,
@@ -523,30 +522,45 @@ impl Serve {
                     return;
                 }
             };
-            let ids: Vec<RecordChanged> = owed
-                .iter()
-                .map(|o| match o.now {
-                    Now::Changed => RecordChanged { id: ids::record(o.record), op: "changed", into: None },
-                    Now::Merged { into } => RecordChanged { id: ids::record(o.record), op: "merged", into: Some(ids::record(into)) },
-                    Now::Forgotten => RecordChanged { id: ids::record(o.record), op: "forgotten", into: None },
-                })
-                .collect();
-            let rows: Vec<(String, Op, Option<String>)> =
-                ids.iter().map(|c| (c.id.clone(), if c.op == "changed" { Op::Changed } else { Op::Deleted }, c.into.clone())).collect();
-            let logged = self.userdata.log_records(&rows).and_then(|rev| self.catalogue().owed_moved(&owed).map(|()| rev));
-            match logged {
-                Ok(rev) => {
-                    let _ = self.records.send(Arc::new(RecordsChanged { rev, ids }));
-                }
-                Err(e) => {
-                    tracing::warn!(target: "library", reason = %format!("{e:#}"), "the records' changes were not logged: owed for the next check");
-                    return;
-                }
+            if let Err(e) = self.log_owed(&owed) {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "the records' changes were not logged: owed for the next check");
+                return;
             }
             if owed.len() < OWED_AT_ONCE {
                 return;
             }
         }
+    }
+
+    /// Owed rows into the change log at one rev, moved out of what the catalogue owes, and told: that rev.
+    fn log_owed(&self, owed: &[crate::catalogue::record_log::Owed]) -> Result<i64> {
+        use crate::catalogue::record_log::Now;
+        use crate::userdata::offline::Op;
+        let ids: Vec<RecordChanged> = owed
+            .iter()
+            .map(|o| match o.now {
+                Now::Changed => RecordChanged { id: ids::record(o.record), op: "changed", into: None },
+                Now::Merged { into } => RecordChanged { id: ids::record(o.record), op: "merged", into: Some(ids::record(into)) },
+                Now::Forgotten => RecordChanged { id: ids::record(o.record), op: "forgotten", into: None },
+            })
+            .collect();
+        let rows: Vec<(String, Op, Option<String>)> =
+            ids.iter().map(|c| (c.id.clone(), if c.op == "changed" { Op::Changed } else { Op::Deleted }, c.into.clone())).collect();
+        let rev = self.userdata.log_records(&rows)?;
+        self.catalogue().owed_moved(owed)?;
+        let _ = self.records.send(Arc::new(RecordsChanged { rev, ids }));
+        Ok(rev)
+    }
+
+    /// The records a command's Change just wrote, logged now, before its answer (SCENARIOS-GF CP9): their rows owed by the
+    /// catalogue's triggers move into the change log at one rev and are told, so the refresh's owed-move never logs them twice.
+    /// The rev; none where none was owed. Blocking.
+    pub fn log_records_now(&self, records: &[i64]) -> Result<Option<i64>> {
+        let owed = self.catalogue().owed_records_of(records)?;
+        if owed.is_empty() {
+            return Ok(None);
+        }
+        self.log_owed(&owed).map(Some)
     }
 
     /// Every record a view shows that changes from now on, as the change log has it (LV3).
@@ -556,21 +570,26 @@ impl Serve {
 
     /// `refresh`'s check and build. Blocking.
     fn check(&self) -> Result<bool> {
-        // The libraries as they are now: `main` set them before the first build, a change in Settings arrives here.
+        // The libraries as they are now, with each folder's tag rules (OQ-GEN-22): `main` set them before the first build, a
+        // change in Settings arrives here.
         if let Some(incoming) = self.incoming() {
             self.library.set_kinds(incoming.folder_kinds());
+            *self.rules.write().unwrap_or_else(|p| p.into_inner()) = incoming.folder_rules();
+        } else if let Some(dir) = &self.data_dir
+            && let Ok(Some(saved)) = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())
+        {
+            // Without the app (a test), the install's tag rules as saved in Settings, so a change there needs no restart.
+            *self.rules.write().unwrap_or_else(|p| p.into_inner()) = FolderRules::from(saved.tag_rules);
         }
         // Left over from a build that could not finish it: with nothing changed there may be no other build to ask.
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
         }
-        // The tag rules as saved in Settings, so a change there needs no restart.
-        if let Some(dir) = &self.data_dir
-            && let Ok(Some(saved)) = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())
-        {
-            *self.rules.write().unwrap_or_else(|p| p.into_inner()) = saved.tag_rules;
+        let rules = self.rules();
+        // The crates' facts split each file's words by its library's rules too.
+        if let Some(cat) = self.catalogue_cell.get() {
+            cat.set_folder_rules(rules.clone());
         }
-        let rules = self.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
         // The types the library was last built with, at a start's first check (RF1): a library built before it may not be built
         // again for a while, and the had rule classes a had record by its album's type.
         if self.checked.lock().unwrap_or_else(|p| p.into_inner()).is_none() {
@@ -832,9 +851,18 @@ impl Serve {
         }
     }
 
-    /// The tag rules as last read (Settings › Libraries; their aliases name the harvested words too, 0.9.7).
-    pub fn rules(&self) -> Rules {
+    /// Each catalogue folder's tag rules as last read (Settings › Libraries, a library's own and the default; the install's
+    /// aliases name the harvested words too, 0.9.7).
+    pub fn rules(&self) -> FolderRules {
         self.rules.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// Each folder's tag rules from now on, before the next check reads them again (a start, a test).
+    pub fn set_rules(&self, rules: FolderRules) {
+        if let Some(cat) = self.catalogue_cell.get() {
+            cat.set_folder_rules(rules.clone());
+        }
+        *self.rules.write().unwrap_or_else(|p| p.into_inner()) = rules;
     }
 
     /// Every album's cover stamp (0.9.7): the page puts it on each cover's address, which may then be kept for good.

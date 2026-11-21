@@ -48,6 +48,14 @@ pub struct ReleaseView {
     /// Its pages elsewhere as MusicBrainz links them (`url-rels`, F14.5): its Bandcamp page among them.
     #[serde(skip)]
     pub links: Vec<String>,
+    /// What matching reads of it besides (CU15's door, `references_door::About`): its first artist credit's id, its first medium's
+    /// format, its release group.
+    #[serde(skip)]
+    pub artist_id: Option<String>,
+    #[serde(skip)]
+    pub format: String,
+    #[serde(skip)]
+    pub group: Option<String>,
 }
 
 /// A release's tracks as MusicBrainz gives them (with its recordings and artist credits).
@@ -76,21 +84,26 @@ pub fn release_of(v: &Value) -> ReleaseView {
             });
         }
     }
+    let (artist, artist_id) = credit(&v["artist-credit"]);
     ReleaseView {
         release: v["id"].as_str().unwrap_or_default().to_string(),
         title: v["title"].as_str().unwrap_or_default().to_string(),
-        artist: credit(&v["artist-credit"]).0,
+        artist,
+        artist_id,
+        format: v["media"][0]["format"].as_str().unwrap_or_default().to_string(),
+        group: v["release-group"]["id"].as_str().map(str::to_string),
         year: v["date"].as_str().and_then(|d| d.get(..4)).and_then(|y| y.parse().ok()),
         tracks,
         links: v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect(),
     }
 }
 
-/// A release by its MusicBrainz id, as MusicBrainz lists its tracks (none held: a record not in the library yet).
+/// A release by its MusicBrainz id, as MusicBrainz lists its tracks (none held: a record not in the library yet), with its release
+/// group. Asked at MusicBrainz's web service (`discover::mb_ws`, the tests' fake).
 pub async fn release_by_id(id: &str) -> Result<ReleaseView> {
     let http = super::discover::http()?;
     let v: Value = http
-        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits+url-rels&fmt=json"))
+        .get(format!("{}/release/{id}?inc=recordings+artist-credits+url-rels+release-groups&fmt=json", super::discover::mb_ws()))
         .asked()
         .await?
         .error_for_status()?

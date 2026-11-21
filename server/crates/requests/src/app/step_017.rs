@@ -45,7 +45,7 @@
 use anyhow::{Context, Result};
 
 use crate::catalogue::records::{CREDITS_017, FOLD_017, JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, CarriedRequest, Ref};
-use crate::catalogue::{Catalogue, Rules};
+use crate::catalogue::{Catalogue, FolderRules};
 use crate::serve::library::FolderRows;
 use crate::settings::LibraryKind;
 use crate::userdata::UserData;
@@ -123,7 +123,7 @@ fn give_again(cat: &Catalogue, ud: &UserData, asked_twice: &mut Vec<serde_json::
 
 /// The step at a start: done before, or done now. `kinds` (each catalogue folder's library, in the libraries' order) and `rules`
 /// (the tag rules) as the library's builds have them: the part `credits` makes the albums a build makes. Blocking.
-pub fn run(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], rules: &Rules) -> Result<()> {
+pub fn run(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], rules: &FolderRules) -> Result<()> {
     run_with(cat, ud, &|_| Ok(()))?;
     band_waves(cat)?;
     credits(cat, kinds, rules, &|| Ok(()))?;
@@ -136,7 +136,7 @@ pub fn run(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], rules: 
 /// them (`kinds`); each album's record the first its tracks hold, as the rows read say, so no question is asked per album; written
 /// in one transaction whose last write is its mark (`Catalogue::credit_files_017`). It says it begins, and how many records it
 /// credited. `after` hears it done, inside its transaction (what the tests cut it by). Blocking.
-pub(crate) fn credits(cat: &Catalogue, kinds: &[(i64, LibraryKind)], rules: &Rules, after: &dyn Fn() -> Result<()>) -> Result<()> {
+pub(crate) fn credits(cat: &Catalogue, kinds: &[(i64, LibraryKind)], rules: &FolderRules, after: &dyn Fn() -> Result<()>) -> Result<()> {
     let named = || format!("0.17's step, part {CREDITS_017}");
     if cat.part_done_017(CREDITS_017).with_context(named)? {
         return Ok(());
@@ -420,7 +420,7 @@ mod tests {
     /// The step as these tests run it: no word from the app on the libraries (the first folder Music, the others Incoming), the
     /// tag rules as they come.
     fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
-        super::run(cat, ud, &[], &Rules::default())
+        super::run(cat, ud, &[], &FolderRules::default())
     }
 
     /// FX01's data folder, its catalogue opened with its one library (`/music`) in use.
@@ -543,7 +543,7 @@ mod tests {
     /// library's albums, ranked by the libraries' kinds.
     fn as_built(cat: &Catalogue, kinds: &[(i64, LibraryKind)]) -> Vec<crate::catalogue::AlbumCopy> {
         let folders: Vec<FolderRows> = cat.folders().iter().map(|(folder, root)| FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect();
-        let mut albums = crate::serve::library::album_copies(&folders, &Rules::default());
+        let mut albums = crate::serve::library::album_copies(&folders, &FolderRules::default());
         albums.iter_mut().for_each(|a| a.rank = crate::serve::copies::keeping(crate::serve::library::kind_in(kinds, a.folder).0));
         albums
     }
@@ -559,7 +559,7 @@ mod tests {
     /// make their doubles after it).
     fn run_without_fold(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)]) {
         run_without_credits(cat, ud);
-        credits(cat, kinds, &Rules::default(), &|| Ok(())).unwrap();
+        credits(cat, kinds, &FolderRules::default(), &|| Ok(())).unwrap();
     }
 
     /// The function whose head is `head` in `src`, to its closing brace, indented as its head is (the lines ended as a checkout
@@ -1019,7 +1019,7 @@ mod tests {
         let (cat, ud, kinds) = data.open_both();
         let kite = cat.artist_for("Kite Theory").unwrap();
         assert!(cat.artist_apart("Kite Theory").unwrap() > kite, "a second Kite Theory");
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         let artist = |name: &str| cat.artist_of(name).unwrap().unwrap_or_else(|| panic!("no {name}"));
         let held: Vec<i64> = data
             .texts("catalogue.sqlite", "SELECT DISTINCT CAST(t.record AS TEXT) FROM files f JOIN tracks t ON t.id = f.track WHERE f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL ORDER BY t.record")
@@ -1076,10 +1076,10 @@ mod tests {
     fn the_credits_part_runs_once_and_goes_on_after_a_cut() {
         let twice = Data::tagged("credits-twice");
         let (cat, ud, kinds) = twice.open_both();
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         let (first, marks) = (twice.credit_rows_with_at(), twice.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key"));
         assert!(twice.marks().contains(&"credits".to_string()));
-        let lines = crate::diagnostics::logged_lines(|| super::run(&cat, &ud, &kinds, &Rules::default()).unwrap());
+        let lines = crate::diagnostics::logged_lines(|| super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap());
         assert_eq!(twice.credit_rows_with_at(), first, "run again: nothing written");
         assert_eq!(twice.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key"), marks);
         assert!(parts_said(&lines).is_empty() && !lines.iter().any(|l| l.contains("credited")), "and nothing said: {lines:#?}");
@@ -1087,12 +1087,12 @@ mod tests {
         let cut = Data::tagged("credits-cut");
         let (cat, ud, kinds) = cut.open_both();
         run_without_credits(&cat, &ud);
-        let err = credits(&cat, &kinds, &Rules::default(), &|| anyhow::bail!("cut")).unwrap_err();
+        let err = credits(&cat, &kinds, &FolderRules::default(), &|| anyhow::bail!("cut")).unwrap_err();
         assert_eq!(format!("{err:#}"), "0.17's step, part credits: cut");
         let files = |data: &Data| data.sql::<i64>("catalogue.sqlite", "SELECT (SELECT count(*) FROM record_artists WHERE how = 'files') + (SELECT count(*) FROM record_labels WHERE how = 'files')");
         assert_eq!(files(&cut), 0, "cut off: no credit of the files written");
         assert!(!cut.marks().contains(&"credits".to_string()), "and no mark");
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         assert!(cut.marks().contains(&"credits".to_string()));
         assert_eq!(cut.credit_rows(), twice.credit_rows(), "the next start completes it");
 
@@ -1102,7 +1102,7 @@ mod tests {
         let mut before: Vec<String> = PARTS_017.iter().map(|p| p.to_string()).chain(["band_wave".to_string()]).collect();
         before.sort();
         assert_eq!(staged.marks(), before, "every mark but the credits'");
-        let lines = crate::diagnostics::logged_lines(|| super::run(&cat, &ud, &kinds, &Rules::default()).unwrap());
+        let lines = crate::diagnostics::logged_lines(|| super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap());
         assert_eq!(parts_said(&lines), ["credits", "fold"], "the part, and the fold after it: {lines:#?}");
         assert_eq!(staged.credit_rows(), twice.credit_rows());
     }
@@ -1149,7 +1149,7 @@ mod tests {
         assert!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE retired_at IS NOT NULL") > 0, "a retired record");
         assert!(!before[4].is_empty(), "records not had with listing credits");
         assert!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM request WHERE status = 'approved'") > 0, "open requests");
-        credits(&cat, &kinds, &Rules::default(), &|| Ok(())).unwrap();
+        credits(&cat, &kinds, &FolderRules::default(), &|| Ok(())).unwrap();
         assert!(cat.part_done_017(CREDITS_017).unwrap() && !data.files_credits().is_empty(), "the part ran");
         let after = snapshot();
         for (n, what) in ["tracks", "records", "files", "references not the files'", "listing credits of records not had", "requests"].iter().enumerate() {
@@ -1173,7 +1173,7 @@ mod tests {
         let (cat, ud, kinds) = data.open_both();
         run_without_credits(&cat, &ud);
         data.batch("catalogue.sqlite", "ALTER TABLE analysis_shape RENAME TO shape_set_aside");
-        credits(&cat, &kinds, &Rules::default(), &|| Ok(())).expect("no statement names the shape");
+        credits(&cat, &kinds, &FolderRules::default(), &|| Ok(())).expect("no statement names the shape");
         assert!(!data.files_credits().is_empty());
         let catalogue = include_str!("../../../store/src/catalogue/mod.rs");
         let reader = body(catalogue, "pub fn rows_to_credit(");
@@ -1476,7 +1476,7 @@ mod tests {
         run_without_credits(&cat, &ud);
         let step = step.elapsed();
         let part = std::time::Instant::now();
-        credits(&cat, &[], &Rules::default(), &|| Ok(())).unwrap();
+        credits(&cat, &[], &FolderRules::default(), &|| Ok(())).unwrap();
         let part = part.elapsed();
         let folding = std::time::Instant::now();
         fold(&cat, &ud, &[], &|| Ok(())).unwrap();
@@ -1488,7 +1488,7 @@ mod tests {
         let copies_at = std::time::Instant::now();
         let folders: Vec<crate::serve::library::FolderRows> =
             cat.folders().iter().map(|(folder, root)| crate::serve::library::FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect();
-        let copies = crate::serve::library::album_copies(&folders, &crate::catalogue::Rules::default());
+        let copies = crate::serve::library::album_copies(&folders, &crate::catalogue::FolderRules::default());
         let copies_took = copies_at.elapsed();
         let build = std::time::Instant::now();
         cat.keep_files_names(&copies).unwrap();
@@ -2037,7 +2037,7 @@ mod tests {
         );
         let (cat, ud) = data.open_with(&roots);
         ud.set_overrides(&[ids::record(42)], &[("year".to_string(), Some(serde_json::json!(2014)))], 1).unwrap();
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         let now = |r: i64| cat.record(r).unwrap().unwrap().id;
         for ((a, b), what) in [((41, 42), "Music's and bob's own"), ((43, 44), "bob's own, the older, and Music's"), ((49, 50), "a single and an LP of its name (RG1)")] {
             assert_eq!((now(a), now(b)), (a, b), "{what}: two records");
@@ -2079,7 +2079,7 @@ mod tests {
         let plain = Data::tagged("credits-plain");
         {
             let (cat, ud, kinds) = plain.open_both();
-            super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+            super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
             let mark: serde_json::Value = serde_json::from_str(&cat.meta("017:credits").unwrap()).unwrap();
             assert!(mark.get("apart").is_none(), "(a) no artist made apart: {mark}");
         }
@@ -2088,7 +2088,7 @@ mod tests {
         let data = Data::tagged("credits-ids");
         let (cat, ud, kinds) = data.open_both();
         tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("musicbrainz_albumartistid", B)]);
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         let holder = |id: &str| -> Vec<String> { cat.subject_of(&crate::catalogue::records::Ref::new("musicbrainz", "artist", id)).unwrap() };
         let harbour = cat.artist_of("Glass Harbour").unwrap().unwrap();
         assert_eq!(holder(HARBOUR), [crate::serve::ids::artist(harbour)], "Glass Harbour holds their own id");
@@ -2110,7 +2110,7 @@ mod tests {
         let (cat, ud, kinds) = data.open_both();
         cat.execute_for_tests("UPDATE tags SET value = 'Glass H\u{e1}rbour' WHERE folder = 0 AND name = 'albumartist' AND rel LIKE 'Glass Harbour/Partial Shore (2011)/%';");
         tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("musicbrainz_albumartistid", "00000000-0000-4000-8000-000000000201")]);
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         let credited = data.texts("catalogue.sqlite", "SELECT DISTINCT CAST(artist AS TEXT) FROM record_artists WHERE record IN (1, 8) AND how = 'files'");
         assert_eq!(credited.len(), 1, "one artist for both spellings: {credited:?}");
         assert_eq!(credited[0].parse::<i64>().unwrap(), cat.artist_of("Glass Harbour").unwrap().unwrap());
@@ -2125,7 +2125,7 @@ mod tests {
         tag_album(&cat, "Kite Theory/Night Walks EP (2020)/%", &[("label", "Warp")]);
         tag_album(&cat, "Kite Theory/Undated (no year)/%", &[("label", "Warp Records")]);
         tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("label", "Warp Records,Beat Records")]);
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         let named = data.texts("catalogue.sqlite", "SELECT name FROM labels WHERE name LIKE '%Warp%' OR name LIKE '%Beat%' ORDER BY name");
         assert_eq!(named, ["Beat Records", "Warp"], "one label per bare name");
         let warp = data.texts("catalogue.sqlite", "SELECT CAST(r.record AS TEXT) FROM record_labels r JOIN labels l ON l.id = r.label WHERE l.name = 'Warp' ORDER BY r.record");

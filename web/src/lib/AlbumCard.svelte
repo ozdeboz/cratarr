@@ -8,6 +8,8 @@
   import CoverBusy from './CoverBusy.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
+  import RecordMenu, { opensRecord } from './sheet/Record.svelte';
+  import type { PlaceWord } from './sheet/record';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import { BANDCAMP } from './bandcampPreview';
   import Cover from './Cover.svelte';
@@ -29,6 +31,7 @@
     busy = false,
     request = undefined,
     notHad = false,
+    from = 'library',
   }: {
     source: string;
     album: Pick<ListedAlbum, 'id' | 'title' | 'year'> & Partial<ListedAlbum>;
@@ -43,6 +46,8 @@
     request?: RequestMark | null;
     /** A record not had (W9): it opens its own page, and its menu holds only what needs no copy of it. */
     notHad?: boolean;
+    /** Where its record's sheet opens from (the when-table's place): the Library's, More from, Similar; an artist's page. */
+    from?: PlaceWord;
   } = $props();
   let menu = $state(false);
   // Its libraries, as dots before its title (0.9.3): as the Library's lists show them.
@@ -54,6 +59,7 @@
 </script>
 
 {#if menu && source === BANDCAMP}<BandcampAlbumMenu album={{ id: album.id, title: album.title, artist: album.artist ?? null }} onclose={() => (menu = false)} />
+{:else if menu && opensRecord(source)}<RecordMenu id={album.id} from={from} title={album.title} credit={album.artist ?? null} onclose={() => (menu = false)} />
 {:else if menu}<AlbumMenu {source} album={{ ...album, artist: album.artist ?? null }} {notHad} onclose={() => (menu = false)} />{/if}
 <div class="card-box">
 <button

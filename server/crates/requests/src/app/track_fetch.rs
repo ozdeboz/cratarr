@@ -41,7 +41,7 @@ pub use rows::{keep_in, restarted};
 pub const SLSKD_URL: &str = "slskd:url";
 pub const SLSKD_KEY: &str = "slskd:key";
 pub const SLSKD_FOLDER: &str = "slskd:folder";
-pub const ACOUSTID_KEY: &str = "acoustid:key";
+pub use super::references_door::ACOUSTID_KEY;
 /// A file's length within this of the release's track places it there (s), as `incomplete` places them.
 const PLACE_SECS: i64 = 5;
 /// How long a search is waited for at most.
@@ -79,9 +79,8 @@ pub fn slskd_set(ud: &crate::userdata::UserData) -> Result<Option<SlskdSet>> {
     })
 }
 
-pub fn acoustid_key(ud: &crate::userdata::UserData) -> Result<Option<String>> {
-    choice(ud, ACOUSTID_KEY)
-}
+/// The server's AcoustID key, where set: the door's (`references_door`), which asks AcoustID with it.
+pub use super::references_door::acoustid_key;
 
 fn served() -> Result<Arc<crate::serve::Serve>> {
     crate::serve::instance().context("Cratarr's own library is not open")
@@ -715,11 +714,9 @@ pub async fn slskd_ready() -> Result<(Slskd, PathBuf)> {
     slskd().await
 }
 
-/// What AcoustID knows of a file, asked with the server's key.
-async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid::Found>> {
-    let ud = served()?.userdata.clone();
-    let key = crate::run::spawn_blocking(move || acoustid_key(&ud)).await??.context("AcoustID is not set up: Settings › Server")?;
-    crate::acoustid::lookup(&key, &print).await
+/// What AcoustID knows of a file, asked through the door as installed (CU15: `references_door`, with the server's key).
+fn looked_up(print: crate::acoustid::Print) -> impl std::future::Future<Output = Result<Vec<crate::acoustid::Found>>> + Send + 'static {
+    super::references_door::recordings(print)
 }
 
 /// The gate stopped short of a verdict, and what it found wrong with a file itself: moved down for the turn's class
@@ -735,10 +732,12 @@ where
     judged(printed(file).await?, track, refused_for, lookup).await
 }
 
-/// The file decoded whole and heard (`acoustid::print`), off the runtime's threads.
+/// The file decoded whole and heard (`acoustid::print`), off the runtime's threads, once there is room for a decode
+/// (`memwatch::room`, CU15.1). A file that cannot be heard (gone, unreadable, not sound) is the file's fault (`Unfit`: TN.1's File).
 async fn printed(file: &Path) -> Result<crate::acoustid::Print> {
+    crate::memwatch::wait_for_room().await;
     let f = file.to_path_buf();
-    crate::run::spawn_blocking(move || crate::acoustid::print(&f)).await?
+    crate::run::spawn_blocking(move || crate::acoustid::print(&f)).await?.map_err(|e| Unfit(format!("{e:#}")).into())
 }
 
 /// A heard file judged: refused by `refused` before AcoustID is asked (single-track fetch's rule, or Soulseek's), else held against
@@ -1918,6 +1917,45 @@ mod tests {
         assert_eq!(refused.0.unwrap_err().to_string(), "Clipped at 0:01");
         assert_eq!(refused.1.unwrap_err().to_string(), "A click at 0:01; a pop at the very end");
         assert!(before == after, "nothing written into the files");
+    }
+
+    /// CU15.1: the gate asks through the door. A stand-in door expecting the recordings of one print, answering 0.97 for recording
+    /// `rec-r1`; a staged FLAC of a release track `rec-r1` of its length. Soulseek's gate (`gate_track`) and the single fetch's (`gate`)
+    /// each ask the door once, with the file's print, and pass at 0.97; a track with no recording (Discogs' or Bandcamp's list) asks
+    /// nothing (OQ9 (a)); the file deleted before the gate runs is refused as the file's, the door never asked. Never AcoustID asked
+    /// but through the door; never a decode while there is no room (`memwatch::room`).
+    #[tokio::test]
+    async fn the_gate_asks_through_the_door() {
+        use crate::app::references_door::{Asked, StandIn};
+        use crate::app::turn::{Failure, class};
+        let _one = crate::app::switches::TEST_STATE.read().await; // the gate reads background reading's switch, which TN's tests move
+        let d = crate::retag::fixtures::dir("gate-door");
+        let tide = crate::fixtures::gate::TIDE_TABLES;
+        let file = d.join("02 Neap.flac");
+        std::fs::copy(crate::fixtures::gate::gate_cases_once().join(crate::fixtures::gate::CLEAN).join(tide.folder()).join(tide.file(2)), &file).unwrap();
+        let print = crate::acoustid::print(&file).unwrap();
+        let track = track_for(1, 2, "Neap", "Glass Harbour", Some(4_000), "rec-r1");
+        let door = StandIn::new().recordings(vec![crate::acoustid::Found { score: 0.97, recordings: vec![crate::acoustid::Recording { id: "rec-r1".into() }] }]).install();
+        let soulseeks = gate_track(&file, &track).await;
+        let single = gate(&file, &track).await;
+        assert_eq!((soulseeks.unwrap(), single.unwrap()), (0.97, 0.97), "both pass at the door's 0.97");
+        let asked = Asked::Recordings { fingerprint: print.fingerprint.clone(), duration_secs: print.duration_secs };
+        assert_eq!(door.asked(), [asked.clone(), asked.clone()], "once a file, with its print");
+        assert_eq!(gate(&file, &track_for(1, 2, "Neap", "Glass Harbour", Some(4_000), "")).await.unwrap(), 1.0, "no recording: judged by sound and length");
+        assert_eq!(door.asked().len(), 2, "no recording, nothing asked");
+        // No room: nothing decoded, nothing asked, while there is none.
+        crate::memwatch::FULL.set(true);
+        let waited = tokio::time::timeout(std::time::Duration::from_millis(300), gate(&file, &track)).await;
+        crate::memwatch::FULL.set(false);
+        assert!(waited.is_err(), "it waits for room");
+        assert_eq!(door.asked().len(), 2, "no decode while there is no room");
+        // The variant: the staged file deleted before the gate runs.
+        std::fs::remove_file(&file).unwrap();
+        let gone = gate(&file, &track).await.unwrap_err();
+        assert_eq!(class(&gone), Failure::File, "refused as the file's: {gone:#}");
+        assert_eq!(door.asked().len(), 2, "the door never asked");
+        assert!(door.violations().is_empty(), "{:?}", door.violations());
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// SK5.5 (OQ-SK5): single-track fetch's gate, which the bulk queue fetches through too (`fetch` → `gate`), keeps refusing a

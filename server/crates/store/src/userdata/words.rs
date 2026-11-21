@@ -118,6 +118,14 @@ impl UserData {
         Ok(())
     }
 
+    /// What a source says of a subject as kept, in the order of its words.
+    pub fn words_of(&self, subject: &str, source: &str) -> Result<Vec<RawWord>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT word, kind, weight FROM words WHERE subject = ?1 AND source = ?2 ORDER BY word")?;
+        let rows = st.query_map(params![subject, source], |r| Ok(RawWord { word: r.get(0)?, kind: r.get(1)?, weight: r.get(2)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// What a source says of a subject now, in place of what it said before; noted as asked (`ok`: it answered).
     pub fn set_words(&self, subject: &str, source: &str, words: &[RawWord], ok: bool, at: i64) -> Result<()> {
         let mut db = self.db();

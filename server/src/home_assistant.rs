@@ -319,8 +319,29 @@ async fn home_assistant_still_reads_every_field_it_uses() {
     // as the value it serves.
     let (status, refused) = ha(&w, key, Method::GET, "/api/playlists/by-name?name=evening&shuffle=true&limit=50", None).await;
     assert!(status == StatusCode::CONFLICT && refused["error"].is_string(), "GET /api/playlists/by-name with no server: {status} {refused}");
-    let by_name = serde_json::to_value(crate::app::ByName { playlist: Some("Evening".into()), tracks: vec![freddie.clone()] }).unwrap();
-    holds("GET /api/playlists/by-name", &by_name, &[("playlist", Is::StrOrNull), ("tracks", Is::Arr)]);
+    // HA1 (HA-CONTRACT-0.18 §3, the owner 2026-11-21): beside its `pl-` id, the playlist's name as shown and what a voice says for
+    // it: its first spoken name, else its name, whatever words matched (Assist spoke the id). Found as the route finds it, for the
+    // key's account.
+    let evening = created["playlist"].as_str().expect("its id").to_string();
+    let me = crate::serve::who::Who { user: "me".into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+    let spoken = vec!["evening music".to_string(), "dinner".to_string()];
+    crate::serve::who::acting_as(me.clone(), w.app.playlists.set_spoken(&evening, &spoken)).await.unwrap();
+    let (status, nineties) = ha(&w, key, Method::POST, "/api/playlists", Some(json!({ "name": "High 90s" }))).await;
+    assert!(status.is_success(), "{nineties}");
+    let by_name = |found| serde_json::to_value(crate::app::ByName::of(found, vec![freddie.clone()])).unwrap();
+    // Said by its name: still its first spoken name, as its spoken names are kept and shown (by name: "dinner" first).
+    let said = by_name(crate::serve::who::acting_as(me.clone(), w.app.playlists.spoken("evening")).await.unwrap());
+    holds("GET /api/playlists/by-name", &said, &[("playlist", Is::StrOrNull), ("name", Is::StrOrNull), ("spoken", Is::StrOrNull), ("tracks", Is::Arr)]);
+    assert!(evening.starts_with("pl-"), "{evening}");
+    assert_eq!(
+        (said["playlist"].as_str(), said["name"].as_str(), said["spoken"].as_str()),
+        (Some(evening.as_str()), Some("Evening"), Some("dinner")),
+        "its id, its name, its first spoken name, whatever words matched: {said}"
+    );
+    let by_spoken = by_name(crate::serve::who::acting_as(me.clone(), w.app.playlists.spoken("dinner")).await.unwrap());
+    assert_eq!((by_spoken["playlist"].as_str(), by_spoken["spoken"].as_str()), (Some(evening.as_str()), Some("dinner")), "{by_spoken}");
+    let nineties = by_name(crate::serve::who::acting_as(me, w.app.playlists.spoken("high 90s")).await.unwrap());
+    assert_eq!((nineties["name"].as_str(), nineties["spoken"].as_str()), (Some("High 90s"), Some("High 90s")), "no spoken name: its name: {nineties}");
 
     // 5. The health check: `status` "ok", with no key at all.
     let (status, health) = w.send(("x-none", ""), Method::GET, "/api/health", Body::empty()).await;

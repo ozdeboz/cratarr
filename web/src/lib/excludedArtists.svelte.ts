@@ -35,14 +35,14 @@ export async function setExcludedEverywhere(name: string, on: boolean) {
   const key = artistKey(name);
   try {
     if (on) {
-      const r = await excludeArtist(key, name);
+      const { result: r, undo } = await excludeArtist(key, name);
       excludedArtists.everywhere = [...(excludedArtists.everywhere ?? []).filter((a) => a.key !== r.key), { key: r.key, name: r.name, at: r.at }];
-      withUndo(`${name} excluded everywhere.`, [r.undo], { after: () => loadExcludedArtists(true) });
+      withUndo(`${name} excluded everywhere.`, [undo], { after: () => loadExcludedArtists(true) });
     } else {
       const was = excludedArtists.everywhere?.find((a) => a.key === key || artistKey(a.name) === key);
-      const r = await includeArtist(was?.key ?? key);
+      const { result: r, undo } = await includeArtist(was?.key ?? key);
       excludedArtists.everywhere = (excludedArtists.everywhere ?? []).filter((a) => a.key !== r.key);
-      withUndo(`${name} back everywhere.`, [r.undo], { after: () => loadExcludedArtists(true) });
+      withUndo(`${name} back everywhere.`, [undo], { after: () => loadExcludedArtists(true) });
     }
   } catch (e) {
     toast.fail(e, on ? `Could not exclude ${name}` : `Could not take ${name} back`);

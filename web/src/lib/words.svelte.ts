@@ -22,6 +22,7 @@ const SOURCE_NAME: Record<WordSource, string> = {
   musicbrainz: 'MusicBrainz',
   discogs: 'Discogs',
   lastfm: 'Last.fm',
+  bandcamp: 'Bandcamp',
 };
 /** Who says a word, strongest first: "set by hand, Discogs". */
 export const sourceNames = (ids: readonly WordSource[]) => ids.map((id) => SOURCE_NAME[id] ?? id).join(', ');

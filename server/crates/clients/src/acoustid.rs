@@ -136,7 +136,15 @@ const LOOKUP: &str = "https://api.acoustid.org/v2/lookup";
 thread_local! {
     // The test's fake AcoustID on this thread (`FakeAcoustid`): its lookup's address, and a turn of its own, so its limit holds no
     // other test.
-    static FAKE: std::cell::RefCell<Option<(String, std::sync::Arc<Turn>)>> = const { std::cell::RefCell::new(None) };
+    static FAKE: std::cell::RefCell<Option<(Fake, std::sync::Arc<Turn>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Where a test's fake AcoustID answers: at an address (plain http), or in the process, each form answered as it comes.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone)]
+enum Fake {
+    At(String),
+    Answering(std::sync::Arc<dyn Fn(Vec<(&'static str, String)>) -> Heard + Send + Sync>),
 }
 
 /// Tests: this thread's lookups go to a fake AcoustID at `at` (its lookup's address, plain http) in a turn of its own, until this
@@ -147,7 +155,14 @@ pub struct FakeAcoustid;
 #[cfg(any(test, feature = "test-support"))]
 impl FakeAcoustid {
     pub fn at(at: String) -> Self {
-        FAKE.with(|f| *f.borrow_mut() = Some((at, std::sync::Arc::new(Turn::new(crate::app::turn::ACOUSTID)))));
+        FAKE.with(|f| *f.borrow_mut() = Some((Fake::At(at), std::sync::Arc::new(Turn::new(crate::app::turn::ACOUSTID)))));
+        FakeAcoustid
+    }
+
+    /// A fake answering in the process (no socket, so a test on tokio's paused clock keeps its time): each lookup's form answered
+    /// by `answer`, in a turn of its own.
+    pub fn answering(answer: impl Fn(Vec<(&'static str, String)>) -> Heard + Send + Sync + 'static) -> Self {
+        FAKE.with(|f| *f.borrow_mut() = Some((Fake::Answering(std::sync::Arc::new(answer)), std::sync::Arc::new(Turn::new(crate::app::turn::ACOUSTID)))));
         FakeAcoustid
     }
 }
@@ -163,9 +178,14 @@ impl Drop for FakeAcoustid {
 /// answer is the pause it asks for (TN.1), its error answer a `Problem`.
 pub async fn lookup(key: &str, print: &Print) -> Result<Vec<Found>> {
     #[cfg(any(test, feature = "test-support"))]
-    if let Some((at, turn)) = FAKE.with(|f| f.borrow().clone()) {
-        let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).user_agent(crate::app::reach::USER_AGENT).build()?;
-        return lookup_in(&turn, |form| posted(http, at, form), key, print).await;
+    if let Some((fake, turn)) = FAKE.with(|f| f.borrow().clone()) {
+        return match fake {
+            Fake::At(at) => {
+                let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).user_agent(crate::app::reach::USER_AGENT).build()?;
+                lookup_in(&turn, |form| posted(http, at, form), key, print).await
+            }
+            Fake::Answering(answer) => lookup_in(&turn, |form| std::future::ready(Ok(answer(form))), key, print).await,
+        };
     }
     let http = crate::app::reach::client(crate::app::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?;
     lookup_in(&TURN, |form| posted(http, LOOKUP.to_string(), form), key, print).await

@@ -25,7 +25,7 @@ use crate::userdata::overrides::Overrides;
 
 use super::copies::{Copy, Kind, copy_for, in_order, keeping};
 use super::ids;
-use crate::catalogue::{Rules, Say, ServedRow, vote_of};
+use crate::catalogue::{FolderRules, Say, ServedRow, vote_of};
 
 // journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
@@ -617,12 +617,12 @@ struct Song<'a> {
 /// The album artist of a file that credits none, not even an artist of its own.
 pub const UNKNOWN_ARTIST: &str = "[Unknown Artist]";
 
-fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
+fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
     // OBJ5: a track's title by the one rule (its name, else its file's), as every surface names it.
     let title = cratarr_rules::names::track_title(row.first("title"), &row.rel);
     let list = |list: &str, text: &str| {
         let from = if row.all(list).next().is_some() { list } else { text };
-        rules.values(from, &row.all(from).map(str::to_string).collect::<Vec<_>>())
+        rules.values(folder, from, &row.all(from).map(str::to_string).collect::<Vec<_>>())
     };
     let artists = list("artists", "artist");
     // OBJ5, NAMES.23: the credit by the one formatter over the artists the file names (`credit_text`), never its ARTIST text raw
@@ -638,7 +638,7 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
     let album = row.first("album").map(str::to_string).unwrap_or_else(|| "[Unknown Album]".into());
     let group = ids::album(row, &album_artist, folder);
     let album_base = ids::album(row, &album_artist, 0);
-    let genres = rules.values("genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
+    let genres = rules.values(folder, "genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
     Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, record: 0, album_id: String::new(), group, album_base, genres }
 }
 
@@ -706,7 +706,7 @@ impl Library {
 
     /// Every name these rows credit has its id, a new one given by the catalogue. What is kept is good for life, so the
     /// catalogue is asked only for a name not among it, and a restart, which keeps nothing, asks once.
-    fn credit<'r>(&self, cat: &crate::catalogue::Catalogue, rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &Rules) -> Result<()> {
+    fn credit<'r>(&self, cat: &crate::catalogue::Catalogue, rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &FolderRules) -> Result<()> {
         let names = credited_artists(rows, rules);
         let known = |artists: &HashMap<String, i64>| names.iter().all(|n| artists.contains_key(&ids::artist_key(n)));
         if !known(&self.artists.lock().unwrap_or_else(|p| p.into_inner())) {
@@ -801,7 +801,7 @@ impl Library {
     /// Builds the library again from these files, unless it was built from them already. Returns whether it was
     /// built. Blocking.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn refresh(&self, folders: &[FolderRows], rules: &Rules) -> Result<bool> {
+    pub fn refresh(&self, folders: &[FolderRows], rules: &FolderRules) -> Result<bool> {
         // The print of the files as given: a test's rows have no records until `build` gives them theirs.
         let print = fingerprint(folders);
         if self.built_from().as_deref() == Some(print.as_str()) {
@@ -816,7 +816,7 @@ impl Library {
     /// was built. Blocking. The server does it in its two steps (`change`, then `build_from`), to tell new analyses from
     /// changed songs; this is the timing test's.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn refresh_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<bool> {
+    pub fn refresh_from(&self, cat: &crate::catalogue::Catalogue, rules: &FolderRules) -> Result<bool> {
         let (change, print) = self.change(cat, rules)?;
         if change == Change::None {
             return Ok(false);
@@ -827,7 +827,7 @@ impl Library {
 
     /// What changed since the library was built (a cheap check: the catalogue's counts and sums), and the print to
     /// build it with. Blocking.
-    pub fn change(&self, cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<(Change, String)> {
+    pub fn change(&self, cat: &crate::catalogue::Catalogue, rules: &FolderRules) -> Result<(Change, String)> {
         let served = match cat.reader() {
             Some(c) => crate::catalogue::served_fingerprint(&c)?,
             None => cat.served_fingerprint()?,
@@ -854,7 +854,7 @@ impl Library {
     /// albums of the files that changed are built again (`update_rows`), unless what it is built from besides its files
     /// changed (`context`: the rules, the folders, a new catalogue), or that fails; then the whole of it. Whether it was
     /// built whole, and how many folders were built again. Blocking.
-    pub fn build_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules, print: &str) -> Result<(bool, usize)> {
+    pub fn build_from(&self, cat: &crate::catalogue::Catalogue, rules: &FolderRules, print: &str) -> Result<(bool, usize)> {
         let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
         let reader = cat.reader();
         let read = || {
@@ -946,21 +946,21 @@ impl Library {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
+    fn build(&self, folders: &[FolderRows], rules: &FolderRules) -> Result<()> {
         self.credit_in_tests(folders, rules);
         self.build_with(&with_records(folders, rules), rules, &Covers::new())
     }
 
     /// Stands in for `build_from` giving these rows' names their ids, in tests that write with no catalogue.
     #[cfg(any(test, feature = "test-support"))]
-    fn credit_in_tests(&self, folders: &[FolderRows], rules: &Rules) {
+    fn credit_in_tests(&self, folders: &[FolderRows], rules: &FolderRules) {
         for name in credited_artists(folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules) {
             self.artists.lock().unwrap_or_else(|p| p.into_inner()).entry(ids::artist_key(&name)).or_insert(artist_number_in_tests(&name));
         }
     }
 
     /// Builds the whole library from these files; `covers`, each folder's cover files (`catalogue::cover_prints`).
-    fn build_with(&self, folders: &[FolderRows], rules: &Rules, covers: &Covers) -> Result<()> {
+    fn build_with(&self, folders: &[FolderRows], rules: &FolderRules, covers: &Covers) -> Result<()> {
         let facts = self.facts();
         let roots: HashMap<i64, &str> = folders.iter().map(|f| (f.folder, f.root.as_str())).collect();
         let rows: Vec<(i64, &ServedRow)> = folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))).collect();
@@ -988,7 +988,7 @@ impl Library {
     /// a Renumber showed only after a whole build, half a minute on the NAS): each file keeps the print of the row it
     /// was built from, each album its kept facts' and cover files'; the folders where any differs, or a file came or
     /// went, are built again, with every folder their albums reach. The number of folders built again. Blocking.
-    fn update_rows(&self, folders: &[FolderRows], rules: &Rules, covers: &Covers) -> Result<usize> {
+    fn update_rows(&self, folders: &[FolderRows], rules: &FolderRules, covers: &Covers) -> Result<usize> {
         let facts = self.facts();
         let now: HashMap<(i64, &str), &ServedRow> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some() && r.record.is_some()).map(move |r| ((f.folder, r.rel.as_str()), r))).collect();
@@ -1034,7 +1034,7 @@ impl Library {
         mut dirs: BTreeSet<(i64, String)>,
         rows_of: &mut dyn FnMut(i64, &str) -> Result<Vec<ServedRow>>,
         roots: &HashMap<i64, &str>,
-        rules: &Rules,
+        rules: &FolderRules,
         covers: &Covers,
     ) -> Result<usize> {
         // The folders' rows, and every folder their albums (as built, and as they would be now) reach.
@@ -1211,7 +1211,7 @@ impl Library {
     /// added): read from the catalogue for their folders alone, so they show at once. Nothing where the library is not
     /// built from the catalogue as it is now in all else (its next check builds it). The number of folders built
     /// again. Blocking.
-    pub fn update_files(&self, cat: &crate::catalogue::Catalogue, rules: &Rules, paths: &[std::path::PathBuf]) -> Result<usize> {
+    pub fn update_files(&self, cat: &crate::catalogue::Catalogue, rules: &FolderRules, paths: &[std::path::PathBuf]) -> Result<usize> {
         let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
         let roots_now: Vec<(i64, String)> = cat.folders().iter().map(|(i, p)| (i, p.display().to_string())).collect();
         if self.built_context().as_deref() != Some(context(&cat.generation(), &roots_now, &self.kinds(), rules)?.as_str()) {
@@ -1533,13 +1533,13 @@ fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: 
 }
 
 /// What the library is built from besides its files: the catalogue's generation, its folders and their kinds, the rules.
-fn context(generation: &str, roots: &[(i64, String)], kinds: &[(i64, Kind)], rules: &Rules) -> Result<String> {
+fn context(generation: &str, roots: &[(i64, String)], kinds: &[(i64, Kind)], rules: &FolderRules) -> Result<String> {
     use md5::Digest;
     Ok(format!("{LAYOUT} {generation} {} {} {:x}", serde_json::to_string(roots)?, serde_json::to_string(kinds)?, md5::Md5::digest(serde_json::to_string(rules)?.as_bytes())))
 }
 
 /// The files these rows make, each folder one album (`one_album_per_folder`): the library's own grouping, records or not.
-fn grouped<'a>(rows: &[(i64, &'a ServedRow)], rules: &Rules) -> Vec<Song<'a>> {
+fn grouped<'a>(rows: &[(i64, &'a ServedRow)], rules: &FolderRules) -> Vec<Song<'a>> {
     let mut songs: Vec<Song> = rows.iter().filter(|(_, r)| r.track.is_some()).map(|(folder, r)| song(r, *folder, rules)).collect();
     one_album_per_folder(&mut songs);
     songs
@@ -1559,7 +1559,7 @@ fn group_vote<'a>(rows: impl Iterator<Item = &'a ServedRow>) -> Option<i64> {
 
 /// The songs these rows serve, each with its record (`group_vote`). A row with no record yet is not served, and it still had
 /// its say in the grouping, as `album_copies` must find the same albums.
-fn songs_of<'a>(rows: &[(i64, &'a ServedRow)], rules: &Rules) -> Vec<Song<'a>> {
+fn songs_of<'a>(rows: &[(i64, &'a ServedRow)], rules: &FolderRules) -> Vec<Song<'a>> {
     let mut songs = grouped(rows, rules);
     let mut groups: HashMap<&str, Vec<&ServedRow>> = HashMap::new();
     for s in &songs {
@@ -1650,7 +1650,7 @@ fn written_first<'a>(s: &'a Song, place: usize) -> (bool, i64, usize, i64, &'a s
 /// Every name these rows credit, as a song reads them. One song at a time: at a real library's size a list of them is not
 /// worth holding for this. A song's album artists are never settled to a name no song of that folder credits, so this holds
 /// what `one_album_per_folder` leaves too.
-fn credited_artists<'r>(rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &Rules) -> BTreeSet<String> {
+fn credited_artists<'r>(rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &FolderRules) -> BTreeSet<String> {
     rows.filter(|(_, r)| r.track.is_some())
         .flat_map(|(folder, r)| {
             let s = song(r, folder, rules);
@@ -1685,7 +1685,7 @@ fn labels_of_album(list: &[&Song]) -> Vec<(String, String)> {
 /// Stands in for `assign_records` in tests with no catalogue: each group a record of its own, from a stable hash of it,
 /// unless the test named one. So hand-made rows mean what they meant, and production has no fallback.
 #[cfg(any(test, feature = "test-support"))]
-fn with_records(folders: &[FolderRows], rules: &Rules) -> Vec<FolderRows> {
+fn with_records(folders: &[FolderRows], rules: &FolderRules) -> Vec<FolderRows> {
     use md5::Digest;
     let rows: Vec<(i64, &ServedRow)> = folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))).collect();
     let groups: HashMap<(i64, String), String> = grouped(&rows, rules).into_iter().map(|s| ((s.folder, s.row.rel.clone()), s.group)).collect();
@@ -1699,7 +1699,7 @@ fn with_records(folders: &[FolderRows], rules: &Rules) -> Vec<FolderRows> {
 
 /// The albums these folders make, each as the catalogue gives it a record: the library's own grouping, so a record is
 /// what a list shows. Pure.
-pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalogue::AlbumCopy> {
+pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::catalogue::AlbumCopy> {
     use crate::catalogue::identity::{Listed, RecordFacts, fold};
     let rows: Vec<(i64, &ServedRow)> = folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))).collect();
     let songs = grouped(&rows, rules);
@@ -1777,7 +1777,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
 
 /// Every album the first start gives a record to, read from the catalogue: what the libraries list, what no list shows and can
 /// come back, and every name either credits. No build has run, and 0.15's `library.sqlite` has gone with the layout. Blocking.
-pub fn first_albums(cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<crate::catalogue::FirstAlbums> {
+pub fn first_albums(cat: &crate::catalogue::Catalogue, rules: &FolderRules) -> Result<crate::catalogue::FirstAlbums> {
     let folders = cat.folders().iter().map(|(folder, root)| Ok(FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder)? })).collect::<Result<Vec<_>>>()?;
     let mut names = credited_artists(folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules);
     let served = album_copies(&folders, rules);
@@ -1796,7 +1796,7 @@ pub fn first_albums(cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<
 }
 
 /// The albums these rows make.
-fn album_ids(rows: &[(i64, &ServedRow)], rules: &Rules) -> BTreeSet<String> {
+fn album_ids(rows: &[(i64, &ServedRow)], rules: &FolderRules) -> BTreeSet<String> {
     songs_of(rows, rules).into_iter().map(|s| s.album_id).collect()
 }
 
@@ -1808,7 +1808,7 @@ fn write_albums(
     tx: &Connection,
     rows: &[(i64, &ServedRow)],
     roots: &HashMap<i64, &str>,
-    rules: &Rules,
+    rules: &FolderRules,
     facts: &Facts,
     covers: &Covers,
 ) -> Result<(Vec<String>, BTreeSet<String>)> {
@@ -2382,8 +2382,8 @@ pub mod testing {
     }
 
     pub fn build_now(lib: &Library, cat: &crate::catalogue::Catalogue) -> (bool, usize) {
-        let (_, print) = lib.change(cat, &Rules::default()).unwrap();
-        lib.build_from(cat, &Rules::default(), &print).unwrap()
+        let (_, print) = lib.change(cat, &FolderRules::default()).unwrap();
+        lib.build_from(cat, &FolderRules::default(), &print).unwrap()
     }
 
     /// A copy of a record: two tracks numbered from `first`, in `dir`, with the same tags as any other copy's.
@@ -2418,7 +2418,7 @@ pub mod testing {
     pub fn built_with(kinds: &[(i64, Kind)], folders: &[FolderRows]) -> Library {
         let lib = Library::open(None).unwrap();
         lib.set_kinds(kinds.to_vec());
-        lib.build(folders, &Rules::default()).unwrap();
+        lib.build(folders, &FolderRules::default()).unwrap();
         lib
     }
 
@@ -2428,7 +2428,7 @@ pub mod testing {
 
     /// `same_as_whole` where it matters what each folder's library is.
     pub fn same_as_whole_in(kinds: &[(i64, Kind)], before: &[FolderRows], after: &[FolderRows]) -> usize {
-        let rules = Rules::default();
+        let rules = FolderRules::default();
         let step = built_with(kinds, before);
         step.credit_in_tests(after, &rules);
         let n = step.update_rows(&with_records(after, &rules), &rules, &Covers::new()).unwrap();
@@ -2495,7 +2495,7 @@ mod tests {
     /// `before` built whole, then brought to `after` where it changed; against `after` built whole. The folders built
     /// again.
     fn same_as_whole(before: &[FolderRows], after: &[FolderRows], facts: impl Fn(&Library)) -> usize {
-        let rules = Rules::default();
+        let rules = FolderRules::default();
         let step = Library::open(None).unwrap();
         step.build(before, &rules).unwrap();
         facts(&step);
@@ -2602,21 +2602,21 @@ mod tests {
         let none = with(sample(), |rows| rows[2].tags.retain(|(n, _)| n != "genre"));
         let orb = || {
             let lib = Library::open(None).unwrap();
-            lib.build(&none, &Rules::default()).unwrap();
+            lib.build(&none, &FolderRules::default()).unwrap();
             let db = lib.db();
             db.query_row("SELECT id FROM albums WHERE name LIKE 'Adventures%'", [], |r| r.get::<_, String>(0)).unwrap()
         };
         let key = orb();
         let step = Library::open(None).unwrap();
-        step.build(&none, &Rules::default()).unwrap();
+        step.build(&none, &FolderRules::default()).unwrap();
         // Discogs' genres for it came, and an earlier added date.
         step.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
         step.set_added(HashMap::from([(key.clone(), 1_600_000_000)]));
-        assert_eq!(step.update_rows(&with_records(&none, &Rules::default()), &Rules::default(), &Covers::new()).unwrap(), 1, "{key}");
+        assert_eq!(step.update_rows(&with_records(&none, &FolderRules::default()), &FolderRules::default(), &Covers::new()).unwrap(), 1, "{key}");
         let whole = Library::open(None).unwrap();
         whole.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
         whole.set_added(HashMap::from([(key, 1_600_000_000)]));
-        whole.build(&none, &Rules::default()).unwrap();
+        whole.build(&none, &FolderRules::default()).unwrap();
         assert_eq!(dump(&step), dump(&whole));
     }
 
@@ -2626,7 +2626,7 @@ mod tests {
     fn same_as_whole_with_every_fact_by_the_record() {
         let none = with(sample(), |rows| rows[2].tags.retain(|(n, _)| n != "genre"));
         let lib = Library::open(None).unwrap();
-        lib.build(&none, &Rules::default()).unwrap();
+        lib.build(&none, &FolderRules::default()).unwrap();
         let key: String = lib.db().query_row("SELECT id FROM albums WHERE name LIKE 'Adventures%'", [], |r| r.get(0)).unwrap();
         let facts = |lib: &Library| {
             lib.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
@@ -2637,7 +2637,7 @@ mod tests {
         };
         assert_eq!(same_as_whole(&none, &none, facts), 1, "that album alone");
         facts(&lib);
-        lib.build(&none, &Rules::default()).unwrap();
+        lib.build(&none, &FolderRules::default()).unwrap();
         let (year, kind, whole): (i64, String, i64) = lib.db().query_row("SELECT year, secondary, whole_tracks FROM albums WHERE id = ?1", [&key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
         assert_eq!((year, kind.as_str(), whole), (1991, "live", 9), "each of them read");
     }
@@ -2667,7 +2667,7 @@ mod tests {
     /// Every album's folders as the catalogue reads them now: what a build gives `assign_records`.
     fn albums_now(cat: &crate::catalogue::Catalogue) -> Vec<crate::catalogue::AlbumCopy> {
         let folders: Vec<FolderRows> = cat.folders().iter().map(|(folder, root)| FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect();
-        album_copies(&folders, &Rules::default())
+        album_copies(&folders, &FolderRules::default())
     }
 
     /// An album knows the hashes 0.15 served it by, and of a folder that disagrees, the one the folder was settled to: the map is
@@ -2705,7 +2705,7 @@ mod tests {
         add_files_to(&cat, 0, &roots[0], &[("Here/01 One.flac", "Here", "One")]);
         add_files_to(&cat, 1, &roots[1], &[("Away/01 One.flac", "Away", "One")]);
         cat.mark_trashed(1, "Away", "token").unwrap();
-        let found = first_albums(&cat, &Rules::default()).unwrap();
+        let found = first_albums(&cat, &FolderRules::default()).unwrap();
         assert_eq!(found.served.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Here"]);
         assert_eq!(found.unserved.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Away"]);
         let away = &found.unserved[0];
@@ -2717,7 +2717,7 @@ mod tests {
         // A folder out of use: its rows lie under a negative id, and its albums were known by the one it had.
         let track = cat.track_of(0, "Here/01 One.flac");
         cat.set_folders(vec![roots[1].clone()]).unwrap();
-        let found = first_albums(&cat, &Rules::default()).unwrap();
+        let found = first_albums(&cat, &FolderRules::default()).unwrap();
         let parked = found.unserved.iter().find(|a| a.title == "Here").expect("what a parked folder held");
         let by = album_pid_for_tests("Here", "Artist");
         assert_eq!((parked.folder, parked.old_id.as_str()), (0, ids::album_at(&by, 0).as_str()), "by the id it had");
@@ -2733,7 +2733,7 @@ mod tests {
         let (roots, cat, lib) = two_kept("first-trash");
         add_files_to(&cat, 0, &roots[0], &[("Away/01 One.flac", "Away", "One"), ("Here/01 Two.flac", "Here", "Two")]);
         cat.mark_trashed(0, "Away", "token").unwrap();
-        cat.first_records(first_albums(&cat, &Rules::default()).unwrap(), &TWO_KEPT).unwrap();
+        cat.first_records(first_albums(&cat, &FolderRules::default()).unwrap(), &TWO_KEPT).unwrap();
         let old = ids::album_at(&album_pid_for_tests("Away", "Artist"), 0);
         let record = cat.named_now(&old).expect("the id it was served by leads to a record");
         build_now(&lib, &cat);
@@ -2983,7 +2983,7 @@ mod tests {
         std::fs::remove_file(roots[1].join("A/03 Three.flac")).unwrap();
         add_files_to(&cat, 1, &roots[1], &[("A/03 Replaced.flac", "A", "Three")]);
         assert_ne!(cat.track_of(1, "A/03 Replaced.flac"), track);
-        lib.update_files(&cat, &Rules::default(), &[roots[1].join("A/03 Replaced.flac")]).unwrap();
+        lib.update_files(&cat, &FolderRules::default(), &[roots[1].join("A/03 Replaced.flac")]).unwrap();
         assert!(!cat.records_unsettled(), "it joined its album's record");
         build_now(&lib, &cat);
         assert_eq!(cat.track_of(1, "A/03 Replaced.flac"), track);
@@ -3119,7 +3119,7 @@ mod tests {
         drop(lib);
 
         let lib = Library::open(Some(&file)).unwrap();
-        let wrote = |lib: &Library| lib.update_files(&cat, &Rules::default(), &[root.join(rel)]).unwrap();
+        let wrote = |lib: &Library| lib.update_files(&cat, &FolderRules::default(), &[root.join(rel)]).unwrap();
         cat.tag_for_tests(0, rel, &[("album", "Early"), ("albumartist", "Artist"), ("title", "One again")]);
         assert_eq!(wrote(&lib), 1, "a name built before");
         credit(&cat, rel, "Early", "Orbit Lane", "One again");
@@ -3169,11 +3169,11 @@ mod tests {
         let rows = |first: i64, titles: [&str; 2], date: &str| -> Vec<ServedRow> {
             titles.iter().zip(first..).map(|(title, track)| ServedRow { record: Some(7), ..row(track, &format!("X/{date}/{track} {title}.flac"), &[("title", title), ("albumartist", "Artist"), ("album", "Album"), ("date", date)]) }).collect()
         };
-        let copies = album_copies(&[in_folder(0, rows(1, ["One", "Two"], "1998")), in_folder(1, rows(3, ["Three", "Four"], "1999"))], &Rules::default());
+        let copies = album_copies(&[in_folder(0, rows(1, ["One", "Two"], "1998")), in_folder(1, rows(3, ["Three", "Four"], "1999"))], &FolderRules::default());
         assert_eq!(copies.len(), 2);
         assert!(!same_record(&copies[0].facts, &copies[1].facts));
         assert!(copies.iter().all(|a| a.split), "worth the catalogue's reading, each held by one record though its tracks are unanimous");
-        let copies = album_copies(&two_copies(), &Rules::default());
+        let copies = album_copies(&two_copies(), &FolderRules::default());
         assert!(copies.iter().all(|a| !a.split), "two copies of one record are as they should be");
     }
 
@@ -3218,11 +3218,11 @@ mod tests {
         let lib = Library::open(None).unwrap();
         lib.set_kinds(vec![(0, Kind::Main)]);
         assert_eq!(build_now(&lib, &cat), (true, 0));
-        assert_eq!(lib.change(&cat, &Rules::default()).unwrap().0, Change::None);
+        assert_eq!(lib.change(&cat, &FolderRules::default()).unwrap().0, Change::None);
         lib.set_kinds(vec![(0, Kind::Incoming)]);
-        assert_eq!(lib.change(&cat, &Rules::default()).unwrap().0, Change::Songs, "a check sees it with no file changed");
+        assert_eq!(lib.change(&cat, &FolderRules::default()).unwrap().0, Change::Songs, "a check sees it with no file changed");
         assert_eq!(build_now(&lib, &cat), (true, 0));
-        assert_eq!(lib.change(&cat, &Rules::default()).unwrap().0, Change::None);
+        assert_eq!(lib.change(&cat, &FolderRules::default()).unwrap().0, Change::None);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -3234,7 +3234,7 @@ mod tests {
         let mut folders = sample();
         let orb = folders[0].rows.pop().unwrap();
         folders.push(FolderRows { folder: 3, root: "/more".into(), rows: vec![orb] });
-        lib.refresh(&folders, &Rules::default()).unwrap();
+        lib.refresh(&folders, &FolderRules::default()).unwrap();
         let waiting = |lib: &Library| lib.incoming_albums().unwrap().into_iter().map(|a| a.name).collect::<Vec<_>>();
         assert_eq!(waiting(&lib), ["Adventures Beyond the Ultraworld"], "with no word from the app, as it was");
         let orb: String = lib.db().query_row("SELECT album FROM copies WHERE folder = 3", [], |r| r.get(0)).unwrap();
@@ -3255,7 +3255,7 @@ mod tests {
     #[test]
     fn the_row_copy_is_the_best_kept_one_not_the_lowest_folder() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         let album: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
         lib.db()
             .execute_batch(
@@ -3276,7 +3276,7 @@ mod tests {
     #[test]
     fn update_files_joins_and_never_gives_birth() {
         let (root, cat) = catalogue_in("join");
-        let rules = Rules::default();
+        let rules = FolderRules::default();
         add_files(&cat, &root, &[("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two")]);
         let lib = Library::open(None).unwrap();
         build_now(&lib, &cat);
@@ -3328,7 +3328,7 @@ mod tests {
         one.duration_ms = Some(100_000);
         two.duration_ms = Some(200_000);
         let folders = [FolderRows { folder: 0, root: "/music".into(), rows: vec![one, two] }];
-        let copies = album_copies(&folders, &Rules::default());
+        let copies = album_copies(&folders, &FolderRules::default());
         let [album] = &copies[..] else { panic!("one album: {copies:?}") };
         assert_eq!(album.tracks, [(2, Some(1), Some(2)), (1, Some(2), Some(1))]);
         assert_eq!((album.title.as_str(), album.artist.as_str(), album.year), ("Album", "Artist", Some(2001)));
@@ -3581,7 +3581,7 @@ mod tests {
 
     #[test]
     fn a_row_with_no_record_is_not_served() {
-        let rules = Rules::default();
+        let rules = FolderRules::default();
         let lib = Library::open(None).unwrap();
         lib.build_with(&sample(), &rules, &Covers::new()).unwrap();
         assert_eq!(lib.counts().unwrap(), (0, 0, 0));
@@ -3600,7 +3600,7 @@ mod tests {
     /// the copy that plays, so only its files count.
     #[test]
     fn a_cover_changed_in_a_copy_that_does_not_play_builds_nothing() {
-        let rules = Rules::default();
+        let rules = FolderRules::default();
         let folders = with_records(&two_copies(), &rules);
         let covers = |at: i64, print: &str| Covers::from([((at, "A/Album".to_string()), print.to_string())]);
         let lib = Library::open(None).unwrap();
@@ -3625,7 +3625,7 @@ mod tests {
         let genres = |key: String| {
             let lib = Library::open(None).unwrap();
             lib.set_extra_genres(HashMap::from([(key, vec!["Dub".to_string()])]));
-            lib.build(&genreless(), &Rules::default()).unwrap();
+            lib.build(&genreless(), &FolderRules::default()).unwrap();
             let genres: String = lib.db().query_row("SELECT genres FROM albums", [], |r| r.get(0)).unwrap();
             genres
         };
@@ -3664,7 +3664,7 @@ mod tests {
             r.tags.push(("originaldate".into(), "1971".into()));
         }
         let folders = [in_folder(0, rows)];
-        assert_eq!(album_copies(&folders, &Rules::default())[0].year, None);
+        assert_eq!(album_copies(&folders, &FolderRules::default())[0].year, None);
         assert_eq!(one_number(&built_with(&[(0, Kind::Main)], &folders), "SELECT year FROM albums"), 1971);
     }
 
@@ -3686,7 +3686,7 @@ mod tests {
     #[test]
     fn songs_albums_and_artists_come_from_the_tags() {
         let lib = Library::open(None).unwrap();
-        assert!(lib.refresh(&sample(), &Rules::default()).unwrap());
+        assert!(lib.refresh(&sample(), &FolderRules::default()).unwrap());
         assert_eq!(lib.counts().unwrap(), (3, 2, 2));
         let db = lib.db();
         let (count, genres, dir, year, created): (i64, String, String, i64, i64) = db
@@ -3714,7 +3714,7 @@ mod tests {
         let mut trackless = row(3, "Björk/Live Box/CD2/02 New.flac", &tags("2"));
         trackless.track = None;
         let lib = Library::open(None).unwrap();
-        lib.refresh(&[FolderRows { folder: 4, root: "/music".into(), rows: vec![one.clone(), two.clone(), trackless] }], &Rules::default()).unwrap();
+        lib.refresh(&[FolderRows { folder: 4, root: "/music".into(), rows: vec![one.clone(), two.clone(), trackless] }], &FolderRules::default()).unwrap();
         let db = lib.db();
         let album: String = db.query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap();
         type Copy = (String, i64, String, Option<String>, Option<i64>, i64, Option<i64>, i64, Option<i64>, Option<i64>);
@@ -3752,7 +3752,7 @@ mod tests {
         let tags = [("title", "t"), ("artist", "A"), ("album", "X")];
         let (one, two) = (read(row(1, "A/X/01 t.flac", &tags)), row(2, "A/X/02 t.flac", &tags));
         let lib = Library::open(None).unwrap();
-        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![one, two] }], &Rules::default()).unwrap();
+        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![one, two] }], &FolderRules::default()).unwrap();
         let copy: (Option<i64>, Option<i64>) = lib.db().query_row("SELECT bits, rate FROM copies", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(copy, (None, None));
     }
@@ -3768,7 +3768,7 @@ mod tests {
         };
         let before = second(sample());
         let lib = Library::open(None).unwrap();
-        lib.build(&before, &Rules::default()).unwrap();
+        lib.build(&before, &FolderRules::default()).unwrap();
         let copies: i64 = lib.db().query_row("SELECT count(*) FROM copies", [], |r| r.get(0)).unwrap();
         assert_eq!(copies, 4);
         let mut after = second(sample());
@@ -3790,7 +3790,7 @@ mod tests {
     /// to clear: its album would still stand, and writing it again would break `albums.id`.
     #[test]
     fn a_file_with_no_row_in_songs_is_neither_new_nor_left_behind() {
-        let rules = Rules::default();
+        let rules = FolderRules::default();
         let lib = Library::open(None).unwrap();
         lib.build(&sample(), &rules).unwrap();
         off_the_songs(&lib, &sample()[0].rows[2].rel);
@@ -3807,7 +3807,7 @@ mod tests {
     #[test]
     fn a_file_of_a_copy_that_does_not_play_is_found_by_its_place() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         let (rel, other) = ("Björk/Homogenic (1997)/01 Hunter.flac", "Elsewhere/01 Hunter.flac");
         lib.db()
             .execute_batch(&format!(
@@ -3834,7 +3834,7 @@ mod tests {
     #[test]
     fn insights_reads_the_arrivals_of_an_album_in_two_folders_as_one_album() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         lib.db()
             .execute_batch(
                 "INSERT INTO copy_files SELECT 1, 'Elsewhere/' || rel, 'Elsewhere', song, album, src, size, suffix, kbps, duration_ms, bpm,
@@ -3874,12 +3874,12 @@ mod tests {
         let _ = std::fs::remove_file(&file);
         {
             let lib = Library::open(Some(file.as_path())).unwrap();
-            assert!(lib.refresh(&sample(), &Rules::default()).unwrap());
+            assert!(lib.refresh(&sample(), &FolderRules::default()).unwrap());
             lib.db().execute_batch(&format!("DROP TABLE copies; DROP TABLE copy_files; PRAGMA user_version = {}", LAYOUT - 1)).unwrap();
         }
         let lib = Library::open(Some(file.as_path())).unwrap();
         assert_eq!(lib.counts().unwrap(), (0, 0, 0), "emptied, not read as it was");
-        assert!(lib.refresh(&sample(), &Rules::default()).unwrap(), "and built");
+        assert!(lib.refresh(&sample(), &FolderRules::default()).unwrap(), "and built");
         assert_eq!(lib.db().query_row("SELECT count(*) FROM copies", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
         drop(lib);
         let _ = std::fs::remove_dir_all(&dir);
@@ -3890,7 +3890,7 @@ mod tests {
         // The Orb's "1/10"; Homogenic's second track with TOTALTRACKS, its first with none.
         let tagged = with(sample(), |rows| rows[1].tags.push(("totaltracks".into(), "10".into())));
         let lib = Library::open(None).unwrap();
-        lib.refresh(&tagged, &Rules::default()).unwrap();
+        lib.refresh(&tagged, &FolderRules::default()).unwrap();
         let mut totals: Vec<Vec<u32>> = lib.track_totals().unwrap().into_values().collect();
         totals.sort();
         assert_eq!(totals, [vec![10], vec![10]]);
@@ -3899,14 +3899,14 @@ mod tests {
     #[test]
     fn an_albums_length_is_its_songs_summed_and_unknown_when_one_is() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         let listed = lib.albums_in(0, 10).unwrap();
         let homogenic = listed.iter().find(|c| c.album.name == "Homogenic").unwrap();
         assert_eq!(homogenic.secs, Some(400.0), "two songs of 200 s");
         assert_eq!(lib.album_facts(&homogenic.album.id).unwrap().unwrap().3, Some(400.0));
         let untimed = with(sample(), |rows| rows[1].duration_ms = None);
         let lib = Library::open(None).unwrap();
-        lib.refresh(&untimed, &Rules::default()).unwrap();
+        lib.refresh(&untimed, &FolderRules::default()).unwrap();
         let listed = lib.albums_in(0, 10).unwrap();
         let homogenic = listed.iter().find(|c| c.album.name == "Homogenic").unwrap();
         assert_eq!(homogenic.secs, None, "one song's length unknown: the album's is");
@@ -3919,7 +3919,7 @@ mod tests {
     fn a_crates_ids_are_named_as_the_library_has_them_and_one_it_lacks_left_out() {
         // 0.13, decision 0088: an artist's name, an album's and a track's title.
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         let homogenic: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
         let (bjork, hunter) = (ids::artist(artist_number_in_tests("Björk")), ids::song(1));
         let asked = [bjork.clone(), homogenic.clone(), hunter.clone(), "tr-999".to_string(), "ar-nobody".to_string(), "al-none".to_string(), "Björk".to_string()];
@@ -3931,7 +3931,7 @@ mod tests {
     #[test]
     fn a_songs_album_is_found_by_the_songs_id() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         let all: HashMap<String, String> = {
             let db = lib.db();
             let mut st = db.prepare("SELECT id, album_id FROM songs").unwrap();
@@ -3967,7 +3967,7 @@ mod tests {
         let lib = Library::open(None).unwrap();
         let mut r = row(1, "A/X (2001)/01 t.flac", &[("title", "t"), ("artist", "A"), ("album", "X"), ("replaygain_track_gain", "-6.5 dB")]);
         r.analysis = Some(crate::catalogue::RowAnalysis { track_gain_db: -4.25, track_peak: 0.75, bpm: Some(120.0), album: Some((-5.0, 0.9)) });
-        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![r] }], &Rules::default()).unwrap();
+        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![r] }], &FolderRules::default()).unwrap();
         let id = crate::serve::ids::song(1);
         let song = lib.songs_by_id(&[id]).unwrap().pop().unwrap();
         let rg = song.replay_gain.unwrap();
@@ -3982,7 +3982,7 @@ mod tests {
         let lib = Library::open(None).unwrap();
         let t = |n: i64, date: &str| row(n, &format!("A/X (2013)/0{n} t.flac"), &[("title", "t"), ("artist", "A"), ("album", "X"), ("date", date)]);
         let folders = vec![FolderRows { folder: 0, root: "/music".into(), rows: vec![t(1, "2013"), t(2, "2013"), t(3, "2015")] }];
-        lib.refresh(&folders, &Rules::default()).unwrap();
+        lib.refresh(&folders, &FolderRules::default()).unwrap();
         assert_eq!(lib.counts().unwrap().1, 1);
         let year: i64 = lib.db().query_row("SELECT year FROM albums", [], |r| r.get(0)).unwrap();
         assert_eq!(year, 2015, "the album's aggregates still count every song");
@@ -4012,11 +4012,11 @@ mod tests {
             st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
         };
         let lib = Library::open(None).unwrap();
-        lib.refresh(&folders(), &Rules::default()).unwrap();
+        lib.refresh(&folders(), &FolderRules::default()).unwrap();
         assert_eq!(years(&lib)[2], ("Skylon".into(), Some(2012), None), "a reissue's year without anything better");
         let lib = Library::open(None).unwrap();
         lib.set_originals([("rel-skylon".into(), 2008), ("rel-mir".into(), 1999), ("rel-odd".into(), 2009)].into());
-        lib.refresh(&folders(), &Rules::default()).unwrap();
+        lib.refresh(&folders(), &FolderRules::default()).unwrap();
         assert_eq!(
             years(&lib),
             [("Mir".into(), Some(2011), Some(2011)), ("Odd".into(), Some(2005), Some(2009)), ("Skylon".into(), Some(2008), Some(2008))],
@@ -4030,7 +4030,7 @@ mod tests {
         let before = lib.originals_print();
         lib.set_incomplete([(odd, Whole { tracks: 12, duration_ms: None, longest_ms: None })].into());
         assert_ne!(lib.originals_print(), before, "an album found missing tracks too");
-        lib.build(&folders(), &Rules::default()).unwrap();
+        lib.build(&folders(), &FolderRules::default()).unwrap();
         let t: (Option<String>, Option<String>, String, Option<String>) = lib
             .db()
             .query_row("SELECT release_type, type_from, secondary, type_why FROM albums WHERE name = 'Odd'", [], |r| {
@@ -4048,7 +4048,7 @@ mod tests {
         };
         let folders = || vec![FolderRows { folder: 0, root: "/music".into(), rows: vec![track(1), track(2)] }];
         let lib = Library::open(None).unwrap();
-        lib.refresh(&folders(), &Rules::default()).unwrap();
+        lib.refresh(&folders(), &FolderRules::default()).unwrap();
         let base: String = lib.db().query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap();
         let set = Overrides {
             kind: Some("album".into()),
@@ -4060,7 +4060,7 @@ mod tests {
         let before = lib.originals_print();
         lib.set_overrides([(base, set)].into());
         assert_ne!(lib.originals_print(), before, "what is set builds the library again");
-        lib.build(&folders(), &Rules::default()).unwrap();
+        lib.build(&folders(), &FolderRules::default()).unwrap();
         let album: (String, Option<String>, Option<String>, String, i64, i64, String, String) = lib
             .db()
             .query_row("SELECT release_type, type_from, type_why, secondary, year, original_year, genres, set_fields FROM albums", [], |r| {
@@ -4072,7 +4072,7 @@ mod tests {
         let songs: Vec<String> = lib.db().prepare("SELECT genres FROM songs").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
         assert_eq!(songs, ["Psybient", "Psybient"], "its tracks' genres too");
         lib.set_overrides(HashMap::new());
-        lib.build(&folders(), &Rules::default()).unwrap();
+        lib.build(&folders(), &FolderRules::default()).unwrap();
         let kind: (String, Option<String>) = lib.db().query_row("SELECT release_type, type_why FROM albums", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(kind, ("single".into(), Some("tracks".into())), "reset: as the rule finds it");
     }
@@ -4080,14 +4080,14 @@ mod tests {
     #[test]
     fn an_imported_added_date_comes_first_when_earlier() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         let id: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
         lib.set_added([(id.clone(), 5)].into());
-        lib.build(&sample(), &Rules::default()).unwrap();
+        lib.build(&sample(), &FolderRules::default()).unwrap();
         let created: i64 = lib.db().query_row("SELECT created FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
         assert_eq!(created, 5);
         lib.set_added([(id.clone(), 9_999_999_999)].into());
-        lib.build(&sample(), &Rules::default()).unwrap();
+        lib.build(&sample(), &FolderRules::default()).unwrap();
         let created: i64 = lib.db().query_row("SELECT created FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
         assert_eq!(created, 1_700_000_001, "a later one does not move it");
     }
@@ -4095,7 +4095,7 @@ mod tests {
     #[test]
     fn a_song_has_all_its_genres_and_is_found_by_each() {
         let lib = Library::open(None).unwrap();
-        assert!(lib.refresh(&sample(), &Rules::default()).unwrap());
+        assert!(lib.refresh(&sample(), &FolderRules::default()).unwrap());
         let found = lib.songs_by_genre("Art Pop", 10, 0, None).unwrap();
         assert_eq!(found.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Hunter", "Jóga"], "found by its second genre too");
         assert_eq!(found[0].genres.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["Electronic", "Art Pop"]);
@@ -4110,7 +4110,7 @@ mod tests {
     fn a_genre_is_found_by_its_aliases_in_search() {
         // 0.12: one matcher, genre aliases (the rules crate's hand-kept list).
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         lib.db().execute("INSERT INTO genres (name, song_count, album_count) VALUES ('Drum and Bass', 4, 1), ('Dub', 9, 2), ('R&B', 2, 1)", []).unwrap();
         let words = |q: &str| crate::search::words(q);
         let f = lib.find(&words("dnb"), 10).unwrap();
@@ -4133,10 +4133,10 @@ mod tests {
     fn built_again_only_when_the_files_change() {
         let lib = Library::open(None).unwrap();
         let mut folders = sample();
-        assert!(lib.refresh(&folders, &Rules::default()).unwrap());
-        assert!(!lib.refresh(&folders, &Rules::default()).unwrap());
+        assert!(lib.refresh(&folders, &FolderRules::default()).unwrap());
+        assert!(!lib.refresh(&folders, &FolderRules::default()).unwrap());
         folders[0].rows[0].mtime = 2;
-        assert!(lib.refresh(&folders, &Rules::default()).unwrap());
+        assert!(lib.refresh(&folders, &FolderRules::default()).unwrap());
     }
 
     #[test]
@@ -4144,7 +4144,7 @@ mod tests {
         // Show all's fifth page of 50 asks for 250: past `WIDEST`, where the release build's panic stopped the server.
         let lib = Library::open(None).unwrap();
         let cloud = |n: i64| row(n, &format!("The Orb/Adventures (1991)/{n:03} Cloud.flac"), &[("title", &format!("Cloud {n}")), ("artist", "The Orb"), ("album", "Adventures"), ("tracknumber", &n.to_string())]);
-        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: (1..=260).map(cloud).collect() }], &Rules::default()).unwrap();
+        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: (1..=260).map(cloud).collect() }], &FolderRules::default()).unwrap();
         let f = lib.find(&crate::search::words("cloud"), 250).unwrap();
         assert_eq!((f.tracks.len(), f.totals.tracks), (250, 260));
     }
@@ -4152,7 +4152,7 @@ mod tests {
     #[test]
     fn search_finds_words_and_their_beginnings_without_accents() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         let db = lib.db();
         let found = |table: &str, q: &str| -> i64 {
             let q = fts_query(q).unwrap();
@@ -4227,7 +4227,7 @@ mod tests {
 
     #[test]
     fn the_trigram_tables_keep_in_step_with_the_names() {
-        let rules = Rules::default();
+        let rules = FolderRules::default();
         let lib = Library::open(None).unwrap();
         lib.build(&sample(), &rules).unwrap();
         tri_in_step(&lib);
@@ -4269,11 +4269,11 @@ mod tests {
         let _ = std::fs::remove_file(&file);
         {
             let lib = Library::open(Some(file.as_path())).unwrap();
-            assert!(lib.refresh(&sample(), &Rules::default()).unwrap());
+            assert!(lib.refresh(&sample(), &FolderRules::default()).unwrap());
             lib.db().execute_batch("DROP TABLE songs_tri_fts; DROP TABLE albums_tri_fts; DROP TABLE artists_tri_fts;").unwrap();
         }
         let lib = Library::open(Some(file.as_path())).unwrap();
-        assert!(!lib.refresh(&sample(), &Rules::default()).unwrap(), "filled where it stood, not built again");
+        assert!(!lib.refresh(&sample(), &FolderRules::default()).unwrap(), "filled where it stood, not built again");
         tri_in_step(&lib);
         assert_eq!(tri_found(&lib, "songs_tri_fts", "littlefluffyclouds"), 1);
         assert_eq!(tri_found(&lib, "albums_tri_fts", "homogenic"), 1);
@@ -4302,7 +4302,7 @@ mod tests {
             ],
         }];
         let lib = Library::open(None).unwrap();
-        lib.refresh(&folders, &Rules::default()).unwrap();
+        lib.refresh(&folders, &FolderRules::default()).unwrap();
         let words = |q: &str| crate::search::words(q);
         let artists = |q: &str| lib.find(&words(q), 10).unwrap().artists.into_iter().map(|(a, _)| a.name).collect::<Vec<_>>();
         let albums = |q: &str| lib.find(&words(q), 10).unwrap().albums.into_iter().map(|(a, h)| (a.name, h.on)).collect::<Vec<_>>();
@@ -4345,9 +4345,9 @@ mod tests {
         let cat = crate::catalogue::Catalogue::open(Some(Path::new(&file)), vec!["/media/Music".into(), "/media/lidarr-music".into()]).unwrap();
         let lib = Library::open(None).unwrap();
         let t = std::time::Instant::now();
-        assert!(lib.refresh_from(&cat, &Rules::default()).unwrap());
+        assert!(lib.refresh_from(&cat, &FolderRules::default()).unwrap());
         let first = t.elapsed();
-        assert!(!lib.refresh_from(&cat, &Rules::default()).unwrap(), "nothing changed");
+        assert!(!lib.refresh_from(&cat, &FolderRules::default()).unwrap(), "nothing changed");
         println!("read and built {:?}, checked again {:?}, (songs, albums, artists) {:?}", first, t.elapsed() - first, lib.counts().unwrap());
         // One album's files written by Cratarr (0.9.8): only its folder built again.
         let (folder, rel): (i64, String) = lib
@@ -4356,7 +4356,7 @@ mod tests {
             .unwrap();
         let path = cat.folders().get(folder).unwrap().join(&rel);
         let t = std::time::Instant::now();
-        let n = lib.update_files(&cat, &Rules::default(), &[path]).unwrap();
+        let n = lib.update_files(&cat, &FolderRules::default(), &[path]).unwrap();
         println!("one album's folder built again: {n} folders in {:?}", t.elapsed());
         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
         println!("memory: {}", status.lines().filter(|l| l.starts_with("VmHWM") || l.starts_with("VmRSS")).collect::<Vec<_>>().join(", "));

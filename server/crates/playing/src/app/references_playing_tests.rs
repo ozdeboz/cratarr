@@ -449,7 +449,7 @@ async fn a_release_read_credits_the_artists_it_names() {
             "3800003" => vec![(Ref::new("discogs", "artist", "9103"), "Glass Harbour (2)".into())],
             _ => vec![(Ref::new("discogs", "artist", "9104"), "Tape Club".into())],
         };
-        std::future::ready(Ok(Some((list(&[("One", Some(200_000))]), None, ReadMore { also: Vec::new(), artists }))))
+        std::future::ready(Ok(Some((list(&[("One", Some(200_000))]), None, ReadMore { also: Vec::new(), artists, ..ReadMore::default() }))))
     };
     let t = crate::app::moment::now_secs();
     for r in [signal, together, lamplight, credited_before] {
@@ -481,7 +481,7 @@ async fn a_release_read_never_gives_an_artist_an_id_by_their_name_alone() {
     let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
     let coma = cat.artist_for("Coma").unwrap();
     let record = wanted(&cat, "Northern Lights", &[("discogs", "release", "3800021")]);
-    let read = |_: Ref| std::future::ready(Ok(Some((list(&[("One", Some(200_000))]), None, ReadMore { also: Vec::new(), artists: vec![(Ref::new("discogs", "artist", "12"), "Coma".into())] }))));
+    let read = |_: Ref| std::future::ready(Ok(Some((list(&[("One", Some(200_000))]), None, ReadMore { also: Vec::new(), artists: vec![(Ref::new("discogs", "artist", "12"), "Coma".into())], ..ReadMore::default() }))));
     opened(&cat, record, crate::app::moment::now_secs(), read).await;
     page_read_settled(&cat, record).await;
     assert_eq!(cat.record_artists(record).unwrap(), [coma], "credited to the library's one Coma");
@@ -496,7 +496,7 @@ async fn a_release_read_never_gives_an_artist_an_id_by_their_name_alone() {
 async fn a_releases_bandcamp_link_is_kept_with_its_tracklist() {
     let _state = crate::app::references::TestState::set().await;
     const P: &str = "https://kitetheory.bandcamp.com/album/night-walks";
-    let read = |_: Ref| std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000)), ("Morning", Some(180_000))]), None, ReadMore { also: vec![Ref::new("bandcamp", "album", P)], artists: Vec::new() }))));
+    let read = |_: Ref| std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000)), ("Morning", Some(180_000))]), None, ReadMore { also: vec![Ref::new("bandcamp", "album", P)], ..ReadMore::default() }))));
     let t = crate::app::moment::now_secs();
     // Kept.
     let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());

@@ -297,7 +297,7 @@ pub fn http() -> Result<reqwest::Client> {
 
 /// MusicBrainz's web service (T6's seam), where `mb_artist_by_name`, `mb_page` and Beyond's search (`musicbrainz_found`) ask.
 #[cfg(not(any(test, feature = "test-support")))]
-fn mb_ws() -> String {
+pub fn mb_ws() -> String {
     "https://musicbrainz.org/ws/2".to_string()
 }
 
@@ -310,7 +310,7 @@ thread_local! {
 /// Tests: MusicBrainz's web service is the test's fake (`FakeMusicBrainz`), else an address that reaches nothing (plain http,
 /// which `reach::client` never asks): no test asks musicbrainz.org.
 #[cfg(any(test, feature = "test-support"))]
-fn mb_ws() -> String {
+pub fn mb_ws() -> String {
     MB_FAKE.with(|f| f.borrow().clone()).unwrap_or_else(|| "http://127.0.0.1:9/ws/2".to_string())
 }
 

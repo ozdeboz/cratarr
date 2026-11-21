@@ -60,6 +60,7 @@ const ALLOWED: Record<string, [number, string]> = {
   'lib/settings/LibrariesPart.svelte': [2, "the disk floor's row and its refusal: none out of reach (AL04.5)"],
   'lib/shelfStore.svelte.ts': [1, 'a poller: not asked while away'],
   'lib/snippetPlayer.svelte.ts': [1, 'Snippets offered'],
+  'lib/sheet/Record.svelte': [1, "which sheet a record opens on: out of reach the one it opens today, until the server marks what works away (RS8, RS17)"],
 };
 
 /** Where it is read to say what it is: the words themselves. */

@@ -1678,6 +1678,31 @@ impl UserData {
         Ok(gone)
     }
 
+    /// An artist put on `user`'s everywhere list (`out`) or taken off it, with its change-log row, in one transaction (the one
+    /// path's Change, SCENARIOS-GF CP9): the rev that row took; none where they were so already (put on again, the name is the
+    /// latest said and nothing is logged).
+    pub fn set_artist_out(&self, user: &str, key: &str, name: &str, out: bool) -> Result<Option<i64>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let had: bool = tx.prepare_cached("SELECT 1 FROM excluded_artist WHERE user = ?1 AND key = ?2")?.exists(params![user, key])?;
+        if had == out {
+            if out {
+                tx.execute("UPDATE excluded_artist SET name = ?3 WHERE user = ?1 AND key = ?2", params![user, key, name])?;
+                tx.commit()?;
+            }
+            return Ok(None);
+        }
+        if out {
+            tx.execute("INSERT INTO excluded_artist (user, key, name, at) VALUES (?1, ?2, ?3, ?4)", params![user, key, name, now()])?;
+        } else {
+            tx.execute("DELETE FROM excluded_artist WHERE user = ?1 AND key = ?2", params![user, key])?;
+        }
+        offline::log(&tx, user, offline::ChangeKind::Excluded, "artists", offline::Op::Changed, false)?;
+        let rev: i64 = tx.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'change_log'", [], |r| r.get(0))?;
+        tx.commit()?;
+        Ok(Some(rev))
+    }
+
     /// The artists `user` excluded everywhere, the newest first.
     pub fn excluded_artist_list(&self, user: &str) -> Result<Vec<ExcludedArtist>> {
         let db = self.db();

@@ -19,3 +19,6 @@ export async function share(title: string, text: string, url: string | null) {
   if (await copyText(words)) toast.show({ text: 'Copied', tone: 'done' });
   else toast.show({ text: "It couldn't be shared", tone: 'error' });
 }
+
+/** A record in words as it is shared and copied ("artist – title"), until the server sends its name (SCENARIOS-DC1 OBJ2). */
+export const recordWords = (artist: string | null | undefined, title: string) => [artist, title].filter(Boolean).join(' – ');

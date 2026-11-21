@@ -120,32 +120,41 @@ pub struct Owed {
     pub now: Now,
 }
 
+/// The records owed to the change log, oldest first, at most `most`, each as it is now; `only` these, where given.
+fn owed_rows(db: &Connection, most: usize, only: Option<&[i64]>) -> Result<Vec<Owed>> {
+    let only = only.map_or(String::new(), |ids| format!("WHERE o.record IN ({})", ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")));
+    let rows: Vec<(i64, i64, bool, Option<i64>)> = db
+        .prepare(&format!("SELECT o.n, o.record, r.id IS NULL, r.merged_into FROM record_owed o LEFT JOIN records r ON r.id = o.record {only} ORDER BY o.n LIMIT ?1"))?
+        .query_map([i64::try_from(most).unwrap_or(i64::MAX)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (n, record, gone, merged) in rows {
+        let now = match (gone, merged) {
+            (true, _) => Now::Forgotten,
+            (false, Some(_)) => match super::records::merged_end(db, record)? {
+                Some(end) if end != record => Now::Merged { into: end },
+                _ => Now::Changed,
+            },
+            (false, None) => Now::Changed,
+        };
+        out.push(Owed { n, record, now });
+    }
+    Ok(out)
+}
+
 impl Catalogue {
     /// The records owed to the change log, oldest first, at most `most`, each as it is now. On a reader. Blocking.
     pub fn owed_records(&self, most: usize) -> Result<Vec<Owed>> {
-        let read = |db: &Connection| -> Result<Vec<Owed>> {
-            let rows: Vec<(i64, i64, bool, Option<i64>)> = db
-                .prepare_cached("SELECT o.n, o.record, r.id IS NULL, r.merged_into FROM record_owed o LEFT JOIN records r ON r.id = o.record ORDER BY o.n LIMIT ?1")?
-                .query_map([most as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                .collect::<rusqlite::Result<_>>()?;
-            let mut out = Vec::with_capacity(rows.len());
-            for (n, record, gone, merged) in rows {
-                let now = match (gone, merged) {
-                    (true, _) => Now::Forgotten,
-                    (false, Some(_)) => match super::records::merged_end(db, record)? {
-                        Some(end) if end != record => Now::Merged { into: end },
-                        _ => Now::Changed,
-                    },
-                    (false, None) => Now::Changed,
-                };
-                out.push(Owed { n, record, now });
-            }
-            Ok(out)
-        };
         match self.reader() {
-            Some(c) => read(&c),
-            None => read(&self.db()),
+            Some(c) => owed_rows(&c, most, None),
+            None => owed_rows(&self.db(), most, None),
         }
+    }
+
+    /// Of `records`, those owed to the change log, each as it is now: what a command's Change wrote, logged before its answer
+    /// (CP9). On the writer, so it reads what the Change just committed. Blocking.
+    pub fn owed_records_of(&self, records: &[i64]) -> Result<Vec<Owed>> {
+        owed_rows(&self.db(), usize::MAX, Some(records))
     }
 
     /// These owed rows are in the change log: each goes, unless it was owed again since it was read. Blocking.

@@ -109,6 +109,8 @@ pub fn ours(serve: &crate::serve::Serve, asked: &[(String, String)], account: Op
 pub async fn bandcamp(id: &str) -> Option<Described> {
     let (page, n) = crate::bandcamp::read_id(id)?;
     let a = crate::bandcamp::Bandcamp::get().album(&page).await.ok()?;
+    // A record's own page, read: its tags kept as its Bandcamp words (GEN.60).
+    super::words::keep_bandcamp_read(crate::serve::instance(), &a.url, &a.tags).await;
     let t = a.tracks.iter().find(|t| t.n == n)?;
     Some(Described {
         source: crate::bandcamp::SOURCE.to_string(),

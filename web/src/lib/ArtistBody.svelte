@@ -159,7 +159,7 @@
 
 {#snippet grid(list: ListedAlbum[])}
   <ul class="grid">
-    {#each list as a (a.id)}<li><AlbumCard {source} album={a} /></li>{/each}
+    {#each list as a (a.id)}<li><AlbumCard {source} album={a} from="artist" /></li>{/each}
   </ul>
 {/snippet}
 
@@ -226,7 +226,7 @@
         {@const page = m.bandcamp ?? (m.release_group ? bandcampOf(m.release_group) : null)}
         <li class="missing">
           <!-- Its record's page (W9): a record not had, Want in its header. -->
-          <AlbumCard source="cratarr" album={{ id: m.record, title: m.title, year: m.year, artist: m.artist }} cover={m.cover} request={m.request ?? null} notHad />
+          <AlbumCard source="cratarr" album={{ id: m.record, title: m.title, year: m.year, artist: m.artist }} cover={m.cover} request={m.request ?? null} notHad from="artist" />
           <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
           {#if page}<CoverPlay bandcamp
               label={m.title}

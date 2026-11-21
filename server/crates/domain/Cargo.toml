@@ -11,8 +11,11 @@ repository.workspace = true
 doctest = false
 
 # The views' TypeScript (TY1, TY5): the crates above turn it on in their tests, as they write the page's generated types.
+# The one path's own test kind (`change::ChangeKind::TestPicture`, AP1), for the tests of the crates above: only their
+# dev-dependencies turn it on (SPLIT-PLAN 5.4).
 [features]
 ts = ["dep:ts-rs"]
+test-support = []
 
 # Pure (DOMAIN-CORE §14): no I/O, no clock, no async, no app or store crate. It reads only what it is handed.
 [dependencies]

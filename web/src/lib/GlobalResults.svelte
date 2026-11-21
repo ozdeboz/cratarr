@@ -39,6 +39,7 @@
   import { keepWhile } from './keepWhile.svelte';
   import { toast } from './toast.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
+  import RecordMenu, { opensRecord } from './sheet/Record.svelte';
   import ArtistRowMenu from './ArtistRowMenu.svelte';
   import SearchCrateCard from './SearchCrateCard.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -243,7 +244,8 @@
   <TrackMenu track={menu.track} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'album'}
   {@const m = shownMenu as Extract<Menu, { kind: 'album' }>}
-  <AlbumMenu source={m.source} album={{ id: m.id, title: m.title, artist: m.artist }} onclose={() => (menu = null)} />
+  {#if opensRecord(m.source)}<RecordMenu id={m.id} from="search" title={m.title} credit={m.artist} onclose={() => (menu = null)} />
+  {:else}<AlbumMenu source={m.source} album={{ id: m.id, title: m.title, artist: m.artist }} onclose={() => (menu = null)} />{/if}
 {:else if menu?.kind === 'artist'}
   <ArtistRowMenu source={menu.source} name={menu.name} cover={menu.cover} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'subject'}

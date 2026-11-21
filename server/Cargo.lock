@@ -550,6 +550,7 @@ name = "cratarr-crates"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "cratarr-domain",
  "cratarr-playlists",
  "cratarr-rules",
  "rusqlite",

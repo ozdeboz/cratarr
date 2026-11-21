@@ -123,11 +123,11 @@ fn credited_aside(served: &Serve) -> Result<BTreeSet<i64>> {
     }
     let (rules, known) = (served.rules(), served.catalogue().artist_ids()?);
     let mut kept = BTreeSet::new();
-    for tags in &files {
+    for (folder, tags) in &files {
         let all = |key: &str| tags.iter().filter(|(k, _)| k == key).map(|(_, v)| v.clone()).collect::<Vec<String>>();
         for (list, one) in [("artists", "artist"), ("albumartists", "albumartist")] {
             let from = if all(list).is_empty() { one } else { list };
-            for name in rules.values(from, &all(from)) {
+            for name in rules.values(*folder, from, &all(from)) {
                 if let Some(id) = known.get(&crate::serve::ids::artist_key(&name)) {
                     kept.insert(*id);
                 }
@@ -356,7 +356,7 @@ mod tests {
 
     /// Cratarr's own library built from its catalogue, as a start's check builds it (`Library::change`, `build_from`).
     fn build(served: &Serve) {
-        let rules = crate::catalogue::Rules::default();
+        let rules = crate::catalogue::FolderRules::default();
         let (_, print) = served.library.change(served.catalogue(), &rules).unwrap();
         served.library.build_from(served.catalogue(), &rules, &print).unwrap();
     }
@@ -597,7 +597,7 @@ mod tests {
         drop(served);
         let served = Serve::open(Some(&dir), crate::catalogue::Rules::default(), &|_| None).unwrap();
         served.attach_catalogue(cat.clone());
-        assert_eq!(served.library.change(&cat, &crate::catalogue::Rules::default()).unwrap().0, crate::serve::library::Change::None, "nothing to build");
+        assert_eq!(served.library.change(&cat, &crate::catalogue::FolderRules::default()).unwrap().0, crate::serve::library::Change::None, "nothing to build");
         let (done, _) = logged_pass(&served, NOW);
         assert!(!done.artists_wait);
         assert!(done.artists.contains(&nobody), "Nobody forgotten: {done:?}");
@@ -648,7 +648,7 @@ mod tests {
         let [guest, nobody] = ["Ferro Lane", "Nobody"].map(|n| cat.artist_for(n).unwrap());
         born_a_month_before(&cat);
         let ud = UserData::open(Some(&d.join("userdata.sqlite"))).unwrap();
-        super::super::step_017::run(&cat, &ud, &kinds, &crate::catalogue::Rules::default()).unwrap();
+        super::super::step_017::run(&cat, &ud, &kinds, &crate::catalogue::FolderRules::default()).unwrap();
         drop(ud);
         let glass = cat.artist_of("Glass Harbour").unwrap().unwrap();
         assert_eq!(count(&cat, &format!("SELECT count(*) FROM record_artists WHERE record = 1 AND artist = {glass} AND position = 0 AND how = 'files'")), 1, "P3: credited");

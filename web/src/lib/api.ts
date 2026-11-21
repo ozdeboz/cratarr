@@ -605,9 +605,12 @@ export const backInCrate = (id: string, key: string, meanwhile: () => CrateArtis
  *  undo; a change through the outbox, as above. */
 export const getExcludedArtists = () => quietly<ExcludedArtist[]>('/api/me/excluded-artists');
 export const excludeArtist = (key: string, name: string) =>
-  laterJson<ExcludedArtist & { undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { name }, () => ({ key, name, at: Date.now(), undo: null }), 'PUT');
+  laterJson<Answer<ExcludedArtist>>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { name }, () => ({ result: { key, name, at: Date.now() }, rev: 0 }), 'PUT');
 export const includeArtist = (key: string) =>
-  later<{ key: string; undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { method: 'DELETE' }, () => ({ key, undo: null }));
+  later<Answer<{ key: string }>>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { method: 'DELETE' }, () => ({ result: { key }, rev: 0 }));
+/** A command on the one path answers its result, its Undo's token (`undo`, none when nothing changed) and the rev its change
+ *  took (SCENARIOS-GF §0). */
+export type Answer<R> = { result: R; undo?: string; rev: number };
 /** Every change answers with its undo token (`undo`, decision 0026), for `withUndo`. */
 type Undo = { undo: string | null };
 export const createCrate = (name: string, conditions: Condition[]) => post<{ id: string } & Undo>('/api/crates', { name, conditions });
@@ -1155,7 +1158,8 @@ export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
  *  music waiting to be heard and added. Own music is no setting (its folder's, 0101 point 9). Its own settings
  *  (decision 0034): its quality limit, its dot's colour and its name; an Incoming library's fetcher, whose records come
  *  into it (decision 0096: one Incoming library per fetcher), and where Add to puts them by default (`keep_to`, a main
- *  library; none: the first; 0101 point 2). */
+ *  library; none: the first; 0101 point 2); how its files write several values in one tag (`tag_rules`, its own since
+ *  0.18; one added starts from the default as it stands). */
 export type LibrarySetting = {
   /** Its id: a server's own; Cratarr's own library's, its folder's, kept for life (CU17). */
   id: string;
@@ -1168,6 +1172,7 @@ export type LibrarySetting = {
   name?: string | null;
   fetcher?: Fetcher | null;
   keep_to?: string | null;
+  tag_rules?: TagEncoding | null;
 };
 
 /** A server library as it is used: its kind in the list, someone's own music, or not used. */
@@ -1240,14 +1245,18 @@ export type NamingView = {
 export const checkNaming = (template?: string) =>
   quietly<NamingView>(`/api/settings/naming${template === undefined ? '' : `?template=${encodeURIComponent(template)}`}`);
 
-/** How tag values are split when read; the files are never changed. */
-export type TagRules = {
+/** How a library's files write several values in one tag, read so; the files are never changed. A library's own (its
+ *  `LibrarySetting`), and the default for new libraries and own music (`TagRules`). */
+export type TagEncoding = {
   artist_separators: string[];
   genre_separators: string[];
   /** Names containing a separator that are one artist (AC/DC). */
   artist_keep: string[];
   /** Genres containing a separator that are one genre ("Funk / Soul"). */
   genre_keep: string[];
+};
+/** The install's tag rules: the default encoding, and the names given otherwise, every library's. */
+export type TagRules = TagEncoding & {
   /** Names given otherwise (0.9.7): one `from` an alias ("Hip-Hop" → "Hip Hop"), several a merge; in what the library
    *  shows, in harvested words, and as a fix written into the files. */
   genre_aliases?: TagAlias[];
@@ -2672,7 +2681,7 @@ export const trackPlayed = (source: string, id: string) => quietly<{ counted: bo
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
 /** Decision 0097's words: a kind, a source (strongest first in a word's `sources`). */
 export type WordKind = 'genre' | 'style' | 'mood' | 'tag';
-export type WordSource = 'hand' | 'files' | 'audiomuse' | 'household' | 'musicbrainz' | 'discogs' | 'lastfm';
+export type WordSource = 'hand' | 'files' | 'audiomuse' | 'household' | 'musicbrainz' | 'discogs' | 'lastfm' | 'bandcamp';
 /** A kind's words, strongest first; `hand`: set by hand (exactly the hand's list). */
 export type KindWords = { kind: WordKind; hand: boolean; words: { word: string; sources: WordSource[] }[] };
 /** A record's words (the album view's `words`, the server's one store): its kinds that have any, in the order genre,
@@ -2832,6 +2841,18 @@ export const albumView = (source: string, album: string) =>
     () => quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`),
     () => deviceRecord(source, album),
   );
+/** A record as one entity (SCENARIOS-DC1 RV1): for this viewer, from the place it is shown from (`from`, the libraries its opener
+ *  has switched off, the record's own page's `opener`); a merged one answers as the one it went into, one gone 404 in the
+ *  server's words. Read through the one page cache (lib/cache.svelte). */
+export function getRecord(id: string, place: { from: string; without?: readonly string[]; opener?: string }) {
+  const q = new URLSearchParams({ from: place.from });
+  for (const w of place.without ?? []) q.append('without', w);
+  if (place.opener) q.set('opener', place.opener);
+  return quietly<import('./generated/Entity').Entity<import('./generated/RecordProperties').RecordProperties>>(`/api/records/${encodeURIComponent(id)}?${q}`);
+}
+/** A record's action as the server addresses it (RV10): its method, its address and its body, answered as its handler answers. */
+export const actOn = (a: import('./generated/ActionView').ActionView) =>
+  request<unknown>(a.href, a.method === 'GET' ? undefined : { method: a.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a.fields ?? {}) });
 /** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their
  *  albums and the albums they appear on, newest first, and their tracks album by album with the plays. */
 export type ArtistView = {
