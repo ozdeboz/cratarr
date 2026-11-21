@@ -296,10 +296,6 @@ fn covers_of(source_id: &str, album_id: &str, new: Option<&str>, main: i64, old:
 /// cover in Cratarr's store, kept before the old files go to the trash; a hand's pick stays as it is. Nothing is written into or
 /// beside the new copy (GEN.58). Blocking; never stops Replace: what could not be kept is logged.
 pub(crate) fn keep_cover(cat: &crate::catalogue::Catalogue, record: i64, old: &std::path::Path, by: &str) -> Result<bool> {
-    if true {
-        let _ = (cat, record, old, by);
-        return Ok(false);
-    }
     if cat.kept_cover(record)?.is_some_and(|k| k.chosen()) {
         return Ok(false);
     }

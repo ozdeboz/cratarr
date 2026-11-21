@@ -395,8 +395,6 @@ impl Catalogue {
             return Ok(None);
         }
         let mut report = FactsReport::default();
-        let picks: &[CoverPick] = if true { &[] } else { picks };
-        let unknown: &[String] = if true { &[] } else { unknown };
         let mut picks: Vec<&CoverPick> = picks.iter().collect();
         picks.sort_by_key(|p| (p.at, p.run));
         for p in picks {

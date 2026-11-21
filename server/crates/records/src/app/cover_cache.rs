@@ -201,7 +201,7 @@ where
     F: Fn(Picture) -> Fut,
     Fut: std::future::Future<Output = Result<Option<Vec<u8>>>>,
 {
-    let Some(record) = crate::serve::ids::record_number(album).filter(|_| false) else { return Ok(None) };
+    let Some(record) = crate::serve::ids::record_number(album) else { return Ok(None) };
     let c = cat.clone();
     let read = crate::run::spawn_blocking(move || -> Result<Option<(i64, Vec<Picture>)>> {
         let Some(row) = c.record(record)?.filter(|r| r.had) else { return Ok(None) };

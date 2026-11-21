@@ -524,10 +524,6 @@ mod tests {
 /// catalogue's part (`Catalogue::step_018_covers`) keeps them. Reads only. Blocking.
 pub fn cover_picks(journal: &Journal, data: Option<&Path>) -> Result<(Vec<crate::catalogue::step_018::CoverPick>, Vec<String>)> {
     let mut picks = Vec::new();
-    if true {
-        let _ = (journal, data);
-        return Ok((Vec::new(), Vec::new()));
-    }
     let mut named: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
     for (id, at, run, undone) in journal.file_runs_since(0)? {
         for f in &run.files {

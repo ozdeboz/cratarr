@@ -2172,9 +2172,14 @@ fn write_albums(
         // The record's one picture resolver (COU.11, FA14): its kept cover where chosen, else its files' (T-COU-22: a cover file, else
         // the picture inside its files that speak, in track order: a file Cratarr placed, as placed, says nothing), else a service's
         // first kept: the stamp every surface and the device's covers feed go by.
-        let _ = track_order;
-        let first_track = row.songs.first().map(|s| Path::new(root).join(&s.row.rel));
-        let files_print = super::art::album_print(&Path::new(root).join(dir), first_track.as_deref());
+        let mut speaking: Vec<&Song> = row.songs.to_vec();
+        speaking.sort_by_key(|s| track_order(s.row));
+        let at = Path::new(root).join(dir);
+        let files_print = if speaking.is_empty() {
+            super::art::album_print(&at, None)
+        } else {
+            speaking.iter().find_map(|s| super::art::album_print(&at, Some(&Path::new(root).join(&s.row.rel))))
+        };
         let kept = facts.credits.pictures.get(&first.record);
         let picture = cratarr_domain::picture::resolve(kept.map(|(_, chosen)| (if *chosen { "hand" } else { cratarr_domain::picture::FIRST }, "")), files_print.as_ref().map(|_| "files"));
         let cover = match picture.shows {

@@ -983,14 +983,41 @@ impl Serve {
     fn art_of(&self, album: &str) -> Result<Option<(String, Vec<u8>, String)>> {
         let Some((folder, dir, cover, first)) = self.library.album_art(album)? else { return Ok(None) };
         let print = cover.as_deref().and_then(|c| c.split_once('_')).map(|(_, p)| p.to_string()).unwrap_or_default();
-        Ok(self.art_at(folder, &dir, first)?.map(|(ct, bytes)| (ct, bytes, print)))
+        let kept = match (ids::record_number(album), self.catalogue_cell.get()) {
+            (Some(record), Some(cat)) => cat.kept_cover(record)?,
+            _ => None,
+        };
+        if let Some(k) = kept.as_ref().filter(|k| k.chosen()) {
+            return Ok(Some((k.mime.clone(), k.bytes.clone(), print)));
+        }
+        // T-COU-22: the cover file, else the picture inside its files that speak, in track order (a file Cratarr placed, as placed,
+        // says nothing).
+        if let Some((ct, bytes)) = self.art_at(folder, &dir, None)? {
+            return Ok(Some((ct, bytes, print)));
+        }
+        let placed = match self.catalogue_cell.get() {
+            Some(cat) => cat.placed_as_placed(folder)?,
+            None => Default::default(),
+        };
+        let mut files = self.library.art_files(album, folder, &dir)?;
+        if files.is_empty() {
+            files.extend(first);
+        }
+        for rel in files.into_iter().filter(|rel| !placed.contains(rel)) {
+            if let Some((ct, bytes)) = self.art_at(folder, &dir, Some(rel))? {
+                return Ok(Some((ct, bytes, print)));
+            }
+        }
+        Ok(kept.map(|k| (k.mime, k.bytes, print)))
     }
 
     /// Whether a record shows a cover chosen in Cratarr's store (COU.11): what a track's own picture gives way to on its row and in
     /// the media notification. Blocking.
     pub fn has_chosen_cover(&self, album: &str) -> Result<bool> {
-        let _ = album;
-        Ok(false)
+        match (ids::record_number(album), self.catalogue_cell.get()) {
+            (Some(record), Some(cat)) => Ok(cat.kept_cover(record)?.is_some_and(|k| k.chosen())),
+            _ => Ok(false),
+        }
     }
 
     /// The picture of what lies at (`folder`, `dir`): its cover file, else what is inside `first`, its first file.

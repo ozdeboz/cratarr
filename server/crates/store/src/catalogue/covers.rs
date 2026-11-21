@@ -85,10 +85,6 @@ pub(super) fn keep_in(tx: &Connection, record: i64, cover: &Cover) -> Result<Opt
 /// T-COU-20: a merged record's pick onto the record it went into: the later of the two stays (a choice above a service's first),
 /// the other kept as a candidate of `into`. None left on `from`. In the caller's transaction.
 pub(super) fn merge_in(tx: &Connection, from: i64, into: i64) -> Result<()> {
-    let _ = (tx, from, into);
-    if true {
-        return Ok(());
-    }
     let Some(theirs) = read(tx, from)? else { return Ok(()) };
     tx.execute("DELETE FROM record_covers WHERE record = ?1", [from])?;
     let candidate = |c: &Cover| set_aside_in(tx, into, c);
@@ -183,8 +179,9 @@ impl Catalogue {
 
     /// T-COU-21: the picks a 0.17 file run became, dropped by that run's Undo: the records whose picture it was. Blocking.
     pub fn drop_covers_of_run(&self, run: i64) -> Result<Vec<i64>> {
-        let _ = (run, CARRIED);
-        Ok(Vec::new())
+        let db = self.db();
+        let records: Vec<i64> = db.prepare("DELETE FROM record_covers WHERE run = ?1 AND how = ?2 RETURNING record")?.query_map(params![run, CARRIED], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(records)
     }
 
     /// `cover` set aside as a candidate of `record` (its merges followed): what an Undo puts back. Blocking.

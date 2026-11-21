@@ -29,18 +29,22 @@ pub const FIRST: &str = "first";
 /// The resolver: `kept` the store's cover (how it was chosen, its source), `files` the deciding copy's `files@<library>` where its
 /// files hold a picture.
 pub fn resolve(kept: Option<(&str, &str)>, files: Option<&str>) -> Picture {
-    let _ = kept;
-    match files {
-        Some(files) => Picture { shows: Shows::Files, by: vec![files.to_string()] },
-        None => Picture { shows: Shows::None, by: Vec::new() },
+    match (kept, files) {
+        (Some((how, _)), _) if how != FIRST => Picture { shows: Shows::Kept, by: vec!["hand".to_string()] },
+        (_, Some(files)) => Picture { shows: Shows::Files, by: vec![files.to_string()] },
+        (Some((_, source)), None) => Picture { shows: Shows::Kept, by: vec![source.to_string()] },
+        (None, None) => Picture { shows: Shows::None, by: Vec::new() },
     }
 }
 
 /// T-COU-20 (FA16's "the later `at` stays"): of two records' kept covers meeting in a merge, whether `ours` stays over `theirs`: a
 /// choice over a service's first answer, else the later; on a tie, ours.
 pub fn later(ours_how: &str, ours_at: i64, theirs_how: &str, theirs_at: i64) -> bool {
-    let _ = (ours_how, ours_at, theirs_how, theirs_at);
-    true
+    match (ours_how == FIRST, theirs_how == FIRST) {
+        (false, true) => true,
+        (true, false) => false,
+        _ => ours_at >= theirs_at,
+    }
 }
 
 #[cfg(test)]
