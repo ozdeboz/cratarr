@@ -587,9 +587,9 @@ fn an_arrivals_files_sit_at_their_tracks_places() {
     assert_eq!(order, rels, "the arrival's files in its tracks' order, never by path");
 }
 
-/// COU.13 (b)'s pick half (FA6; the credit by the reference's NAMES.20 row 2 is DC3's): "Harbour Sampler" `al-331`, twelve tracks by
-/// twelve artists, no ALBUMARTIST, no reference: root picks R331 in References › Use this: it is kept as the record's reference, chosen
-/// by hand, with Reset; its type a compilation (the rule: five or more track artists); nothing written into a file.
+/// COU.13 (b)'s pick half (FA6): "Harbour Sampler" `al-331`, twelve tracks by twelve artists, no ALBUMARTIST, no reference: root picks
+/// R331 in References › Use this: it is kept as the record's reference, chosen by hand, with Reset; nothing written into a file. Its
+/// credit and type by R331 (NAMES.20 rows 2 and 4, COU.10 (a)) are DC3's.
 #[test]
 fn a_picked_reference_is_kept_by_hand_with_reset() {
     let f = Folders::new("cou13b");
@@ -611,10 +611,7 @@ fn a_picked_reference_is_kept_by_hand_with_reset() {
     assert!(f.cat.pick_list(r, Some(&r331)).unwrap(), "picked by hand");
     assert_eq!(f.cat.picked(r).unwrap(), Some(r331.clone()), "R331 the record's reference, chosen by hand");
     f.pass();
-    let lib = crate::serve::library::Library::open(None).unwrap();
-    crate::serve::library::testing::build_now(&lib, &f.cat);
-    let secondary: String = lib.db().query_row("SELECT secondary FROM albums WHERE id = ?1", [ids::record(r)], |row| row.get(0)).unwrap();
-    assert!(secondary.to_lowercase().contains("compilation"), "a compilation: {secondary}");
+    assert_eq!(f.cat.picked(r).unwrap(), Some(r331.clone()), "kept through a pass");
     assert!(f.cat.pick_list(r, None).unwrap(), "Reset");
     assert_eq!(f.cat.picked(r).unwrap(), None, "none chosen after Reset");
     assert_eq!(tags(&f), before, "nothing written");
