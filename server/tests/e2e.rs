@@ -212,12 +212,25 @@ impl Server {
         bytes
     }
 
-    /// A picture for an album, as the page uploads it.
+    /// A picture for an album, as the page uploads it: Change cover's answer on the one path (COU.11), `{ result, undo, rev }`.
     async fn upload_cover(&self, album: &Value, picture: &[u8]) -> Value {
         let url = format!("{}/api/albums/cratarr/{}/covers", self.base, album["id"].as_str().unwrap());
         let sent = self.http.put(url).body(picture.to_vec()).send().await.unwrap();
         assert!(sent.status().is_success(), "{}", sent.status());
         sent.json().await.unwrap()
+    }
+
+    /// The cover a record shows, whole, as the page and the player ask it.
+    async fn cover_of(&self, album: &Value) -> Vec<u8> {
+        let (status, bytes) = self.anyone().bytes(&format!("/api/albums/cratarr/{}/cover", album["id"].as_str().unwrap())).await;
+        assert_eq!(status, 200);
+        bytes
+    }
+
+    /// A command's Undo through the one route, by the token its answer gave.
+    async fn undo_answer(&self, answer: &Value) {
+        let undone = self.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [answer["undo"]] })).await;
+        assert!(undone["refused"].as_array().is_none_or(Vec::is_empty), "{undone}");
     }
 
     /// Undoes a run and waits for its Undo to finish (it answers at once and works in the background): the run then.
@@ -2248,8 +2261,8 @@ async fn a_run_killed_half_way_keeps_to_what_it_wrote_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A real stop in a file written whole: a cover killed with its new picture beside the tracks and its tracks under way. Nothing
-/// but the run's entry knows what the folder held.
+/// Changed by design (COU.11, GEN.58: the chosen cover is kept in Cratarr's store, no file written): a cover chosen, the server
+/// stopped and started again: the record shows it still, every file as it was; its Undo gives back the files' picture.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_cover_killed_part_way_is_put_back_by_its_undo_end_to_end() {
@@ -2268,27 +2281,19 @@ async fn a_cover_killed_part_way_is_put_back_by_its_undo_end_to_end() {
     let (old, new) = (std::fs::read(&cover).unwrap(), std::fs::read(music.join("Glass Harbour/Tide Tables (2012)/cover.jpg")).unwrap());
     assert_ne!(old, new);
 
-    let url = format!("{}/api/albums/cratarr/{}/covers", s.base, album["id"].as_str().unwrap());
-    let sent = s.http.put(url).body(new.clone()).send().await.unwrap();
-    assert!(sent.status().is_success(), "{}", sent.status());
-    let asked = Instant::now();
-    while std::fs::read(&cover).ok().as_ref() != Some(&new) {
-        assert!(asked.elapsed() < Duration::from_secs(60), "waited for the new cover");
-    }
+    let before = as_it_lies(&dir);
+    let answer = s.upload_cover(&album, &new).await;
+    assert!(answer["undo"].is_string(), "its Undo at once: {answer}");
+    assert_eq!(s.cover_of(&album).await, new, "the record shows the chosen cover");
     s.stop();
 
     let s = Server::start(&data).await;
-    let run = s.get("/api/file-changes/runs").await[0].clone();
-    assert_eq!(run["what"], "cover", "{run}");
-    assert!(run["failed"].as_array().unwrap().iter().any(|f| f["why"] == "Cratarr stopped before this was done"), "stopped part way: {run}");
-    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
-    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
-    assert_eq!(std::fs::read(&cover).unwrap(), old, "the old picture back");
-    for track in audio_under(&dir).iter().filter(|f| !f.starts_with('.')) {
-        use lofty::prelude::*;
-        let file = lofty::read_from_path(dir.join(track)).unwrap();
-        assert_eq!(file.tags().iter().map(|t| t.picture_count()).sum::<u32>(), 0, "{track} had no picture inside");
-    }
+    s.until("the library read again", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    assert_eq!(s.cover_of(&album).await, new, "kept across a stop, in Cratarr's store");
+    assert_eq!(as_it_lies(&dir), before, "no file written: every byte and the folder's listing as before");
+    assert_eq!(std::fs::read(&cover).unwrap(), old);
+    s.undo_answer(&answer).await;
+    assert_eq!(s.cover_of(&album).await, old, "its Undo: the files' picture again");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -3300,8 +3305,8 @@ async fn a_length_fix_sets_what_was_heard_and_its_undo_gives_the_file_back_end_t
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A cover run to its end, as the kill above never lets it, each kind of album: a FLAC's picture beside its tracks goes and comes
-/// back, an MP3's inside them goes and comes back, and where there was no picture beside, none is left there.
+/// Changed by design (COU.11, GEN.58): each kind of album, a FLAC's picture beside its tracks and an MP3's inside them: the chosen
+/// cover is the record's on every surface, no file written; its Undo gives back the files' picture; nothing left beside.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_cover_is_written_and_its_undo_puts_the_old_one_back_end_to_end() {
@@ -3314,15 +3319,13 @@ async fn a_cover_is_written_and_its_undo_puts_the_old_one_back_end_to_end() {
     assert_ne!(old, new);
     let style = vorbis(&track, "STYLE");
     let album = s.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
-    s.upload_cover(&album, &new).await;
-    let run = s.done_run(None).await;
-    assert_eq!((&run["what"], &run["failed"]), (&json!("cover"), &json!([])), "{run}");
-    assert!(std::fs::read(&cover).unwrap() == new, "the new picture beside");
-    assert!(pictures_inside(&track) == [new.clone()], "the new picture inside");
-    let first = run["id"].as_str().unwrap();
-    let (status, undone) = s.undo(first).await;
-    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
-    assert!(std::fs::read(&cover).unwrap() == old, "the old picture beside");
+    let before = as_it_lies(&dir);
+    let answer = s.upload_cover(&album, &new).await;
+    assert_eq!(s.cover_of(&album).await, new, "the chosen cover shows");
+    assert_eq!(as_it_lies(&dir), before, "no file written");
+    assert!(std::fs::read(&cover).unwrap() == old && pictures_inside(&track).is_empty(), "the files' own pictures as they were");
+    s.undo_answer(&answer).await;
+    assert_eq!(s.cover_of(&album).await, old, "its Undo: the picture beside again");
     assert_eq!(vorbis(&track, "STYLE"), style, "its tags left alone");
 
     let dir = music.join("Various Artists/Late Train OST (2005)");
@@ -3330,14 +3333,12 @@ async fn a_cover_is_written_and_its_undo_puts_the_old_one_back_end_to_end() {
     let was = pictures_inside(&tracks[0]);
     assert!(was.len() == 1 && was[0] != new && !dir.join("cover.jpg").exists());
     let album = s.albums().await.into_iter().find(|a| a["title"] == "Late Train OST").unwrap();
-    s.upload_cover(&album, &new).await;
-    let run = s.done_run(Some(first)).await;
-    assert_eq!((&run["what"], &run["failed"]), (&json!("cover"), &json!([])), "{run}");
-    assert!(tracks.iter().all(|t| pictures_inside(t) == [new.clone()]), "the new picture alone inside every track");
-    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
-    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    let answer = s.upload_cover(&album, &new).await;
+    assert_eq!(s.cover_of(&album).await, new);
     assert!(tracks.iter().all(|t| pictures_inside(t) == was), "the old picture alone inside every track");
-    assert!(!dir.join("cover.jpg").exists(), "there was none beside");
+    s.undo_answer(&answer).await;
+    assert_eq!(s.cover_of(&album).await, was[0], "its Undo: the picture inside again");
+    assert!(!dir.join("cover.jpg").exists(), "nothing beside");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -3359,9 +3360,10 @@ async fn a_list_gets_a_cover_at_its_size_and_the_player_the_whole_one_end_to_end
     let stamp = || async { s.get("/api/covers/stamps").await[format!("cratarr/{id}")].clone() };
     let before = stamp().await;
     s.upload_cover(&album, &big).await;
-    s.done_run(None).await;
     s.until("the new cover's stamp", Duration::from_secs(120), || async { stamp().await != before }).await;
-    let whole = std::fs::read(music.join("Glass Harbour/Tide Tables (2012)/cover.jpg")).unwrap();
+    // The chosen cover, kept in Cratarr's store (COU.11): the whole picture is the one chosen, no file written.
+    let whole = big.clone();
+    assert_ne!(std::fs::read(music.join("Glass Harbour/Tide Tables (2012)/cover.jpg")).unwrap(), whole, "the file as it was");
     let side = |bytes: &[u8]| {
         let shown = image::load_from_memory(bytes).unwrap();
         shown.width().max(shown.height())
@@ -3372,7 +3374,7 @@ async fn a_list_gets_a_cover_at_its_size_and_the_player_the_whole_one_end_to_end
     assert_eq!((status, side(&small)), (200, 320));
     let (status, got) = s.anyone().bytes(&format!("/api/albums/cratarr/{id}/cover")).await;
     assert_eq!(status, 200);
-    assert!(got == whole, "the whole picture, as it is in the files");
+    assert!(got == whole, "the whole picture, as it was chosen");
     let song = s.songs_of(&album).await[0].clone();
     let (status, row) = s.anyone().bytes(&format!("/api/cover/cratarr/{song}?size=160")).await;
     assert_eq!((status, side(&row)), (200, 160));
@@ -3380,7 +3382,7 @@ async fn a_list_gets_a_cover_at_its_size_and_the_player_the_whole_one_end_to_end
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// lofty keeps a FLAC's pictures on the file, not in its comments: `retag::rewrite` moves them over, or none could be taken out.
+/// Changed by design (COU.11, GEN.58): a FLAC with no picture inside gets none from a chosen cover, nor from its Undo.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_covers_undo_takes_its_picture_out_of_a_flac_end_to_end() {
@@ -3389,10 +3391,9 @@ async fn a_covers_undo_takes_its_picture_out_of_a_flac_end_to_end() {
     let track = music.join("Glass Harbour/Tide Tables (2012)/02 Neap.flac");
     assert!(pictures_inside(&track).is_empty());
     let album = s.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
-    s.upload_cover(&album, &new).await;
-    let run = s.done_run(None).await;
-    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
-    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    let answer = s.upload_cover(&album, &new).await;
+    assert_eq!(pictures_inside(&track).len(), 0, "none put inside");
+    s.undo_answer(&answer).await;
     assert_eq!(pictures_inside(&track).len(), 0, "it had no picture inside");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
@@ -3407,10 +3408,12 @@ async fn a_new_cover_takes_the_place_of_the_old_one_inside_a_flac_end_to_end() {
     let dir = music.join("Noor Field/Two Rooms (2019)");
     let track = dir.join(&audio_under(&dir)[0]);
     assert_eq!(pictures_inside(&track).len(), 1);
+    let was = pictures_inside(&track);
     let album = s.albums().await.into_iter().find(|a| a["title"] == "Two Rooms").unwrap();
     s.upload_cover(&album, &new).await;
-    s.done_run(None).await;
-    assert_eq!(pictures_inside(&track).len(), 1, "one picture inside");
+    // Changed by design (COU.11, GEN.58): the file keeps its own picture; the record shows the chosen one.
+    assert_eq!(pictures_inside(&track), was, "its own picture inside, as it was");
+    assert_eq!(s.cover_of(&album).await, new);
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -4082,7 +4085,8 @@ fn release_type(track: &Path) -> Option<String> {
     file.tags().iter().find_map(|t| t.get_string(lofty::tag::ItemKey::MusicBrainzReleaseType).map(str::to_string))
 }
 
-/// A cover is the record's: the picture beside and inside every copy, each copy's own back with its Undo, FLAC and MP3.
+/// A cover is the record's (changed by design, COU.11, GEN.58): kept in Cratarr's store and shown for the record, no copy's files
+/// written; its Undo gives back the record's picture before, each copy's files as they were throughout.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_cover_reaches_every_copy_and_its_undo_gives_each_its_own_end_to_end() {
@@ -4094,15 +4098,15 @@ async fn a_cover_reaches_every_copy_and_its_undo_gives_each_its_own_end_to_end()
     assert_eq!(files.len(), 6);
     let was: Vec<Vec<Vec<u8>>> = files.iter().map(|t| pictures_inside(t)).collect();
 
-    s.upload_cover(&json!({ "id": id }), &new).await;
-    let run = s.done_run(None).await;
-    assert_eq!((&run["what"], &run["failed"]), (&json!("cover"), &json!([])), "{run}");
-    assert!(std::fs::read(kept.join("cover.jpg")).unwrap() == new && std::fs::read(waiting.join("cover.jpg")).unwrap() == new, "the new picture beside both");
-    assert!(files.iter().all(|t| pictures_inside(t) == [new.clone()]), "the new picture alone inside every track of both");
+    let record = json!({ "id": id });
+    let answer = s.upload_cover(&record, &new).await;
+    assert_eq!(s.cover_of(&record).await, new, "the record's cover");
+    assert!(std::fs::read(kept.join("cover.jpg")).unwrap().ends_with(b"the kept copy's") && !waiting.join("cover.jpg").exists(), "nothing beside either copy");
+    assert!(files.iter().map(|t| pictures_inside(t)).collect::<Vec<_>>() == was, "each track as it was");
 
-    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
-    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
-    assert!(std::fs::read(kept.join("cover.jpg")).unwrap().ends_with(b"the kept copy's"), "its own back");
+    s.undo_answer(&answer).await;
+    assert_ne!(s.cover_of(&record).await, new, "its Undo: the picture before");
+    assert!(std::fs::read(kept.join("cover.jpg")).unwrap().ends_with(b"the kept copy's"), "its own");
     assert!(!waiting.join("cover.jpg").exists(), "there was none beside");
     assert!(files.iter().map(|t| pictures_inside(t)).collect::<Vec<_>>() == was, "each track as it was");
     s.stop();
@@ -4163,8 +4167,9 @@ async fn a_length_fix_stays_in_its_file_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// The one lock, seen: one reading of the list shows a run writing and a second, of another kind, waiting, not done. The second has
-/// touched nothing yet, and takes its turn once the first is through.
+/// The one lock, seen: one reading of the list shows a run writing. Changed by design (COU.11, GEN.58): Change cover, its second
+/// kind until 0.18, is no file run any more and waits for no lock: chosen while the run writes, it answers at once with its Undo, the
+/// record shows it at once, and no file is written by it; the run goes on to its end.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_second_run_waits_while_the_first_writes_end_to_end() {
@@ -4181,18 +4186,19 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
         assert!(asked.elapsed() < Duration::from_secs(60), "waited for the run to get going");
     }
     let second = s.upload_cover(&album, &new).await;
+    assert!(second["undo"].is_string(), "answered at once, its Undo with it: {second}");
     let runs = s.get("/api/file-changes/runs").await;
     let state = |what: &str| runs.as_array().unwrap().iter().find(|r| r["what"] == what).map(|r| r["state"].clone());
-    assert_eq!((state("types"), state("cover")), (Some(json!("writing")), Some(json!("waiting"))), "{runs}");
-    assert_eq!(second["state"], "waiting", "{second}");
-    assert!(std::fs::read(&cover).unwrap() == old, "nothing written while it waits");
+    assert_eq!((state("types"), state("cover")), (Some(json!("writing")), None), "{runs}");
+    assert_eq!(s.cover_of(&album).await, new, "the record shows it at once");
+    assert!(std::fs::read(&cover).unwrap() == old, "nothing written by it");
 
-    s.until("the second run's turn", Duration::from_secs(120), || async {
+    s.until("the run's end", Duration::from_secs(120), || async {
         let runs = s.get("/api/file-changes/runs").await;
-        runs.as_array().unwrap().iter().any(|r| r["what"] == "cover" && r["state"] == "done" && r["id"].as_str().unwrap().starts_with('r'))
+        runs.as_array().unwrap().iter().any(|r| r["what"] == "types" && r["state"] == "done")
     })
     .await;
-    assert!(std::fs::read(&cover).unwrap() == new, "written in its turn");
+    assert!(std::fs::read(&cover).unwrap() == old, "nor after");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
