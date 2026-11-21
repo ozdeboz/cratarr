@@ -803,7 +803,7 @@ pub fn read_task(record: i64) -> serde_json::Value {
 }
 
 /// The records' due read on the runner (RV12 (d), LK.S1): every `DUE_EVERY` the record due (`due_record`, no job), and only then
-/// its job (`read_due`, its sources read by `read_reference`), keyed by the record. "Pause background reading" holds it, as it
+/// its job (`read_due`, its sources read through the References door, CU15), keyed by the record. "Pause background reading" holds it, as it
 /// holds the works pass (Y7): a paused minute asks nothing. Started once, at the server's start; a second start is refused.
 pub fn start_due_reads() -> std::result::Result<(), String> {
     crate::runner::runner().every(
@@ -822,7 +822,7 @@ pub fn start_due_reads() -> std::result::Result<(), String> {
         },
         |record| async move {
             let cat = crate::serve::instance().ok_or_else(|| anyhow::anyhow!("The server is stopping."))?.catalogue().clone();
-            read_due(&cat, record, now_secs(), read_reference).await
+            read_due(&cat, record, now_secs(), super::references_door::read).await
         },
     )
 }
@@ -1310,6 +1310,10 @@ pub async fn read_references(served: Arc<crate::serve::Serve>, album: String, re
         Some(p) => crate::bandcamp::Bandcamp::get().album(&p.value).await.ok(),
         None => None,
     };
+    // Its tags, Bandcamp's words of the record whose own page it is (GEN.60), kept by this job alone (LK.A2: never by a GET).
+    if let (Some(a), Some(p)) = (&page_read, &page) {
+        super::words::keep_bandcamp_read(Some(served.clone()), &p.value, &a.tags).await;
+    }
     let year: Option<u32> = page_read.as_ref().and_then(|a| a.released.as_deref()).and_then(|d| d.get(..4)?.parse().ok());
     if let (Some(a), Some(p)) = (&page_read, &page) {
         let list = list_of_bandcamp(a);
@@ -1403,7 +1407,8 @@ fn chose(cat: &Catalogue, record: i64, album: &str, c: &Choose, files: &[Listed]
 }
 
 pub async fn choose<H: RecordsHost + ?Sized>(app: &Arc<H>, album: &str, c: Choose) -> Result<References> {
-    choose_reading(app, album, c, read_reference).await
+    let read = read_reference_kept(app.served().clone());
+    choose_reading(app, album, c, read).await
 }
 
 /// `choose`, a record not had's sources read through `read` (the tests' stand-in): the choice kept, then the record's read begun
@@ -1431,7 +1436,9 @@ where
 /// sources read on their turn (`read_at_open`), a had record's references (`read_references`), each a Cratarr job of `READ_KIND`
 /// (no account's) keyed by the record, one running already followed, not doubled. Its task, to follow by its key.
 pub async fn begin_read(served: Arc<crate::serve::Serve>, record: i64) -> serde_json::Value {
-    begin_read_with(served, record, read_reference).await
+    // Its own Bandcamp page read by its link keeps its tags as the record's words (GEN.60), by this job alone (LK.A2).
+    let read = read_reference_kept(Some(served.clone()));
+    begin_read_with(served, record, read).await
 }
 
 /// `begin_read`, a record not had's sources read through `read`.

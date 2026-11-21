@@ -825,7 +825,7 @@ async fn the_record_read_runs_at_its_open_not_its_get() {
                 let _open = gate.acquire().await.unwrap();
                 asked.fetch_add(1, SeqCst);
                 let artists = vec![(Ref::new("musicbrainz", "artist", "mb:kite"), "Kite Theory".into()), (Ref::new("musicbrainz", "artist", "mb:gh"), "Glass Harbour".into())];
-                Ok::<_, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None, ReadMore { also: vec![Ref::new("discogs", "master", "9364")], artists })))
+                Ok::<_, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None, ReadMore { also: vec![Ref::new("discogs", "master", "9364")], artists, ..ReadMore::default() })))
             }
         }
     };
@@ -884,7 +884,7 @@ async fn a_record_never_read_is_read_on_the_schedule() {
             }
             asked.fetch_add(1, SeqCst);
             let artists = vec![(Ref::new("musicbrainz", "artist", "mb:gh"), "Glass Harbour".into())];
-            std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000))]), None, ReadMore { also: Vec::new(), artists }))))
+            std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000))]), None, ReadMore { also: Vec::new(), artists, ..ReadMore::default() }))))
         }
     };
     let t = crate::app::moment::now_secs();

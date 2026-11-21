@@ -5354,7 +5354,7 @@ async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Res
     let task = match ctx.serve() {
         Ok(served) => crate::app::references::begin_read(served, record).await,
         Err(_) => {
-            let _ = crate::app::references::read_at_open(&cat, record, crate::app::moment::now_secs(), crate::app::references::read_reference).await;
+            let _ = crate::app::references::read_at_open(&cat, record, crate::app::moment::now_secs(), crate::app::references_door::read).await;
             crate::app::references::read_task(record)
         }
     };

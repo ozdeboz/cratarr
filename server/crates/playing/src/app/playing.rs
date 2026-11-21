@@ -1147,8 +1147,8 @@ impl PlayingService {
     }
 
     /// What Cratarr's album `album` answers where the served library cannot read it (C54): a record not had, its own page from the
-    /// catalogue, its list asked for where none is kept, or why it has none (`page_at`, its sources read by
-    /// `references::read_reference_kept`: a Bandcamp page's tags kept as it is read, GEN.60); one merged into a record had, that
+    /// catalogue, its list asked for where none is kept, or why it has none (`page_at`: what is kept alone,
+    /// nothing read on a GET (RV12); the record's open reads its sources, a Bandcamp page's tags kept by that job, LK.A2); one merged into a record had, that
     /// one's view. The page's path alone: opening it marks the record opened. None: no record of the catalogue's, or one had that
     /// the library does not serve now (answered as before).
     pub async fn record_view(&self, album: &str) -> Result<Option<AlbumView>, ToggleError> {
