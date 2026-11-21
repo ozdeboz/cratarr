@@ -9,7 +9,7 @@ import type { LinkView } from '../src/lib/generated/LinkView';
 import type { Section } from '../src/lib/generated/Section';
 import type { Version } from '../src/lib/generated/Version';
 
-const { askAt, deviceItems, headChips, openerOf, PLACES, playRow, sectionsOf, stateLine, versionLines } = await import('../src/lib/sheet/record.ts');
+const { askAt, deviceItems, headChips, openerOf, PLACES, playRow, sectionsOf, stateLine, typeLine, versionLines } = await import('../src/lib/sheet/record.ts');
 const { namesRecord } = await import('../src/lib/recordCache.ts');
 const { when } = await import('../src/lib/settings/when.ts');
 type Entity = import('../src/lib/recordCache.ts').RecordEntity;
@@ -159,6 +159,19 @@ test("the record page's opener: the stack-to-place table", () => {
 test('the Head shows no year while the sources differ', () => {
   const differs = entity({ properties: { ...entity().properties, year: { value: null, by: [], versions: [{ value: 2014, by: ['musicbrainz'] }, { value: 2015, by: ['discogs'] }] } } });
   assert.deepEqual(headChips(differs), ['Glass Harbour', 'EP'], 'no year, and no version said in the Head');
+});
+
+// VR39 (`type_why`): the record's type is said with what it is by, in the server's words, where its facts are judged against their
+// sources: one top Item, "Type", in the References sheet's Group (the coordinator, 2026-11-21: no tappable Head chip exists; no new
+// pattern, no new words). A type with no value and no why shows no Item.
+test("the References sheet says the record's type and what it is by", () => {
+  const p = (value: string | null, why: string) => ({ ...entity().properties, type: { value, by: [], versions: [] }, type_why: why });
+  assert.equal(typeLine(p('ep', 'by its sources')), 'EP · by its sources');
+  assert.equal(typeLine(p('album', 'by the picked list')), 'Album · by the picked list');
+  assert.equal(typeLine(p('album', 'by the release type rule')), 'Album · by the release type rule');
+  assert.equal(typeLine(p(null, '')), null, 'none until a hand picks: no Item');
+  const sheet = read('lib/RecordReferences.svelte');
+  assert.match(sheet, /\{#if typeSaid\}<Item name="Type" line=\{typeSaid\} \/>\{\/if\}/);
 });
 
 // LOOKUPS Found 10, RV12: a Confirm or a pasted link answers with the record's read (`task`), whose findings reach the page by
