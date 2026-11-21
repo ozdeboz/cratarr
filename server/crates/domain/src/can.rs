@@ -441,10 +441,29 @@ fn full(v: &Viewer) -> Result<(), &'static str> {
 }
 
 /// What a key that controls may do besides (CHECK-DC1's rulings 1 and 2): play (a reading key never: it is GET-only); and, an
-/// administrator's control key alone, what Home Assistant does (HA-CONTRACT-0.18: a heart, a rating, the review of an arrival
-/// and its Undo).
+/// administrator's control key alone, what Home Assistant does to a record (HA-CONTRACT-0.18 exactly: the review of an arrival and
+/// its Undo; a track's heart and an album's tags are no record action). No record heart, no rating (RECHECK-DC1-VR01).
 fn controls(v: &Viewer) -> Result<(), &'static str> {
     if v.scope == Scope::Read { Err(said::KEY) } else { Ok(()) }
+}
+
+/// Where what a Change changed is kept (AMENDMENTS 2026-11-20 23:59): per account (playlists, crates, hearts, Out, Discover answers,
+/// excluded tracks, imports), or shared (the library, arrivals, requests, Soulseek, Health's runs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kept {
+    PerAccount,
+    Shared,
+}
+
+/// Who may undo a Change (the 23:59 rule, as one function GF's Change-based `may_undo` calls): what is kept per account, its account
+/// alone; shared data, whoever made the Change or any administrator. Else 403 "That isn't yours to undo."
+pub fn may_undo(v: &Viewer, maker: Option<&str>, kept: Kept) -> Result<(), &'static str> {
+    let made = maker == Some(v.account.as_str());
+    match kept {
+        Kept::PerAccount if made => Ok(()),
+        Kept::Shared if made || v.role.administers() => Ok(()),
+        Kept::PerAccount | Kept::Shared => Err(said::UNDOER),
+    }
 }
 
 /// Home Assistant's: a full key, or an administrator's control key.
@@ -516,7 +535,7 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
         | Action::RemoveFromDevice => Ok(Decision::Allow),
         // Queued or started on a player (a POST): never a reading key.
         Action::Shuffle | Action::PlayNext | Action::AddToQueue | Action::StartRadio | Action::Resume => controls(v).map(|()| Decision::Allow),
-        Action::Favourite | Action::Rating => reviews(v).map(|()| Decision::Allow),
+        Action::Favourite | Action::Rating => full(v).map(|()| Decision::Allow),
         Action::Want => {
             full(v)?;
             granted(v, v.may.request, said::REQUEST).map(|()| Decision::Allow)
@@ -569,7 +588,7 @@ fn right(v: &Viewer, a: &Action, r: &Record) -> Result<Decision, &'static str> {
         Action::Undo { copy } => {
             reviews(v)?;
             let by = copy_at(r, *copy)?.arrival.as_ref().and_then(|x| x.by.as_deref());
-            if by == Some(v.account.as_str()) || v.role.administers() { Ok(Decision::Allow) } else { Err(said::UNDOER) }
+            may_undo(v, by, Kept::Shared).map(|()| Decision::Allow)
         }
     }
 }
@@ -802,6 +821,18 @@ mod tests {
         for action in [Action::Shuffle, Action::PlayNext, Action::AddToQueue, Action::StartRadio] {
             assert!(refused_right(decide(&key(), &action, &night_ferry(Some(0)))), "{action:?}");
         }
+    }
+
+    /// The 23:59 rule (CHECK-DC1's ruling 3), as GF will call it: what is kept per account is its account's alone, an administrator's
+    /// too; shared data is its maker's or any administrator's; the refusal says "That isn't yours to undo.".
+    #[test]
+    fn undo_is_the_makers_or_for_shared_data_any_administrators() {
+        let admin2 = Viewer::new("admin2", true, None, May::default(), None);
+        assert_eq!(may_undo(&alice(), Some("alice"), Kept::PerAccount), Ok(()));
+        assert_eq!(may_undo(&root(), Some("alice"), Kept::PerAccount), Err(said::UNDOER), "her playlist: hers alone");
+        assert_eq!(may_undo(&admin2, Some("root"), Kept::Shared), Ok(()), "any administrator");
+        assert_eq!(may_undo(&bob(), Some("root"), Kept::Shared), Err("That isn't yours to undo."));
+        assert_eq!(may_undo(&bob(), Some("bob"), Kept::Shared), Ok(()), "its maker");
     }
 
     /// CN6's `decide` half (its test, `library_actions_name_their_copy_and_follow_the_server`, is the records crate's: the
