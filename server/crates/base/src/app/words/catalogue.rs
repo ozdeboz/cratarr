@@ -5,7 +5,8 @@
 //!
 //! - **Write**: genre, type and year by default (the decision); style, mood and tags leave the files' own. Type and year
 //!   are one switch, 0.13's "Write types and years into files" (`file_facts`): one run writes both.
-//! - **Sources** by kind as the store has them (`store`): mood is AudioMuse's (and the hand's); the hand is always on.
+//! - **Sources** by kind as the store has them (`store`): AudioMuse's in every kind it feeds, Bandcamp's in each but mood; mood
+//!   is AudioMuse's (and the hand's); the hand is always on.
 //! - **Aliases**: genre's are the tag rules' (file fixes use them too); the others' are kept here.
 //!
 //! Kept as server choices (`words:write:<kind>`, `words:off:<kind>`, `words:aliases:<kind>`); the store is built again
@@ -23,13 +24,13 @@ use crate::app::base_host::BaseHost;
 /// Every kind the sheet lists, in its order.
 pub const ALL: [&str; 6] = ["type", "year", "genre", "style", "mood", "tag"];
 
-/// The sources that can say a kind, strongest first; Bandcamp's tags in each kind but mood (GEN.59, OQ-GEN-25), switchable
-/// like Last.fm's.
+/// The sources that can say a kind, strongest first, each switchable per kind but the hand: AudioMuse's words in every kind it
+/// feeds (its heard styles sorted by the word into genres, styles and tags; its moods), Bandcamp's tags in each kind but mood
+/// (GEN.59, OQ-GEN-25), like Last.fm's. Mood is AudioMuse's and the hand's.
 fn sources_of(kind: Kind) -> &'static [Source] {
     use Source::*;
     match kind {
-        Kind::Genre | Kind::Tag => &[Hand, Files, Household, Musicbrainz, Discogs, Lastfm, Bandcamp],
-        Kind::Style => &[Hand, Files, Audiomuse, Household, Musicbrainz, Discogs, Lastfm, Bandcamp],
+        Kind::Genre | Kind::Style | Kind::Tag => &[Hand, Files, Audiomuse, Household, Musicbrainz, Discogs, Lastfm, Bandcamp],
         Kind::Mood => &[Hand, Audiomuse],
     }
 }

@@ -15,6 +15,10 @@
 //!   genres, a file's GENRE) names is a style; any other a tag. Digits alone are no word, and so is a word only a file's
 //!   STYLE uses that no caller knows (GEN-DESIGN §8). Mood is AudioMuse's and the hand's alone. A service's stored word is
 //!   split by that service's rule as it is read (GEN.4).
+//! - **Links** (GEN-DESIGN §5). After the merge, a record's genres and each track's are its genre words and the genres its
+//!   styles count toward (`shared/genres.json`'s links), by one function, `with_links`: never shown, naming no source, never
+//!   held to the services' three; a hand genre list final. A track's start from its record's genre words, not its record's
+//!   link-given genres, so a track's own hand style list gives its genres alone (OQ-GEN-15).
 //! - **One spelling.** A word's key folds case, spaces and hyphens (`super::key`); a kind's aliases name the word it
 //!   is; its shown spelling is the 26's name, the alias's, else the most written.
 
@@ -583,7 +587,25 @@ fn by_hand(lib: &Library, kind: Kind, list: &[String]) -> KindWords {
     KindWords { kind, hand: true, words }
 }
 
-/// A record's words from its inputs (decision 0097): the store's one merge.
+/// A kind's genres from its genre words and its style words (GEN-DESIGN §5, GEN.22): the one link function, for a record and for
+/// each of its tracks alike, after the merge. A hand genre list is final: the links add nothing to it (GEN.23, GEN.51). Else its
+/// genre words, then each style's links in the styles' order, each genre once (one its genre words hold adds nothing); never held
+/// to the services' three (R7), and naming no source and no style (C7 (c), GEN.48).
+fn with_links(lib: &Library, genres: KindWords, styles: &[Word]) -> KindWords {
+    if genres.hand {
+        return genres;
+    }
+    let mut have: HashSet<String> = genres.words.iter().map(|w| lib.key(Kind::Genre, &w.word)).collect();
+    let mut words = genres.words;
+    for genre in styles.iter().flat_map(|s| lib.genres.genres_of(&s.word)) {
+        if have.insert(lib.key(Kind::Genre, genre)) {
+            words.push(Word { word: genre.clone(), sources: Vec::new() });
+        }
+    }
+    KindWords { kind: Kind::Genre, hand: false, words }
+}
+
+/// A record's words from its inputs (decision 0097): the store's one merge, then the links (GEN-DESIGN §5).
 pub fn record(lib: &Library, r: &RecordIn) -> Words {
     let own: Vec<Gathered> = r.tracks.iter().map(|t| own_words(lib, t)).collect();
     let tracks = r.tracks.len();
@@ -632,31 +654,43 @@ pub fn record(lib: &Library, r: &RecordIn) -> Words {
             }
         }
     }
+    let mut by_kind: HashMap<Kind, KindWords> = KINDS
+        .into_iter()
+        .map(|kind| match r.hand.get(&kind) {
+            Some(list) => (kind, by_hand(lib, kind, list)),
+            None => (kind, KindWords { kind, hand: false, words: gathered.words(lib, kind).into_iter().map(|(_, w, _)| w).collect() }),
+        })
+        .collect();
+    let keyed = |kind: Kind, words: &[Word]| -> Vec<(String, Word)> { words.iter().map(|w| (lib.key(kind, &w.word), w.clone())).collect() };
+    // The links, after the merge (GEN-DESIGN §5): the record's genres are its genre words and its styles' links. Its genre words
+    // before them are where each track's genres start (OQ-GEN-15): a track's own styles give its links.
+    let genre_words = by_kind.remove(&Kind::Genre).unwrap_or(KindWords { kind: Kind::Genre, hand: false, words: Vec::new() });
+    let record_genre_words = keyed(Kind::Genre, &genre_words.words);
+    let genres = with_links(lib, genre_words, &by_kind[&Kind::Style].words);
+    by_kind.insert(Kind::Genre, genres);
     let mut kinds = Vec::new();
     let mut kept: HashMap<Kind, Vec<(String, Word)>> = HashMap::new();
     for kind in KINDS {
-        let k = match r.hand.get(&kind) {
-            Some(list) => by_hand(lib, kind, list),
-            None => KindWords { kind, hand: false, words: gathered.words(lib, kind).into_iter().map(|(_, w, _)| w).collect() },
-        };
-        kept.insert(kind, k.words.iter().map(|w| (lib.key(kind, &w.word), w.clone())).collect());
+        let Some(k) = by_kind.remove(&kind) else { continue };
+        kept.insert(kind, keyed(kind, &k.words));
         if !k.words.is_empty() || k.hand {
             kinds.push(k);
         }
     }
+    let record_of = |kind: Kind| -> &[(String, Word)] { kept.get(&kind).map(Vec::as_slice).unwrap_or_default() };
     let mut out_tracks = Vec::new();
     for (t, g) in r.tracks.iter().zip(&own) {
-        let mut differ = Vec::new();
-        for kind in KINDS {
-            let record_words = kept.get(&kind).map(Vec::as_slice).unwrap_or_default();
-            let words: KindWords = if let Some(list) = t.hand.get(&kind) {
-                by_hand(lib, kind, list)
+        // A kind as the track reads it, from its record's words of it (`record_words`): none where its record's hand list covers
+        // it, so it reads the record's.
+        let read = |kind: Kind, record_words: &[(String, Word)]| -> Option<KindWords> {
+            if let Some(list) = t.hand.get(&kind) {
+                Some(by_hand(lib, kind, list))
             } else if r.hand.contains_key(&kind) {
-                continue;
+                None
             } else if kind == Kind::Mood && t.heard {
                 // A heard track's mood is its own measure.
                 let mine = g.words(lib, Kind::Mood);
-                KindWords { kind, hand: false, words: mine.into_iter().map(|(_, w, _)| Word { word: w.word, sources: vec![Source::Audiomuse] }).collect() }
+                Some(KindWords { kind, hand: false, words: mine.into_iter().map(|(_, w, _)| Word { word: w.word, sources: vec![Source::Audiomuse] }).collect() })
             } else {
                 // Its record's, and its own besides.
                 let mut words: Vec<Word> = record_words.iter().map(|(_, w)| w.clone()).collect();
@@ -666,8 +700,23 @@ pub fn record(lib: &Library, r: &RecordIn) -> Words {
                         words.push(w);
                     }
                 }
-                KindWords { kind, hand: false, words }
+                Some(KindWords { kind, hand: false, words })
+            }
+        };
+        let mut reads: HashMap<Kind, Option<KindWords>> = [Kind::Style, Kind::Mood, Kind::Tag].into_iter().map(|kind| (kind, read(kind, record_of(kind)))).collect();
+        // Its genres: its genre words (its record's before the links, and its own) and the links of the styles it reads.
+        let genres = read(Kind::Genre, &record_genre_words).map(|k| {
+            let styles: Vec<Word> = match &reads[&Kind::Style] {
+                Some(own) => own.words.clone(),
+                None => record_of(Kind::Style).iter().map(|(_, w)| w.clone()).collect(),
             };
+            with_links(lib, k, &styles)
+        });
+        reads.insert(Kind::Genre, genres);
+        let mut differ = Vec::new();
+        for kind in KINDS {
+            let record_words = record_of(kind);
+            let Some(words) = reads.remove(&kind).flatten() else { continue };
             let same = !words.hand && {
                 let mine: Vec<String> = words.words.iter().map(|w| lib.key(kind, &w.word)).collect();
                 let theirs: Vec<&str> = record_words.iter().map(|(k, _)| k.as_str()).collect();
