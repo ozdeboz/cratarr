@@ -8,11 +8,16 @@ import { on, stream } from './events.svelte';
 
 const POLL_MS = 2_000;
 
+/** Asked this many times in a row without the server naming a followed job: it is gone (a restart cut it off). */
+const MISSED = 3;
+
 class Tasks {
   byKind = $state<Record<string, Task>>({});
   #timer: ReturnType<typeof setTimeout> | undefined;
   #users = 0;
   #off: (() => void) | null = null;
+  /** The jobs followed by their id until they end (`ended`), with how often the server's list lacked each. */
+  #waiting = new Map<number, { done: (t: Task) => void; fail: (e: Error) => void; missed: number }>();
 
   /** The latest of a kind, running or ended. */
   of(kind: string): Task | null {
@@ -25,6 +30,7 @@ class Tasks {
   }
 
   apply(t: Task) {
+    if (t.finished !== null) this.#waiting.get(t.id)?.done(t);
     const had = this.byKind[t.kind];
     // A late word of an older task never hides a newer one.
     if (had && had.id > t.id) return;
@@ -42,9 +48,31 @@ class Tasks {
     return this.#ask();
   }
 
+  /** A job an open began or joined, followed by its id until it ends (SCENARIOS-LOOKUPS: an open answers 202 with its
+   *  task; several of one kind may run at once, one per key). Its end as the live channel tells it, or as asked every two
+   *  seconds while that is down; the runner's own words where the server no longer knows it. */
+  ended(t: Task): Promise<Task> {
+    if (t.finished !== null) return Promise.resolve(t);
+    return new Promise((resolve, reject) => {
+      const stop = this.follow();
+      const end = (then: () => void) => {
+        this.#waiting.delete(t.id);
+        stop();
+        then();
+      };
+      this.#waiting.set(t.id, { done: (x) => end(() => resolve(x)), fail: (e) => end(() => reject(e)), missed: 0 });
+      this.apply(t);
+    });
+  }
+
   async #ask() {
     try {
-      for (const t of (await getTasks()).tasks) this.apply(t);
+      const listed = (await getTasks()).tasks;
+      for (const t of listed) this.apply(t);
+      for (const [id, w] of this.#waiting) {
+        w.missed = listed.some((t) => t.id === id) ? 0 : w.missed + 1;
+        if (w.missed >= MISSED) w.fail(new Error('It stopped before it was done.'));
+      }
     } catch {
       /* the next look tries again */
     }
@@ -52,7 +80,7 @@ class Tasks {
 
   #schedule() {
     clearTimeout(this.#timer);
-    const open = Object.values(this.byKind).some((t) => t.finished === null);
+    const open = this.#waiting.size > 0 || Object.values(this.byKind).some((t) => t.finished === null);
     if (this.#users && open && !stream.connected) this.#timer = setTimeout(() => this.#ask().then(() => this.#schedule()), POLL_MS);
   }
 
