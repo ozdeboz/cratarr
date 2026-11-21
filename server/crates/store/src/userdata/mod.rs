@@ -1898,7 +1898,7 @@ impl UserData {
     pub fn follow_pids(&self, moves: &[(String, String)], songs: &std::collections::HashSet<String>) -> Result<Followed> {
         let mut to: std::collections::HashMap<&str, Option<&str>> = std::collections::HashMap::new();
         for (pid, item) in moves {
-            to.entry(pid.as_str()).or_insert(Some(item.as_str()));
+            to.entry(pid.as_str()).and_modify(|now| *now = now.filter(|n| *n == item.as_str())).or_insert(Some(item.as_str()));
         }
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -1920,6 +1920,8 @@ impl UserData {
         let moved = follow("annotation", "item", " AND kind = 'song'")?;
         follow("imported", "item", " AND kind = 'song'")?;
         follow("bookmark", "item", "")?;
+        follow("plays", "song", "")?;
+        follow("playlist_item", "track", "")?;
         tx.commit()?;
         Ok(Followed { moved, apart })
     }
@@ -1928,9 +1930,6 @@ impl UserData {
     /// copy, a track back) gives the rows on a track its key, and a fresh start finds them by it. `keys` is (persistent key, song id).
     /// How many rows took a new key.
     pub fn carry_pids(&self, keys: &[(String, String)]) -> Result<usize> {
-        if !keys.is_empty() {
-            return Ok(0);
-        }
         let mut db = self.db();
         let tx = db.transaction()?;
         tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS song_keys (song TEXT PRIMARY KEY, pid TEXT NOT NULL) WITHOUT ROWID; DELETE FROM temp.song_keys;")?;

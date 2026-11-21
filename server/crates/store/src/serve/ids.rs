@@ -181,15 +181,6 @@ pub fn album_at(pid: &str, folder: i64) -> String {
 /// artist, never a placed file's own tags), and its paired track, its place and title as the record knows them (its track's place,
 /// else its file's numbers, else its name's leading number; its title, else its name's). No tag Cratarr may have written decides it,
 /// and a file with no tags has one of its own. Worked out the same way at a fresh start, so what is keyed to a song finds it again.
-/// Red: today's persistent id from the tags.
-pub fn song_pid(row: &ServedRow, album_artist: &str) -> String {
-    let album_id = hash(&[&album_pid(row, album_artist)]);
-    hash(&[&first_group(&[
-        vec![row.first("musicbrainz_releasetrackid").unwrap_or("").to_string()],
-        vec![album_id, row.first("discnumber").unwrap_or("").to_string(), row.first("tracknumber").unwrap_or("").to_string(), row.first("title").unwrap_or("").to_string()],
-    ])])
-}
-
 pub fn song_key(album_artist: &str, album: &str, (disc, number): (Option<u32>, Option<u32>), title: &str) -> String {
     let n = |v: Option<u32>| v.map(|v| v.to_string()).unwrap_or_default();
     hash(&[&artist_hash(album_artist), &clear(&album.to_lowercase()), &n(disc.or(number.map(|_| 1))), &n(number), &clear(&title.to_lowercase())])

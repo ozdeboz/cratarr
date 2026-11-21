@@ -2176,7 +2176,7 @@ fn write_albums(
         let mut named: HashMap<(i64, &str), Vec<(String, String)>> = HashMap::new();
         for s in by_path.into_iter().filter(|s| s.row.told.is_none()) {
             let Some(album) = fact(s.row, "album") else { continue };
-            let artist = s.row.first("albumartist").or_else(|| s.row.first("artist")).unwrap_or(UNKNOWN_ARTIST).to_string();
+            let artist = fact(s.row, "albumartist").or_else(|| fact(s.row, "artist")).unwrap_or_else(|| UNKNOWN_ARTIST.to_string());
             named.entry((s.folder, crate::catalogue::dir_of(&s.row.rel))).or_default().push((album, artist));
         }
         named.into_iter().filter_map(|(at, said)| majority(said.into_iter()).map(|m| (at, m))).collect()
@@ -2250,11 +2250,17 @@ fn write_albums(
             let at = r.place.filter(|(_, n)| n.is_some()).unwrap_or_else(|| {
                 (r.first("discnumber").and_then(leading_number).or(name_disc), r.first("tracknumber").and_then(leading_number).or(name_number))
             });
-            let (key_album, key_artist) = key_albums.get(&(s.folder, crate::catalogue::dir_of(&r.rel))).map_or((s.album.as_str(), s.raw_album_artist.as_str()), |(a, b)| (a.as_str(), b.as_str()));
-            let _ = (key_album, key_artist, at);
+            // A folder none of whose files speaks and names an album (all placed and as placed): its record's stored title and credit,
+            // never a placed file's own tags.
+            let credit = facts.credits.records.get(&s.record).map(|names| cratarr_rules::names::credit_text(&names.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), None));
+            let (key_album, key_artist) = match (key_albums.get(&(s.folder, crate::catalogue::dir_of(&r.rel))), facts.credits.titles.get(&s.record), credit.as_deref()) {
+                (Some((a, b)), ..) => (a.as_str(), b.as_str()),
+                (None, Some(title), Some(credit)) if !credit.is_empty() => (title.as_str(), credit),
+                _ => (s.album.as_str(), s.raw_album_artist.as_str()),
+            };
             ins_song.execute(params![
                 id,
-                ids::song_pid(r, &s.raw_album_artist),
+                ids::song_key(key_artist, key_album, at, &s.title),
                 s.folder,
                 r.rel,
                 s.album_id,
@@ -3922,13 +3928,18 @@ mod tests {
         assert_eq!(lib.album_art("al-5").unwrap().unwrap().3.as_deref(), Some("01 One.flac"));
     }
 
-    /// Copies share their tracks, so two songs of one persistent id are two tracks tagged alike. Going by the first folder a
-    /// favourite would move to the other at the next build, whichever record holds it.
+    /// Copies share their tracks, so two songs of one persistent key are two tracks alike. Changed by design (COU.9, T-COU-18): every
+    /// song's key is listed, each song's rows carry it, and what follows a fresh start moves no row to either (`follow_pids`, counted).
     #[test]
     fn a_persistent_id_on_two_tracks_says_neither() {
         let lib = built_with(&TWO_KEPT, &[in_folder(0, copy_rows(1, "A/Album", 5, "FLAC", 900)), in_folder(1, copy_rows(3, "A/Album", 6, "FLAC", 900))]);
         assert_eq!(lib.counts().unwrap().0, 4, "two records, or this proves nothing");
-        assert_eq!(lib.pids().unwrap(), Vec::new());
+        let keys = lib.pids().unwrap();
+        assert_eq!(keys.len(), 4, "every song's key, a key on two songs among them: {keys:?}");
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        ud.count_play("me", ("tr-9", &keys[0].0), "al-5", &[], 100).unwrap();
+        let followed = ud.follow_pids(&keys, &Default::default()).unwrap();
+        assert_eq!((followed.moved, followed.apart), (0, 2), "says neither: its annotation and its play history stay, each counted");
         assert_eq!(built_with(&TWO_KEPT, &two_copies()).pids().unwrap().len(), 2, "two files of one track are one song");
     }
 

@@ -1563,7 +1563,7 @@ impl Library {
     /// follow neither, and are counted (`UserData::follow_pids`); each song's rows still carry its key.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT pid, min(id) FROM songs GROUP BY pid HAVING count(*) = 1 ORDER BY pid")?;
+        let mut st = db.prepare("SELECT pid, id FROM songs ORDER BY pid, id")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
