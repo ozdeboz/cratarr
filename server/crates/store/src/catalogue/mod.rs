@@ -1915,6 +1915,13 @@ impl Catalogue {
         Ok(facts)
     }
 
+    /// Each file's year its record's, as the library resolves it (`song_years`, by song): one year for similarity, a crate's year
+    /// and Radio's era (SIM.21, T-SIM-17). A file of a song the library has no year for keeps its own.
+    pub fn with_record_years(facts: &mut [crate::crates::Facts], years: &HashMap<String, u32>) {
+        // SIM's red commit: each file's own year, as today.
+        let _ = (facts, years);
+    }
+
     /// One `Facts` a track: `several` holds each track with more than one file present, by the place its row copy has in the
     /// library (none: the first by folder). The other files lend their lines and folders and are read no further, so a
     /// second copy costs no memory here: this read is what the 768 MB limit is tightest on.

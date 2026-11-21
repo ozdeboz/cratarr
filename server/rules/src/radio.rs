@@ -161,6 +161,8 @@ pub struct Index {
     pub artist_ids: Vec<String>,
     /// The genres' names (lower case) by their number: Bandcamp's suggestions are weighed by them (0.9.5).
     pub genre_ids: Vec<String>,
+    /// The playlists' ids by their number (`Track::playlists`): a playlist's own membership is no signal of it (SIM, Q-SIM-6).
+    pub playlist_ids: Vec<String>,
     /// The songs as similarity's library, by their places (their sounds too); shared, as the index is copied for each
     /// listener.
     pub like: Arc<Library>,
@@ -214,7 +216,7 @@ impl Index {
         for (i, s) in songs.iter().enumerate() {
             albums.entry(s.album_n).or_default().push(i);
         }
-        Self { songs, by_id, albums, artist_ids: Vec::new(), genre_ids: Vec::new(), like }
+        Self { songs, by_id, albums, artist_ids: Vec::new(), genre_ids: Vec::new(), playlist_ids: Vec::new(), like }
     }
 
     /// With the catalogue's facts of each song (`crates::Facts::like`: the one reading of a track the crates use too):
@@ -236,6 +238,11 @@ impl Index {
     /// An artist's number, by their id (`ar-…`).
     pub fn artist_number(&self, id: &str) -> Option<u32> {
         self.artist_ids.iter().position(|x| x == id).map(|n| n as u32)
+    }
+
+    /// A playlist's number, by its id.
+    pub fn playlist_number(&self, id: &str) -> Option<u32> {
+        self.playlist_ids.iter().position(|x| x == id).map(|n| n as u32)
     }
 
     /// A genre's number, by its name.
@@ -269,6 +276,13 @@ impl Index {
 /// within seven days, with when (epoch seconds). `within`: the songs of what it plays inside (a crate, a playlist…).
 pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: Option<&[usize]>, rng: &mut Rng) -> Vec<usize> {
     choose_among(index, req, recent, within, None, rng)
+}
+
+/// Similar's picks for what is shown of them (SIM: Similar artists): as Radio's inserts, only songs alike enough on something
+/// telling (`Signals::shown`), however few.
+pub fn choose_alike(index: &Index, req: &Ask, recent: &HashMap<String, i64>, rng: &mut Rng) -> Vec<usize> {
+    // SIM's red commit: Similar's picks, as today.
+    choose(index, &Ask { mode: Mode::Similar, ..req.clone() }, recent, None, rng)
 }
 
 /// `choose`, picking only what `here` holds (a device with Cratarr away: what plays there; the owner, 2026-11-06: what cannot play is
@@ -1149,5 +1163,297 @@ mod tests {
         };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(2)));
         assert_eq!(picked, ["e1", "e2"], "the album in the era, whole, though album 3 shares the artist and genre");
+    }
+
+    // --- SIM (SCENARIOS-SIM.md): Radio's picks count what the seed knows; its inserts hold the floor and something telling;
+    // Autoplay never runs dry ---
+
+    /// A song of an album of its own, in a library (a catalogue folder), with what similarity reads of it.
+    #[allow(clippy::too_many_arguments)]
+    fn alone(id: &str, n: u32, folder: i64, artist: Option<u32>, genre: Option<u32>, year: Option<u32>, bpm: Option<f32>, energy: Option<f32>) -> Song {
+        Song {
+            id: id.into(),
+            title: id.into(),
+            album: format!("album {n}"),
+            album_id: format!("al-{n}"),
+            album_n: n,
+            like: Track { artists: artist.into_iter().collect(), genres: genre.into_iter().collect(), year, bpm, energy, ..Track::default() },
+            folders: vec![folder],
+            ..Song::default()
+        }
+    }
+
+    /// A sound of unit length at this cosine to (1, 0, 0, 0).
+    fn at(cos: f32) -> Vec<f32> {
+        vec![cos, (1.0 - cos * cos).sqrt(), 0.0, 0.0]
+    }
+
+    /// F-RADIO: s, K, the U's and the X's in library 0; w, H1–H3 and e in library 2; 300 fillers in library 1, their third block
+    /// the heaviest. One library of every song gives the reaches, asserted here first: year 20, BPM 40, energy 0.5.
+    fn f_radio() -> Index {
+        let (g, h, rock) = (1, 2, 3);
+        let mut songs = vec![
+            alone("s", 0, 0, Some(1), Some(g), Some(2000), Some(100.0), Some(0.5)),
+            alone("K", 1, 0, Some(2), Some(g), Some(2006), Some(112.0), Some(0.65)),
+        ];
+        songs.extend((1..=5).map(|u| alone(&format!("U{u}"), 1 + u, 0, Some(10 + u), Some(g), Some(2010), None, None)));
+        songs.extend((0..30).map(|x| alone(&format!("X{x}"), 10 + x, 0, Some(100 + x), Some(h), Some(2020), Some(160.0), Some(1.0))));
+        songs.push(alone("w", 50, 2, None, None, None, None, Some(0.5)));
+        songs.extend((1..=3).map(|j| alone(&format!("H{j}"), 50 + j, 2, Some(200 + j), None, None, None, Some(0.5))));
+        songs.push(alone("e", 60, 2, None, None, Some(2000), None, None));
+        for i in 0..300u32 {
+            let block = match i {
+                0..50 => 0,
+                50..100 => 1,
+                100..250 => 2,
+                _ => 3,
+            };
+            let (year, bpm, energy) = ([1980, 1990, 2010, 2020][block], [40.0, 80.0, 120.0, 160.0][block], [0.0, 0.25, 0.75, 1.0][block]);
+            songs.push(alone(&format!("f{i}"), 100 + i, 1, Some(1000 + i), Some(rock), Some(year), Some(bpm), Some(energy)));
+        }
+        let index = Index::new(songs).with_sounds(|id| match id {
+            "s" | "w" => Some(at(1.0)),
+            "K" => Some(at(0.81)),
+            _ if id.starts_with('X') => Some(vec![0.0, 0.0, 1.0, 0.0]),
+            _ if id.starts_with('H') => Some(at(0.95)),
+            _ => None,
+        });
+        let reaches = [Signal::Era, Signal::Tempo, Signal::Energy].map(|s| index.like.reach(s));
+        assert_eq!(reaches, [Some(20.0), Some(40.0), Some(0.5)], "F-RADIO's reaches");
+        index
+    }
+
+    fn after(seed: &str, mode: Mode, count: usize, folders: &[i64]) -> Ask {
+        let one = vec![seed.to_string()];
+        Ask { mode, seed: one.clone(), exclude: one, last: Some(seed.to_string()), count: Some(count), folders: Some(folders.to_vec()), ..Ask::default() }
+    }
+
+    /// SIM.13: what the seed has and a track lacks counts as not alike in Radio's picks too.
+    #[test]
+    fn radios_picks_count_what_the_seed_knows() {
+        let index = f_radio();
+        let p = index.profile(&[index.by_id["s"]]);
+        let (equal, inserts) = (Weights::EQUAL, Weights::EQUAL.with(Signal::Artists, 2.0));
+        let score = |id: &str, w: &Weights| index.score(&p, index.by_id[id], w);
+        assert!((score("K", &equal) - 0.6).abs() < 1e-6, "{}", score("K", &equal));
+        assert!((score("K", &inserts) - 3.6 / 7.0).abs() < 1e-6, "{}", score("K", &inserts));
+        for u in 1..=5 {
+            let u = format!("U{u}");
+            assert!((score(&u, &equal) - 0.25).abs() < 1e-9, "{u}: {}", score(&u, &equal));
+            assert!((score(&u, &inserts) - 1.5 / 7.0).abs() < 1e-9, "{u}: {}", score(&u, &inserts));
+        }
+        assert_eq!((score("X0", &equal), score("X0", &inserts)), (0.0, 0.0), "every other year, tempo, energy, sound, artist and genre");
+        let ask = after("s", Mode::Similar, 1, &[0]);
+        let kin = (0..40).filter(|&n| ids(&index, &choose(&index, &ask, &HashMap::new(), None, &mut Rng::seeded(n))) == ["K"]).count();
+        assert!(kin >= 30, "the heard kin, not the unheard: {kin} of 40");
+    }
+
+    /// SIM.14 (a guard): Autoplay never runs dry, for a seed heard but with no words, or known by its year alone.
+    #[test]
+    fn autoplay_never_runs_dry_for_a_seed_known_by_little() {
+        let index = f_radio();
+        let p = index.profile(&[index.by_id["w"]]);
+        let score = |id: &str| index.score(&p, index.by_id[id], &Weights::EQUAL);
+        assert!((score("s") - 1.0).abs() < 1e-6 && (score("K") - 0.6).abs() < 1e-6, "{} {}", score("s"), score("K"));
+        for h in ["H1", "H2", "H3"] {
+            assert!((score(h) - (1.0 + (0.95 - 0.62) / 0.38) / 2.0).abs() < 1e-6, "{h}: {}", score(h));
+        }
+        for id in ["U1", "X0", "e"] {
+            assert_eq!(score(id), 0.0, "{id}");
+        }
+        let kin = ["s", "H1", "H2", "H3", "K"];
+        let mut all_kin = 0;
+        for n in 0..40 {
+            let picked = ids(&index, &choose(&index, &after("w", Mode::Similar, 5, &[0, 2]), &HashMap::new(), None, &mut Rng::seeded(n)));
+            assert_eq!(picked.len(), 5, "{picked:?}");
+            all_kin += usize::from(picked.iter().all(|p| kin.contains(&p.as_str())));
+            let by_year = choose(&index, &after("e", Mode::Similar, 5, &[0, 2]), &HashMap::new(), None, &mut Rng::seeded(n));
+            assert_eq!(by_year.len(), 5, "e, by its year alone");
+        }
+        assert!(all_kin >= 35, "{all_kin} of 40");
+    }
+
+    /// SIM.15: Radio's inserts are only tracks alike enough on something telling: fewer, or none; nothing lifts a track over.
+    #[test]
+    fn radio_inserts_are_only_tracks_alike_enough() {
+        let mut index = f_radio();
+        let p = index.profile(&[index.by_id["s"]]);
+        let inserts = Weights::EQUAL.with(Signal::Artists, 2.0);
+        let (k, u) = (index.score(&p, index.by_id["K"], &inserts), index.score(&p, index.by_id["U1"], &inserts));
+        assert!(k >= 0.35 && u < 0.25, "at every floor SIM.19 may pick: K {k}, each U {u}");
+        let picks = |index: &Index, seed: &str, folders: &[i64], n: u64| ids(index, &choose(index, &after(seed, Mode::Radio, 5, folders), &HashMap::new(), None, &mut Rng::seeded(n)));
+        for n in 0..40 {
+            assert_eq!(picks(&index, "s", &[0], n), ["K"], "after s: alike on genre and sound");
+            let heard: HashSet<String> = picks(&index, "w", &[0, 2], n).into_iter().collect();
+            assert_eq!(heard, HashSet::from(["s", "H1", "H2", "H3", "K"].map(String::from)), "after w: alike on sound, no words needed");
+            assert_eq!(picks(&index, "e", &[0, 2], n), Vec::<String>::new(), "after e: alike on its year alone");
+        }
+        let u1 = index.by_id["U1"];
+        index.songs[u1].favourite = true;
+        for n in 0..40 {
+            assert!(!picks(&index, "s", &[0], n).contains(&"U1".to_string()), "a favourite's nudge lifts nothing over");
+        }
+    }
+
+    /// SIM.22: a Bandcamp suggestion's genre is numbered as the songs' genres are after the facts renumbered them.
+    #[test]
+    fn a_suggestions_genre_is_numbered_as_the_songs_are() {
+        // As the library's reading numbers them, Rock first; the facts meet Jazz first.
+        let mut index = Index::new(vec![song("tr-1", 1, 1, 1, 1975, &[]), song("tr-2", 2, 2, 0, 1990, &[])]);
+        index.genre_ids = vec!["rock".into(), "jazz".into()];
+        let facts = [
+            Facts { track: Some(1), genres: vec!["Jazz".into()], year: Some(1975.0), ..Facts::default() },
+            Facts { track: Some(2), genres: vec!["Rock".into()], year: Some(1990.0), ..Facts::default() },
+        ];
+        let index = index.with_facts(&facts);
+        let jazz = index.genre_number("Jazz").expect("a genre of the songs");
+        assert_eq!(index.songs[0].like.genres, [jazz], "the number the songs' Jazz carries");
+        let suggestion = Track { genres: vec![jazz], ..Track::default() };
+        let alike = index.profile(&[0]).to_track(&index.like, usize::MAX, &suggestion).get(Signal::Genres);
+        assert!(alike.is_some_and(|x| (x - 1.0).abs() < 1e-12), "{alike:?}");
+    }
+
+    /// What 0.17 read: every signal both sides had, the tracks shared always, the rest skipped.
+    fn as_before(s: &crate::similarity::Signals, w: &Weights) -> f64 {
+        use Signal::*;
+        let all = [Tracks, Playlists, Artists, Genres, Tags, Styles, Sound, Era, Tempo, Energy, Danceability, Mood];
+        let both: Vec<Signal> = all.into_iter().filter(|x| *x == Tracks || s.had(*x)).collect();
+        s.score(&w.only(&both))
+    }
+
+    /// F-SHELF: Rafting Goods and the records around it (SCENARIOS-SIM), each record's tracks alike and by its own artist; with
+    /// 0.17's genre words or GEN's. The year's reach is 13, as production's, asserted first.
+    fn f_shelf(split: bool) -> (Index, Vec<String>) {
+        // (id, tracks, genre in 0.17, genre after GEN, year, BPM, tags, heard)
+        type Record = (&'static str, usize, &'static str, &'static str, u32, Option<f32>, &'static [&'static str], bool);
+        let mut records: Vec<Record> = vec![
+            ("al-rg", 14, "hip-hop/rap", "Hip Hop", 2026, None, &[], false),
+            ("al-aft", 15, "", "", 2025, Some(120.0), &["dance", "electronic", "france", "french"], true),
+            ("al-crash", 4, "", "", 2025, None, &[], false),
+            ("al-open", 9, "", "", 2024, Some(100.0), &[], true),
+            ("al-n26a", 10, "", "", 2026, None, &[], false),
+            ("al-n26b", 10, "", "", 2026, None, &[], false),
+            ("al-n26c", 10, "", "", 2026, None, &[], false),
+            ("al-rap26", 10, "rap", "Hip Hop", 2026, None, &[], false),
+            ("al-hh24", 10, "hip hop", "Hip Hop", 2024, None, &[], false),
+            ("al-hh19", 10, "hip-hop", "Hip Hop", 2019, Some(90.0), &[], true),
+            ("al-el26", 10, "electronic", "Electronic", 2026, Some(120.0), &[], true),
+        ];
+        for (n, year) in [1990; 9].into_iter().chain([2000; 9]).chain([2013; 18]).enumerate() {
+            let id: &'static str = Box::leak(format!("al-rock{n}").into_boxed_str());
+            records.push((id, 10, "rock", "Rock", year, None, &[], false));
+        }
+        let (mut genres, mut tags): (HashMap<&str, u32>, HashMap<&str, u32>) = Default::default();
+        let number = |names: &mut HashMap<&'static str, u32>, w: &'static str| {
+            let next = names.len() as u32;
+            *names.entry(w).or_insert(next)
+        };
+        let (mut songs, mut heard) = (Vec::new(), HashSet::new());
+        for (r, (id, tracks, before, now, year, bpm, said, sounds)) in records.iter().enumerate() {
+            let genre = if split { *now } else { *before };
+            for t in 0..*tracks {
+                let like = Track {
+                    artists: vec![r as u32],
+                    genres: (!genre.is_empty()).then(|| number(&mut genres, genre)).into_iter().collect(),
+                    tags: said.iter().map(|w| number(&mut tags, *w)).collect(),
+                    year: Some(*year),
+                    bpm: *bpm,
+                    ..Track::default()
+                };
+                let song = format!("{id}-{t}");
+                if *sounds {
+                    heard.insert(song.clone());
+                }
+                songs.push(Song { id: song, album_id: id.to_string(), album_n: r as u32, like, folders: vec![0], ..Song::default() });
+            }
+        }
+        let index = Index::new(songs).with_sounds(|id| heard.contains(id).then(|| at(0.5 + (id.len() % 5) as f32 / 10.0)));
+        assert_eq!(index.like.reach(Signal::Era), Some(13.0), "F-SHELF's year reach");
+        (index, records.iter().map(|r| r.0.to_string()).collect())
+    }
+
+    /// Rafting Goods' albums by each reading, of one build: (album, SIM's score, 0.17's, shown).
+    fn rafting(split: bool) -> Vec<(String, f64, f64, bool)> {
+        let (index, records) = f_shelf(split);
+        let songs = |album: &str| (0..index.songs.len()).filter(|&i| index.songs[i].album_id == album).collect::<Vec<usize>>();
+        let seed = index.profile(&songs("al-rg"));
+        let albums = Weights::EQUAL.with(Signal::Tracks, 0.0);
+        records[1..]
+            .iter()
+            .map(|id| {
+                let s = seed.to_profile(&index.like, &index.profile(&songs(id)));
+                (id.clone(), s.score(&albums), as_before(&s, &Weights::EQUAL), s.shown(&albums).is_some())
+            })
+            .collect()
+    }
+
+    /// The albums that read so, closest first.
+    fn first(read: &[(String, f64, f64, bool)], by: impl Fn(&(String, f64, f64, bool)) -> Option<f64>) -> Vec<String> {
+        let mut out: Vec<(String, f64)> = read.iter().filter_map(|r| Some((r.0.clone(), by(r)?))).collect();
+        out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out.into_iter().map(|(id, _)| id).collect()
+    }
+
+    fn reads(read: &[(String, f64, f64, bool)], id: &str) -> (f64, f64, bool) {
+        let r = read.iter().find(|r| r.0 == id).unwrap_or_else(|| panic!("{id}"));
+        (r.1, r.2, r.3)
+    }
+
+    /// SIM.9: before GEN, Rafting Goods' one genre word is shared by nothing: every candidate is alike on its year alone, so
+    /// nothing is shown, where 0.17 showed the year's records and rules 1 to 4 alone would still.
+    #[test]
+    fn rafting_goods_before_the_genre_split() {
+        let read = rafting(false);
+        let third = 1.0 / 3.0;
+        let rows: [(&str, f64, f64); 9] = [
+            ("al-n26a", third, third),
+            ("al-n26b", third, third),
+            ("al-n26c", third, third),
+            ("al-rap26", 0.25, third),
+            ("al-el26", 0.25, third),
+            ("al-aft", 12.0 / 13.0 / 3.0, 12.0 / 13.0 / 3.0),
+            ("al-crash", 12.0 / 13.0 / 3.0, 12.0 / 13.0 / 3.0),
+            ("al-open", 11.0 / 13.0 / 3.0, 11.0 / 13.0 / 3.0),
+            ("al-hh24", 11.0 / 13.0 / 4.0, 11.0 / 13.0 / 3.0),
+        ];
+        for (id, before, now) in rows {
+            let (score, was, shown) = reads(&read, id);
+            assert!((was - before).abs() < 1e-9 && (score - now).abs() < 1e-9 && !shown, "{id}: {was} then, {score} now, shown {shown}");
+        }
+        let (score, was, _) = reads(&read, "al-hh19");
+        assert!((was - 6.0 / 13.0 / 4.0).abs() < 1e-9 && (score - 6.0 / 13.0 / 3.0).abs() < 1e-9, "al-hh19: {was} {score}");
+        assert!(read.iter().filter(|r| r.0.starts_with("al-rock")).all(|r| r.1 == 0.0 && r.2 == 0.0), "the fillers, of 2013 and before");
+        assert_eq!(first(&read, |r| r.3.then_some(r.1)), Vec::<String>::new(), "nothing, not noise");
+        let floor_alone = first(&read, |r| (r.1 >= crate::similarity::ALIKE_FLOOR).then_some(r.1));
+        assert_eq!(floor_alone, ["al-el26", "al-n26a", "al-n26b", "al-n26c", "al-rap26", "al-aft", "al-crash"], "rules 1 to 4 alone go by the year");
+        let then: Vec<String> = first(&read, |r| Some(r.2)).into_iter().take(12).collect();
+        assert_eq!(then[..3], ["al-n26a", "al-n26b", "al-n26c"], "0.17's: the genre-less records of its year first");
+    }
+
+    /// SIM.10: after GEN's split and fold, only its kin: by genre, then year. Neither fix works alone: SIM.9's build shows
+    /// nothing, GEN alone and rules 1 to 4 alone show the year's records behind the kin.
+    #[test]
+    fn rafting_goods_after_the_genre_split() {
+        let read = rafting(true);
+        let rows: [(&str, f64, f64, bool); 8] = [
+            ("al-rap26", 0.5, 2.0 / 3.0, true),
+            ("al-hh24", (1.0 + 11.0 / 13.0) / 4.0, (1.0 + 11.0 / 13.0) / 3.0, true),
+            ("al-hh19", (1.0 + 6.0 / 13.0) / 4.0, (1.0 + 6.0 / 13.0) / 3.0, true),
+            ("al-n26a", 1.0 / 3.0, 1.0 / 3.0, false),
+            ("al-el26", 0.25, 1.0 / 3.0, false),
+            ("al-aft", 12.0 / 13.0 / 3.0, 12.0 / 13.0 / 3.0, false),
+            ("al-crash", 12.0 / 13.0 / 3.0, 12.0 / 13.0 / 3.0, false),
+            ("al-open", 11.0 / 13.0 / 3.0, 11.0 / 13.0 / 3.0, false),
+        ];
+        for (id, before, now, shown) in rows {
+            let r = reads(&read, id);
+            assert!((r.1 - before).abs() < 1e-9 && (r.0 - now).abs() < 1e-9 && r.2 == shown, "{id}: {r:?}");
+        }
+        assert_eq!(first(&read, |r| r.3.then_some(r.1)), ["al-rap26", "al-hh24", "al-hh19"], "the kin, by genre then year, nothing else");
+        let floor_alone = first(&read, |r| (r.1 >= crate::similarity::ALIKE_FLOOR).then_some(r.1));
+        assert_eq!(floor_alone, ["al-rap26", "al-hh24", "al-hh19", "al-el26", "al-n26a", "al-n26b", "al-n26c", "al-aft", "al-crash"], "without rule 6: noise behind the kin");
+        let then: Vec<String> = first(&read, |r| Some(r.2)).into_iter().take(12).collect();
+        assert_eq!(then[..6], ["al-rap26", "al-hh24", "al-hh19", "al-n26a", "al-n26b", "al-n26c"], "GEN alone: the kin, then the year's");
+        assert_eq!(first(&rafting(false), |r| r.3.then_some(r.1)), Vec::<String>::new(), "SIM alone, before GEN: nothing");
     }
 }
