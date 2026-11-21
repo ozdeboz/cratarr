@@ -65,6 +65,20 @@ CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, recor
 CREATE TABLE IF NOT EXISTS expected (
   folder INTEGER NOT NULL, dir TEXT NOT NULL, record INTEGER NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, dir)) WITHOUT ROWID;
+-- COU.18, WM.13 (T-WM-3, T-COU-16, T-COU-17): what Cratarr placed and for what, said before the files appear under their names. A
+-- copy's placing folder (`path`, `track` and its place NULL) and its record; or a placed file (`path` its own), its record, the
+-- track it was fetched for where the record has one, and its place on the list it was fetched by, with its size and time as
+-- placed (filled at its first read). Kept for good: it outlives C50's week and the fetcher's item. A copy placed is gathered by it,
+-- never by the tag hash (COU.17); an arrival joins its record by it, the strongest evidence (WM.8); a placed file pairs at its told
+-- place while it is as placed (WM.25 (e)). It decides only for files under its own path.
+CREATE TABLE IF NOT EXISTS placements (
+  folder INTEGER NOT NULL, path TEXT NOT NULL, record INTEGER NOT NULL, track INTEGER, disc INTEGER, number INTEGER,
+  size INTEGER, mtime INTEGER, at INTEGER NOT NULL,
+  PRIMARY KEY (folder, path)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS placements_record ON placements (record);
+-- WM.12 (DOMAIN-CORE §12: an edition, one card): a record linked to another as its edition by evidence stored at the join (an
+-- arrival fetched for `of` whose tracks differ from a copy already whole: `how` 'placement'). Display only, as editions are.
+CREATE TABLE IF NOT EXISTS edition_links (record INTEGER PRIMARY KEY, of INTEGER NOT NULL, how TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
 -- RT01: what was forgotten and when, by its subject: `al-<record>` (a record not had nobody saw or opened for six months,
 -- `Catalogue::forget_quiet`), `ar-<artist>` (an artist left with nothing, RT01b, `Catalogue::forget_quiet_artists`). Its id is
@@ -595,6 +609,10 @@ pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<
     )?;
     tx.execute("DELETE FROM reference_tracks WHERE record = ?1", [from])?;
     super::facts::merge_in(tx, from, into)?;
+    // What was placed for it, and the edition it was linked to, follow it (WM.9 (b)).
+    tx.execute("UPDATE placements SET record = ?2 WHERE record = ?1", params![from, into])?;
+    tx.execute("UPDATE edition_links SET of = ?2 WHERE of = ?1", params![from, into])?;
+    tx.execute("DELETE FROM edition_links WHERE record = ?1 OR record = of", [from])?;
     // A hand's pick alone is carried (VR10, M7): a count 0.17 worked out never becomes `into`'s.
     tx.execute(
         "UPDATE records SET
@@ -909,6 +927,10 @@ pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], rec
 /// record and the had rule read them.
 pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<Vec<String>> {
     let first = first_ranked(albums, records);
+    // WM.5 (b): a copy whose files name no album (none, or a site's stamp: the one tag rule) says nothing of its record's title,
+    // and the next copy in the owner's order that names it speaks.
+    let named_copies: Vec<Option<i64>> = albums.iter().zip(records).map(|(a, r)| r.filter(|_| !a.facts.title.is_empty())).collect();
+    let titled = first_ranked(albums, &named_copies);
     // R1 (A2.1, A2.2): an album artist the files give a MusicBrainz id for is the artist who holds it (`artist_of_files_id`); one they
     // give none for, the first artist of the name (C55), as before. The names most files pair with each id in this pass (R6).
     let mut paired: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>> = std::collections::BTreeMap::new();
@@ -951,7 +973,7 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
             "UPDATE records SET title = ?2, artist = ?3, named_rank = ?4
              WHERE id = ?1 AND ?2 <> '' AND ?4 >= COALESCE(named_rank, 0) AND (title IS NOT ?2 OR artist IS NOT ?3 OR named_rank IS NOT ?4)",
         )?
-        .execute(params![record, a.title, a.artist, a.rank])?;
+        .execute(params![record, titled.get(&record).map_or("", |t| t.title.as_str()), a.artist, a.rank])?;
         let mut ids: Vec<i64> = Vec::new();
         let ided = files_ids(a);
         for name in &a.artists {
@@ -965,7 +987,16 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
                         Some(artist)
                     }
                 },
-                None => artists.get(&ids::artist_key(name)).copied(),
+                // T-COU-2 (NAMES.25 (e)): the absence of an id is no evidence. A credit by id (a source's reference, the hand's) of an
+                // artist of this name stays while the files name that name with no id; else the first artist of the name (C55).
+                None => {
+                    let key = ids::artist_key(name);
+                    let held: Option<i64> = tx
+                        .prepare_cached("SELECT ra.artist FROM record_artists ra JOIN artists a ON a.id = ra.artist WHERE ra.record = ?1 AND a.key = ?2 ORDER BY ra.position LIMIT 1")?
+                        .query_row(params![record, key], |r| r.get(0))
+                        .optional()?;
+                    held.or_else(|| artists.get(&key).copied())
+                }
             };
             if let Some(id) = id
                 && !ids.contains(&id)
@@ -2521,12 +2552,17 @@ impl Catalogue {
             return Ok(std::collections::HashMap::new());
         }
         let read = |db: &Connection| -> Result<std::collections::HashMap<i64, Vec<i64>>> {
-            let asked: Vec<(i64, String)> = db
+            let rows: Vec<(i64, String, String)> = db
                 .prepare(&format!("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id IN ({})", id_list(records)))?
                 .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            // WM.15 (b): a record whose files name no album (none, or a site's stamp) is asked by its artist alone; the join that
+            // follows needs its artist and every track by title (`join_had_in`).
+            let untitled: Vec<(i64, String)> =
+                rows.iter().filter(|(_, artist, title)| !fold(artist).is_empty() && (fold(title).is_empty() || title == UNKNOWN_ALBUM)).map(|(id, artist, _)| (*id, fold(artist))).collect();
+            let asked: Vec<(i64, String)> = rows
                 .into_iter()
-                .filter(|(_, artist, title)| !fold(artist).is_empty() && !fold(title).is_empty())
+                .filter(|(_, artist, title)| !fold(artist).is_empty() && !fold(title).is_empty() && title != UNKNOWN_ALBUM)
                 .map(|(id, artist, title)| (id, names_of(&artist, &title)))
                 .collect();
             let keys: std::collections::BTreeSet<String> = asked.iter().map(|(_, names)| names.clone()).collect();
@@ -2559,6 +2595,29 @@ impl Catalogue {
                 }
                 if !others.is_empty() {
                     out.insert(id, others);
+                }
+            }
+            if !untitled.is_empty() {
+                let mut by_artist: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+                for row in db
+                    .prepare("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL ORDER BY id")?
+                    .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+                {
+                    let (id, artist, title) = row?;
+                    if !fold(&title).is_empty() && title != UNKNOWN_ALBUM {
+                        by_artist.entry(fold(&artist)).or_default().push(id);
+                    }
+                }
+                for (id, artist) in untitled {
+                    let mut others = Vec::new();
+                    for &other in by_artist.get(&artist).into_iter().flatten() {
+                        if other != id && there.query_row([other], |r| r.get::<_, bool>(0))? {
+                            others.push(other);
+                        }
+                    }
+                    if !others.is_empty() {
+                        out.insert(id, others);
+                    }
                 }
             }
             Ok(out)
@@ -3096,6 +3155,9 @@ pub(super) struct RequestRecord {
     pub shared: bool,
 }
 
+/// The album a file that names none is shown as (the served library's): no title, as a stamp is none (WM.3, WM.15).
+pub const UNKNOWN_ALBUM: &str = "[Unknown Album]";
+
 /// How long a folder expected for a record waits for its album (`expect_record`).
 const EXPECTED_SECS: i64 = 7 * 86_400;
 
@@ -3106,6 +3168,20 @@ pub(super) fn expected_in(tx: &Connection, now: i64) -> Result<std::collections:
     let mut st = tx.prepare_cached("SELECT folder, dir, record FROM expected")?;
     let rows = st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), r.get(2)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The copies Cratarr placed (COU.18), by (catalogue folder, placing folder): the record each was placed for, followed through
+/// merges. In the record pass's transaction. An album's is [`expected_of`] over these.
+pub(super) fn placed_in(tx: &Connection) -> Result<std::collections::HashMap<(i64, String), i64>> {
+    let mut st = tx.prepare_cached("SELECT folder, path, record FROM placements WHERE track IS NULL AND number IS NULL")?;
+    let rows: Vec<((i64, String), i64)> = st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut out = std::collections::HashMap::new();
+    for (at, record) in rows {
+        if let Some(record) = merged_end(tx, record)? {
+            out.insert(at, record);
+        }
+    }
+    Ok(out)
 }
 
 /// The expectation an album's files are under (C51b, F9): its folder's expected directory, the files' own or any above them, so
@@ -3173,7 +3249,19 @@ pub(super) fn wanted_record(tx: &Connection, a: &super::AlbumCopy, expected: Opt
         }
         *not_had = Some(by_name);
     }
-    let named: Vec<i64> = if a.facts.title.is_empty() { Vec::new() } else { not_had.as_ref().and_then(|n| n.get(&(a.facts.artist.clone(), a.facts.title.clone()))).cloned().unwrap_or_default() };
+    // WM.15 (a), T-WM-4: an album whose files name no album (none, or a site's stamp) is judged by its artist and its tracks alone.
+    let named: Vec<i64> = if a.facts.title.is_empty() {
+        let unknown = fold(crate::serve::library::UNKNOWN_ARTIST);
+        let mut ids: Vec<i64> = if a.facts.artist.is_empty() || a.facts.artist == unknown {
+            Vec::new()
+        } else {
+            not_had.iter().flat_map(|n| n.iter()).filter(|((artist, _), _)| *artist == a.facts.artist).flat_map(|(_, ids)| ids.iter().copied()).collect()
+        };
+        ids.sort_unstable();
+        ids
+    } else {
+        not_had.as_ref().and_then(|n| n.get(&(a.facts.artist.clone(), a.facts.title.clone()))).cloned().unwrap_or_default()
+    };
     for id in named {
         if open(id)? != Some(id) {
             continue;
@@ -3767,8 +3855,40 @@ impl Catalogue {
         )? > 0;
         if !kept {
             tracing::warn!(target: "library", folder, dir, record, "a folder another record is expected in: not expected for this one too");
+        } else {
+            // The placement row, which outlives the week (WM.13, COU.18): said with the expectation, by the fetcher's one call.
+            self.place_copy(folder, dir, record)?;
         }
         Ok(kept)
+    }
+
+    /// COU.18 (T-COU-16, T-WM-3): a copy Cratarr places, said before its files appear: its placing folder `dir` in catalogue folder
+    /// `folder`, and the record it was fetched for. Its files are gathered by it and join that record by it (WM.8), for good. A
+    /// later placing of the same folder says it again. Blocking.
+    pub fn place_copy(&self, folder: i64, dir: &str, record: i64) -> Result<()> {
+        let dir = dir.trim_matches('/');
+        self.db().execute(
+            "INSERT INTO placements (folder, path, record, at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (folder, path) DO UPDATE SET record = excluded.record, track = NULL, disc = NULL, number = NULL, at = excluded.at",
+            params![folder, dir, record, now()],
+        )?;
+        Ok(())
+    }
+
+    /// COU.18 (T-COU-17): a file Cratarr places into a record's copy (a fetched track, a better copy), said before it appears under
+    /// its name: its path, its record, the track it was fetched for where the record has one, and its place on that record's list. It
+    /// takes that track at its first read (as a handover), and pairs at that place while it is as placed (WM.25 (e)): its size and
+    /// time as first read. Blocking.
+    pub fn place_file(&self, folder: i64, rel: &str, record: i64, track: Option<i64>, place: (u32, u32)) -> Result<()> {
+        let db = self.db();
+        db.execute(
+            "INSERT OR REPLACE INTO placements (folder, path, record, track, disc, number, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![folder, rel, record, track, place.0, place.1, now()],
+        )?;
+        if let Some(track) = track {
+            db.execute("INSERT OR REPLACE INTO handovers (folder, rel, track, at, replaces) VALUES (?1, ?2, ?3, ?4, NULL)", params![folder, rel, track, now()])?;
+        }
+        Ok(())
     }
 
     /// The record the album a fetcher placed in `dir` (as Cratarr sees it) went to, once a record pass has read it (X4): the one
@@ -4145,7 +4265,13 @@ fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64, kinds: &[(i64, cr
     }
     let title = |r: i64| -> Result<String> { Ok(tx.prepare_cached("SELECT COALESCE(title, '') FROM records WHERE id = ?1")?.query_row([r], |row| row.get::<_, String>(0))?) };
     let (named, other) = (title(from)?, title(into)?);
-    if title_key(&named).is_empty() || title_key(&named) != title_key(&other) {
+    // WM.15 (b), T-WM-4: a record whose files name no album (none, or a site's stamp: "[Unknown Album]") has no title to compare;
+    // its artist and every track, by its titles, decide. Two titles that differ never join (X8).
+    let untitled = |t: &str| title_key(t).is_empty() || t == UNKNOWN_ALBUM;
+    if untitled(&named) && untitled(&other) {
+        return Ok(false);
+    }
+    if !untitled(&named) && !untitled(&other) && title_key(&named) != title_key(&other) {
         return Ok(false);
     }
     // RG1: titles that differ by "EP" or "LP" only where each record's class agrees with the other's words.
@@ -4245,9 +4371,12 @@ fn joined_tracks_in(tx: &Connection, into: i64, from: i64, main: i64, kinds: &[(
             .collect()
     }
     let (tracks, files) = (sides(&old, &old_keys), sides(&new, &new_keys));
+    // Each file's titles: its own, else its name's (WM.25); a file with neither pairs with nothing here (T-WM-7: without a placement or
+    // ids, no join by lengths alone).
+    let titles = |f: &crate::incoming::TrackFacts| -> Vec<String> { if f.title.is_empty() { f.named.clone() } else { vec![f.title.clone()] } };
     let pairs = assign(&tracks, &files, |t, f| {
-        let (a, b) = (&old[t].1.title, &new[f].1.title);
-        if !titled_as(a, b) || !titled_as(b, a) {
+        let (a, b) = (titles(&old[t].1), titles(&new[f].1));
+        if !a.iter().any(|a| b.iter().any(|b| titled_as(a, b) && titled_as(b, a))) {
             return Fit::No;
         }
         match fit(ms(&old[t].1), ms(&new[f].1)) {
@@ -4284,7 +4413,7 @@ fn first_copy_in(tx: &Connection, record: i64, only: &dyn Fn(i64) -> bool) -> Re
     let mut out = Vec::with_capacity(copy.len());
     for (folder, rel, track, ms) in copy {
         let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        out.push((track, crate::incoming::TrackFacts::of(&crate::naming::Tags(read), ms.and_then(|ms| u64::try_from(ms).ok()).filter(|ms| *ms > 0))));
+        out.push((track, crate::incoming::TrackFacts::of(&crate::naming::Tags(read), &rel, ms.and_then(|ms| u64::try_from(ms).ok()).filter(|ms| *ms > 0))));
     }
     Ok(Some(out))
 }

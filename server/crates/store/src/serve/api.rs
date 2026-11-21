@@ -220,6 +220,9 @@ pub struct Artist {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub music_brainz_id: Option<String>,
     pub sort_name: String,
+    /// Its tracks' plays, worked out at read from each credited track's plays (NAMES.25, T-NAMES-15): never stored by artist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub play_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album: Option<Vec<Album>>,
 }

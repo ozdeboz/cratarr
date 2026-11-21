@@ -63,6 +63,16 @@ fn every_artist(db: &Connection) -> Result<HashMap<String, i64>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// What the served library serves artists by (NAMES.25): each record's credited artists in order, (artist, its name's key), and each
+/// MusicBrainz artist id's holder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Credits {
+    pub records: HashMap<i64, Vec<(i64, String)>>,
+    pub musicbrainz: HashMap<String, i64>,
+    /// Each record's stored title, where it has one: what a copy whose files name no album shows (WM.3, WM.12, COU.3).
+    pub titles: HashMap<i64, String>,
+}
+
 /// A new artist of a name, with their number (C55).
 pub(super) fn give_artist(db: &Connection, key: &str, name: &str, born: i64) -> Result<i64> {
     db.prepare_cached("INSERT INTO artists (born, name, key) VALUES (?1, ?2, ?3)")?.execute(params![born, name, key])?;
@@ -239,6 +249,36 @@ impl Catalogue {
 
     /// Every artist's id by their key, these names' among them: those new here are given theirs together, as a first build
     /// meets thousands. In the names' order, so a library read twice numbers its artists alike. Blocking.
+    /// What the served library reads to serve artists by id (NAMES.25, MATCH.4's track rule): each record's credited artists in
+    /// credit order, each with its name's key; and each MusicBrainz artist id's holder (lower case). On a reader. Blocking.
+    pub fn served_credits(&self) -> Result<Credits> {
+        let read = |db: &Connection| -> Result<Credits> {
+            let mut credits = Credits::default();
+            let mut st = db.prepare("SELECT ra.record, ra.artist, a.key FROM record_artists ra JOIN artists a ON a.id = ra.artist ORDER BY ra.record, ra.position")?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
+                let (record, artist, key) = row?;
+                credits.records.entry(record).or_default().push((artist, key));
+            }
+            let mut st = db.prepare("SELECT subject, lower(value) FROM \"references\" WHERE source = 'musicbrainz' AND kind = 'artist' AND subject LIKE 'ar-%' ORDER BY subject")?;
+            for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+                let (subject, mbid) = row?;
+                if let Some(artist) = ids::artist_number(&subject) {
+                    credits.musicbrainz.entry(mbid).or_insert(artist);
+                }
+            }
+            let mut st = db.prepare("SELECT id, title FROM records WHERE merged_into IS NULL AND COALESCE(title, '') NOT IN ('', '[Unknown Album]')")?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+                let (record, title) = row?;
+                credits.titles.insert(record, title);
+            }
+            Ok(credits)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     pub fn artists_for(&self, names: &BTreeSet<String>) -> Result<HashMap<String, i64>> {
         let mut db = self.db();
         let tx = db.transaction()?;

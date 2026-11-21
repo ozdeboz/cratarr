@@ -17,7 +17,11 @@ pub struct TrackFacts {
     /// `None` counts as disc 1.
     pub disc: Option<u32>,
     pub number: Option<u32>,
+    /// Its TITLE, cleaned by the one tag rule (WM.1): empty where it has none.
     pub title: String,
+    /// Its name's titles where it has no title of its own (WM.25, `hygiene::file_titles`): the one place a file's name stands for its
+    /// title, for the holding's pairing, F53's and Replace's alike.
+    pub named: Vec<String>,
     pub duration_ms: Option<u64>,
 }
 
@@ -47,8 +51,8 @@ pub fn pair(old: &[TrackFacts], new: &[TrackFacts]) -> Pairing {
     let close = |a: Option<u64>, b: Option<u64>, ms: u64| matches!((a, b), (Some(a), Some(b)) if a.abs_diff(b) <= ms);
     let place = |t: &TrackFacts| t.number.map(|n| (t.disc.unwrap_or(1), n));
     let same_place = |o: &TrackFacts, n: &TrackFacts| place(o).is_some() && place(o) == place(n);
-    let folded_old: Vec<String> = old.iter().map(|t| fold(&t.title)).collect();
-    let folded_new: Vec<String> = new.iter().map(|t| fold(&t.title)).collect();
+    let folded_old: Vec<String> = old.iter().map(|t| fold(t.shown())).collect();
+    let folded_new: Vec<String> = new.iter().map(|t| fold(t.shown())).collect();
     let same_title = |o: usize, n: usize| !folded_old[o].is_empty() && folded_old[o] == folded_new[n];
     let same_count = old.len() == new.len();
 
@@ -85,17 +89,35 @@ pub fn pair(old: &[TrackFacts], new: &[TrackFacts]) -> Pairing {
 }
 
 impl TrackFacts {
-    /// From a file's tags and length.
-    pub fn of(tags: &crate::naming::Tags, duration_ms: Option<u64>) -> Self {
-        let number = |name: &str| tags.first(name).and_then(|v| v.split('/').next()?.trim().parse().ok());
+    /// From a file's tags, its path and its length (WM.25, T-WM-7, the one place a file's name stands in): its title is its TITLE
+    /// read through the one tag rule (WM.1); where that gives none, its name's titles (`hygiene::file_titles`); its place is its
+    /// DISCNUMBER and TRACKNUMBER, else its name's leading number and its disc folder (`hygiene::file_place`).
+    pub fn of(tags: &crate::naming::Tags, rel: &str, duration_ms: Option<u64>) -> Self {
+        use cratarr_rules::hygiene::{Field, file_place, file_titles, value};
+        let number = |name: &str| tags.first(name).and_then(|v| v.split('/').next()?.trim().parse().ok()).filter(|n: &u32| *n > 0);
+        let title = tags.first("title").and_then(|t| value(Field::Title, t)).map(|t| t.trim().to_string()).unwrap_or_default();
+        let named = if title.is_empty() { file_titles(None, rel) } else { Vec::new() };
+        let (name_disc, name_number) = file_place(rel);
+        let number_tag = number("tracknumber");
         TrackFacts {
             track: None,
             recording: tags.first("musicbrainz_trackid").map(str::to_string),
-            disc: number("discnumber"),
-            number: number("tracknumber"),
-            title: tags.first("title").unwrap_or_default().to_string(),
+            disc: number("discnumber").or(if number_tag.is_some() { None } else { name_disc }),
+            number: number_tag.or(name_number),
+            title,
+            named,
             duration_ms,
         }
+    }
+
+    /// The title it shows by: its own, else its name's first (`hygiene::file_titles`' order).
+    pub fn shown(&self) -> &str {
+        if self.title.is_empty() { self.named.first().map_or("", String::as_str) } else { &self.title }
+    }
+
+    /// As the pairing reads it (`facts::pairs_with`): keyed by its path, at the length the library serves.
+    pub fn side(&self, key: String, ms: Option<i64>) -> cratarr_domain::facts::Present {
+        cratarr_domain::facts::Present { disc: self.disc, number: self.number, key, title: self.title.clone(), named: self.named.clone(), ms, told: None }
     }
 }
 
@@ -151,7 +173,7 @@ pub fn plan_replace(
     if new.is_empty() {
         return Err(ReplaceRefusal::Empty);
     }
-    let facts = |files: &[AlbumFile]| files.iter().map(|f| TrackFacts { track: f.track, ..TrackFacts::of(&f.tags, f.duration_ms) }).collect::<Vec<_>>();
+    let facts = |files: &[AlbumFile]| files.iter().map(|f| TrackFacts { track: f.track, ..TrackFacts::of(&f.tags, &f.rel, f.duration_ms) }).collect::<Vec<_>>();
     let (old_facts, new_facts) = (facts(old), facts(new));
     let pairing = pair(&old_facts, &new_facts);
     if !pairing.retired.is_empty() {
@@ -380,7 +402,7 @@ mod tests {
     }
 
     fn track(number: u32, title: &str, secs: u64) -> TrackFacts {
-        TrackFacts { track: None, recording: None, disc: None, number: Some(number), title: title.into(), duration_ms: Some(secs * 1000) }
+        TrackFacts { track: None, recording: None, disc: None, number: Some(number), title: title.into(), named: Vec::new(), duration_ms: Some(secs * 1000) }
     }
 
     #[test]

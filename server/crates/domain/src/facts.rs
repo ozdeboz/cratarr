@@ -81,23 +81,63 @@ pub struct List {
     pub guessed: bool,
 }
 
-/// One present file of a copy as the pairing reads it: its place (no disc is disc 1), a key giving one fixed order (its path),
-/// its title (its tag, else its file's name: `TrackFacts::of`) and the length the library serves.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One present file of a copy as the pairing reads it: its place (its tags', else its name's: no disc is disc 1), a key giving one
+/// fixed order (its path), its title (its TITLE, cleaned by the rules' tag hygiene: empty where it has none), its name's titles where
+/// it has no title of its own (WM.25, `TrackFacts::of`), the length the library serves, and the place on its record's list it was
+/// placed for, while it is as placed (COU.18, T-COU-17).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Present {
     pub disc: Option<u32>,
     pub number: Option<u32>,
     pub key: String,
     pub title: String,
+    pub named: Vec<String>,
     pub ms: Option<i64>,
+    pub told: Option<(u32, u32)>,
 }
 
-/// A list's tracks and a copy's files paired one for one (`assign`, X3's title rule, the one length rule): (track, file) pairs,
-/// sorted by track. The holding, F53's arrival row and the pairing that confirms a match read this one.
+/// What one track of a list and one file are to each other (WM.25, T-WM-7): a placed file, as placed, is the track its placing told,
+/// whatever its title, name or length; a file with a title pairs where it is the track's by X3's rule, by the one length rule; one
+/// with none, where one of its name's titles is; else, by its length alone, within the slack and both known, and only at its place
+/// where its place is known. Never by a title that differs, never by a title alone where it has none.
+pub fn fits(track: &RefTrack, file: &Present) -> Fit {
+    if let Some((disc, number)) = file.told {
+        return if (track.disc, track.position) == (disc, number) {
+            match fit(track.length_ms, file.ms) {
+                Fit::Within(apart) => Fit::Within(apart),
+                _ => Fit::ByTitleAlone,
+            }
+        } else {
+            Fit::No
+        };
+    }
+    if !file.title.is_empty() {
+        return if titled_as(&file.title, &track.title) { fit(track.length_ms, file.ms) } else { Fit::No };
+    }
+    if file.named.iter().any(|t| titled_as(t, &track.title)) {
+        return fit(track.length_ms, file.ms);
+    }
+    if file.number.is_some_and(|n| (file.disc.unwrap_or(1), n) != (track.disc, track.position)) {
+        return Fit::No;
+    }
+    match fit(track.length_ms, file.ms) {
+        Fit::Within(apart) if track.length_ms.is_some() && file.ms.is_some() => Fit::Within(apart),
+        _ => Fit::No,
+    }
+}
+
+/// Whether a file pairs with a track by a title (its own or its name's), not by its length alone (T-WM-7: pairs by length alone
+/// never join records without a placement or ids).
+pub fn by_title(track: &RefTrack, file: &Present) -> bool {
+    if file.title.is_empty() { file.named.iter().any(|t| titled_as(t, &track.title)) } else { titled_as(&file.title, &track.title) }
+}
+
+/// A list's tracks and a copy's files paired one for one (`assign`, X3's title rule, the one length rule, [`fits`]): (track, file)
+/// pairs, sorted by track. The holding, F53's arrival row and the pairing that confirms a match read this one.
 pub fn pairs_with(list: &[RefTrack], files: &[Present]) -> Vec<(usize, usize)> {
     let tracks: Vec<Side> = list.iter().map(|t| Side { disc: Some(t.disc), number: Some(t.position), key: &t.title, length_ms: t.length_ms }).collect();
     let sides: Vec<Side> = files.iter().map(|f| Side { disc: f.disc, number: f.number, key: &f.key, length_ms: f.ms }).collect();
-    assign(&tracks, &sides, |t, f| if titled_as(&files[f].title, &list[t].title) { fit(list[t].length_ms, files[f].ms) } else { Fit::No })
+    assign(&tracks, &sides, |t, f| fits(&list[t], &files[f]))
 }
 
 /// How many of a list's tracks a copy's files pair with, one for one ([`pairs_with`]).
@@ -113,7 +153,7 @@ pub fn confirms(list: &[RefTrack], files: &[Present]) -> bool {
         return false;
     }
     let pairs = pairs_with(list, files);
-    pairs.len() == list.len() && pairs.iter().all(|&(t, f)| matches!(fit(list[t].length_ms, files[f].ms), Fit::Within(_)))
+    pairs.len() == list.len() && pairs.iter().all(|&(t, f)| by_title(&list[t], &files[f]) && matches!(fit(list[t].length_ms, files[f].ms), Fit::Within(_)))
 }
 
 /// Whether a list gives lengths (a timed list, VR21).
@@ -425,7 +465,7 @@ mod tests {
     }
 
     fn file(n: u32, title: &str, ms: Option<i64>) -> Present {
-        Present { disc: Some(1), number: Some(n), key: format!("{n:02}.flac"), title: title.to_string(), ms }
+        Present { disc: Some(1), number: Some(n), key: format!("{n:02}.flac"), title: title.to_string(), ms, ..Present::default() }
     }
 
     fn copy_of(tracks: &[RefTrack]) -> Vec<Present> {

@@ -116,7 +116,13 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         kind: built.or_else(|| row.kind.clone()),
         secondary: Vec::new(),
         year: row.year,
-        artists: read.artists.iter().map(|(id, name)| Named { id: crate::serve::ids::artist(*id), name: name.clone(), catno: None }).collect(),
+        // NAMES.10: each credited artist by its id, named by its one served name (the spelling credited most beside its id), never
+        // the record's files' string; its birth name only where the library serves it no rows.
+        artists: {
+            let ids: Vec<String> = read.artists.iter().map(|(id, _)| crate::serve::ids::artist(*id)).collect();
+            let served = serve.library.names_of(&ids).unwrap_or_default();
+            read.artists.iter().zip(ids).map(|((_, name), id)| Named { name: served.get(&id).cloned().unwrap_or_else(|| name.clone()), id, catno: None }).collect()
+        },
         labels: labels_of(&read.labels),
         genres: row.genres.clone(),
         cover: row.cover.clone(),
@@ -300,6 +306,52 @@ mod tests {
         let text = json.to_string();
         for never in ["\"not_had\"", "\"have\"", "\"album\":", "\"subject\"", "\"record\":{"] {
             assert!(!text.contains(never), "{never} in {text}");
+        }
+    }
+
+    /// NAMES.10 (Q1 (a)): the record's credits by id; its line and chips read each credited artist's one served name, the spelling
+    /// credited most beside its id ("The Jimi Hendrix Experience" for `ar-202`, though the record's own files say "Jimi Hendrix"),
+    /// joined by the one formatter; with no served row, its catalogue name. Red first: the line read the record's files' string and
+    /// the catalogue's birth name.
+    #[test]
+    fn a_records_artist_line_reads_its_artists_names() {
+        let serve = served();
+        let id = night_ferry(&serve, &[(MUSIC, "FLAC", 900)]);
+        let cat = serve.catalogue();
+        let (person, group) = (cat.artist_for("Jimi Hendrix").unwrap(), cat.artist_for("Glass Harbour").unwrap());
+        cat.db_for_tests().execute("UPDATE records SET artist = 'Jimi Hendrix' WHERE id = ?1", [id]).unwrap();
+        for (position, artist) in [group, person].iter().enumerate() {
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'files')", rusqlite::params![id, artist, position as i64]).unwrap();
+        }
+        let line = |serve: &Serve| {
+            let e = answer(serve, id, &alice(), &Place::Library, &[]);
+            let named: Vec<(String, String)> = e.properties.artists.value.iter().map(|n| (n.id.clone(), n.name.clone())).collect();
+            (named, e.properties.credit.clone())
+        };
+        let ids = (crate::serve::ids::artist(group), crate::serve::ids::artist(person));
+        assert_eq!(line(&serve), (vec![(ids.0.clone(), "Glass Harbour".into()), (ids.1.clone(), "Jimi Hendrix".into())], "Glass Harbour & Jimi Hendrix".to_string()), "no served row: its own name");
+        // The served library names the group's id by the spelling credited most beside it (a box set's forty files).
+        serve.library.db().execute("INSERT INTO artists (id, name, album_count, song_count, order_name) VALUES (?1, 'The Jimi Hendrix Experience', 1, 40, 'jimi hendrix experience')", [&ids.1]).unwrap();
+        let (named, credit) = line(&serve);
+        assert_eq!(named[1], (ids.1.clone(), "The Jimi Hendrix Experience".to_string()), "by its id, its one name");
+        assert_eq!(credit, "Glass Harbour & The Jimi Hendrix Experience", "never the files' string");
+    }
+
+    /// NAMES.15's DC1a half, a guard: the record's sheet offers no files line, plan or run for a name or a credit (OQ-NAMES-2 (a),
+    /// OQ-NAMES-6 (a): writing is 0.19's), whoever opens it, whatever its files say beside its credit.
+    #[test]
+    fn names_write_nothing_in_018() {
+        let serve = served();
+        let id = night_ferry(&serve, &[(MUSIC, "FLAC", 900)]);
+        let cat = serve.catalogue();
+        let group = cat.artist_for("The Jimi Hendrix Experience").unwrap();
+        cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", rusqlite::params![id, group]).unwrap();
+        for viewer in [root(), alice()] {
+            let e = answer(&serve, id, &viewer, &Place::Library, &[]);
+            for a in &e.actions {
+                let said = format!("{} {} {}", a.name, a.title, a.href).to_lowercase();
+                assert!(!["write", "retag", "tags", "rename", "credit"].iter().any(|w| said.contains(w)), "{said}");
+            }
         }
     }
 

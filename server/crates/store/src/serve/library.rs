@@ -658,6 +658,8 @@ pub struct Library {
     overrides: Mutex<HashMap<String, Overrides>>,
     /// Every artist's id for life, by `ids::artist_key`: the catalogue's, as `credit` last read them.
     artists: Mutex<HashMap<String, i64>>,
+    /// The records' credits by id and the MusicBrainz artist ids' holders (NAMES.25), as `credit` last read them.
+    credits: Mutex<crate::catalogue::Credits>,
     /// What each catalogue folder's library is, in the libraries' order (`set_kinds`).
     kinds: Mutex<Vec<(i64, Kind)>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
@@ -763,8 +765,16 @@ struct Song<'a> {
     artists: Vec<String>,
     artist_credit: Option<String>,
     album: String,
+    /// Whether a file of its folder's album names it (its ALBUM a value after the one tag rule, WM.3): one that names none says
+    /// nothing of its record's title (WM.5 (b)).
+    album_named: bool,
+    /// Its ALBUM was a site's stamp alone (WM.16): no vote in its folder's album.
+    stamped: bool,
     album_artist: String,
     album_artists: Vec<String>,
+    /// The album artist as the raw tags give it, settled with the folder's album as `album_artist` is: what the tag hash and the
+    /// persistent ids read, so no group or id moves by the tag rule (T-WM-2).
+    raw_album_artist: String,
     /// The record its album is (`songs_of`) and that record's id: what most of its group's tracks hold, so a stray shows
     /// with the album its file lies in.
     record: i64,
@@ -779,29 +789,78 @@ struct Song<'a> {
 /// The album artist of a file that credits none, not even an artist of its own.
 pub const UNKNOWN_ARTIST: &str = "[Unknown Artist]";
 
+/// A fact field's first value through the one tag rule (WM.1, WM.2): a site's stamp is none, one beside a value is cut.
+pub(crate) fn fact(row: &ServedRow, name: &str) -> Option<String> {
+    let field = cratarr_rules::hygiene::Field::of(name)?;
+    row.all(name).find_map(|v| cratarr_rules::hygiene::value(field, v).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+}
+
 fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
-    // OBJ5: a track's title by the one rule (its name, else its file's), as every surface names it.
+    use cratarr_rules::hygiene::{Field, value};
+    // OBJ5: a track's title by the one rule (its name, else its file's), as every surface names it; a stamp is no name (WM.2).
     let title = cratarr_rules::names::track_title(row.first("title"), &row.rel);
-    let list = |list: &str, text: &str| {
+    // A list's values as the library splits them, each through the one tag rule: a list whose values are all stamps is a list
+    // the file doesn't have (WM.3), and the next field speaks.
+    let raw = |list: &str, text: &str| {
         let from = if row.all(list).next().is_some() { list } else { text };
         rules.values(folder, from, &row.all(from).map(str::to_string).collect::<Vec<_>>())
+    };
+    let cleaned = |name: &str| -> Vec<String> {
+        let Some(field) = Field::of(name) else { return Vec::new() };
+        let values = rules.values(folder, name, &row.all(name).map(str::to_string).collect::<Vec<_>>());
+        values.iter().filter_map(|v| value(field, v)).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect()
+    };
+    let list = |list: &str, text: &str| {
+        let values = cleaned(list);
+        if values.is_empty() { cleaned(text) } else { values }
     };
     let artists = list("artists", "artist");
     // OBJ5, NAMES.23: the credit by the one formatter over the artists the file names (`credit_text`), never its ARTIST text raw
     // ("Commodo / Alfa Mist" is two artists' credit, "Commodo & Alfa Mist").
     let named: Vec<&str> = artists.iter().map(String::as_str).collect();
-    let artist_credit = Some(cratarr_rules::names::credit_text(&named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
+    let artist_credit = Some(cratarr_rules::names::credit_text(&named, None)).filter(|c| !c.is_empty()).or_else(|| fact(row, "artist"));
     // The album artist as the file credits it, else the song's artist.
-    let album_artist = row.first("albumartist").map(str::to_string).or_else(|| artist_credit.clone()).unwrap_or_else(|| UNKNOWN_ARTIST.into());
+    let album_artist = fact(row, "albumartist").or_else(|| artist_credit.clone()).unwrap_or_else(|| UNKNOWN_ARTIST.into());
     let mut album_artists = list("albumartists", "albumartist");
     if album_artists.is_empty() {
         album_artists = if artists.is_empty() { vec![album_artist.clone()] } else { artists.clone() };
     }
-    let album = row.first("album").map(str::to_string).unwrap_or_else(|| "[Unknown Album]".into());
-    let group = ids::album(row, &album_artist, folder);
-    let album_base = ids::album(row, &album_artist, 0);
+    let named_album = fact(row, "album");
+    // Its ALBUM as the file holds it, raw: a stamp alone there has no vote (WM.16).
+    let raw_album = row.first("album").is_some_and(|a| !a.trim().is_empty());
+    let stamped = named_album.is_none() && raw_album;
+    let album_named = named_album.is_some();
+    let album = named_album.unwrap_or_else(|| "[Unknown Album]".into());
+    // What gathers a folder's files and what persistent ids read stay the raw tags' (T-WM-2): no group or id moves by the rule.
+    let raw_artists = raw("artists", "artist");
+    let raw_named: Vec<&str> = raw_artists.iter().map(String::as_str).collect();
+    let raw_credit = Some(cratarr_rules::names::credit_text(&raw_named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
+    let raw_album_artist = row.first("albumartist").map(str::to_string).or(raw_credit).unwrap_or_else(|| UNKNOWN_ARTIST.into());
+    // A copy Cratarr placed is gathered by its placing folder, never by its tags (COU.17, T-COU-16).
+    let group = match &row.placed {
+        Some(dir) => format!("placed:{folder}:{dir}"),
+        None => ids::album(row, &raw_album_artist, folder),
+    };
+    let album_base = ids::album(row, &raw_album_artist, 0);
     let genres = rules.values(folder, "genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
-    Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, record: 0, album_id: String::new(), group, album_base, genres }
+    Song {
+        row,
+        folder,
+        title,
+        artists,
+        artist_credit,
+        album,
+        album_named,
+        stamped,
+        album_artist,
+        album_artists,
+        raw_album_artist,
+        record: 0,
+        album_id: String::new(),
+        group,
+        album_base,
+        genres,
+    }
 }
 
 /// What these files say, cheaply: when it differs from what the library was built from, it is built again (tests;
@@ -851,6 +910,7 @@ impl Library {
             incomplete: Mutex::default(),
             overrides: Mutex::default(),
             artists: Mutex::default(),
+            credits: Mutex::default(),
             kinds: Mutex::default(),
             building: Mutex::new(()),
         })
@@ -874,6 +934,8 @@ impl Library {
         if !known(&self.artists.lock().unwrap_or_else(|p| p.into_inner())) {
             self.set_artists(cat.artists_for(&names).context("giving the artists their ids")?);
         }
+        // NAMES.25: the records' credits and the MusicBrainz ids' holders, read at every build path alike, so each serves one id.
+        *self.credits.lock().unwrap_or_else(|p| p.into_inner()) = cat.served_credits().context("reading the records' credits")?;
         Ok(())
     }
 
@@ -1064,6 +1126,9 @@ impl Library {
         };
         let roots: Vec<(i64, String)> = folders.iter().map(|f| (f.folder, f.root.clone())).collect();
         let context = context(&cat.generation(), &roots, &self.kinds(), rules)?;
+        // NAMES.25: the records this build serves under other artist ids are owed to the change log, so a synced device learns of
+        // each once (no reset). Only records served before: a library built afresh owes nothing.
+        let served_before = self.served_artists_by_record()?;
         let (whole, dirs) = if self.built_context().as_deref() != Some(context.as_str()) {
             self.build_with(&folders, rules, &covers)?;
             (true, 0)
@@ -1079,7 +1144,28 @@ impl Library {
         };
         self.set_built_context(&context)?;
         self.set_built_from(print)?;
+        let changed: Vec<i64> =
+            self.served_artists_by_record()?.into_iter().filter(|(record, now)| served_before.get(record).is_some_and(|was| was != now)).map(|(record, _)| record).collect();
+        if !changed.is_empty() {
+            cat.owe_records(&changed).context("owing the records served under other artist ids")?;
+        }
         Ok((whole, dirs))
+    }
+
+    /// Each served record's artist ids, its album artists' and its songs' together (NAMES.25's change).
+    fn served_artists_by_record(&self) -> Result<BTreeMap<i64, BTreeSet<String>>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT al.record, x.artist_id FROM (SELECT album_id, artist_id FROM album_artists
+               UNION SELECT s.album_id, sa.artist_id FROM song_artists sa JOIN songs s ON s.id = sa.song_id) x
+             JOIN albums al ON al.id = x.album_id WHERE al.record IS NOT NULL",
+        )?;
+        let mut out: BTreeMap<i64, BTreeSet<String>> = BTreeMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+            let (record, artist) = row?;
+            out.entry(record).or_default().insert(artist);
+        }
+        Ok(out)
     }
 
     fn built_from(&self) -> Option<String> {
@@ -1108,6 +1194,7 @@ impl Library {
             incomplete: self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             overrides: self.overrides.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             artists: self.artists.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            credits: self.credits.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             kinds: self.kinds(),
         }
     }
@@ -1141,6 +1228,7 @@ impl Library {
         )?;
         write_albums(&tx, &rows, &roots, rules, &facts, covers)?;
         artists_again(&tx, None)?;
+        albums_credited_again(&tx)?;
         genres_again(&tx)?;
         tx.execute_batch("UPDATE songs SET cover = (SELECT a.cover FROM albums a WHERE a.id = songs.album_id);")?;
         // Where each catalogue folder is, so the library can be read before the catalogue is open (decision 0032).
@@ -1282,6 +1370,7 @@ impl Library {
         let (written, credited) = write_albums(&tx, &refs, roots, rules, &facts, covers)?;
         touched.extend(credited);
         artists_again(&tx, Some(&touched))?;
+        albums_credited_again(&tx)?;
         genres_again(&tx)?;
         {
             let mut cover = tx.prepare("UPDATE songs SET cover = (SELECT a.cover FROM albums a WHERE a.id = songs.album_id) WHERE album_id = ?1")?;
@@ -1629,6 +1718,7 @@ struct Facts {
     incomplete: HashMap<String, Whole>,
     overrides: HashMap<String, Overrides>,
     artists: HashMap<String, i64>,
+    credits: crate::catalogue::Credits,
     kinds: Vec<(i64, Kind)>,
 }
 
@@ -1637,6 +1727,48 @@ impl Facts {
     /// would serve someone under no id.
     fn artist(&self, name: &str) -> Result<String> {
         self.artists.get(&ids::artist_key(name)).map(|id| ids::artist(*id)).with_context(|| format!("{name} has no id"))
+    }
+
+    /// MusicBrainz ids a file gives for a field, lower case, in order: what it pairs its names with.
+    fn ids_of(row: &ServedRow, field: &str) -> Vec<String> {
+        row.all(field).flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect()
+    }
+
+    /// The artist one of an album's artist names stands for, by id (NAMES.25, NAMES.10: namesakes apart, spellings together): the
+    /// record's credited artist of that name's key (a credit by a source's id or the hand's: "Glass Mirage"); else the holder of the
+    /// MusicBrainz id its file pairs that name with (one id spelled two ways: Caribou and Manitoba); none else.
+    fn by_album_artist(&self, s: &Song, name: &str) -> Option<i64> {
+        let key = ids::artist_key(name);
+        if let Some((id, _)) = self.credits.records.get(&s.record).and_then(|credits| credits.iter().find(|(_, k)| *k == key)) {
+            return Some(*id);
+        }
+        let mbids = Self::ids_of(s.row, "musicbrainz_albumartistid");
+        let at = s.album_artists.iter().position(|n| ids::artist_key(n) == key)?;
+        (mbids.len() == s.album_artists.len()).then(|| mbids.get(at).and_then(|m| self.credits.musicbrainz.get(m)).copied()).flatten()
+    }
+
+    /// An album artist's served id (NAMES.25): its record's credit or its file's id, else the artist of its name (C55's first).
+    fn album_artist(&self, s: &Song, name: &str) -> Result<String> {
+        match self.by_album_artist(s, name) {
+            Some(id) => Ok(ids::artist(id)),
+            None => self.artist(name),
+        }
+    }
+
+    /// A track's artist's served id, MATCH.4's track rule (T-DC3-17, NAMES.25): the holder of its own MusicBrainz artist id; else, where
+    /// it is one of its file's album artists, that artist as the album's is (`by_album_artist`); else the artist whose name it is, among
+    /// namesakes C55's first. Never by a name where its file pairs the name with an id.
+    fn song_artist(&self, s: &Song, at: usize, name: &str) -> Result<String> {
+        let mbids = Self::ids_of(s.row, "musicbrainz_artistid");
+        if mbids.len() == s.artists.len()
+            && let Some(id) = mbids.get(at).and_then(|m| self.credits.musicbrainz.get(m))
+        {
+            return Ok(ids::artist(*id));
+        }
+        match self.by_album_artist(s, name) {
+            Some(id) => Ok(ids::artist(id)),
+            None => self.artist(name),
+        }
     }
 }
 
@@ -1686,7 +1818,7 @@ fn row_src(r: &ServedRow) -> String {
 fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: &Facts, covers: &Covers) -> String {
     use md5::Digest;
     let said = format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         facts.added.get(album),
         release.and_then(|m| facts.originals.get(m)),
         facts.extra_genres.get(album),
@@ -1695,6 +1827,8 @@ fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: 
         covers.get(&(folder, dir.to_string())),
         facts.incomplete.get(album),
         facts.overrides.get(album),
+        ids::record_number(album).and_then(|r| facts.credits.records.get(&r)),
+        ids::record_number(album).and_then(|r| facts.credits.titles.get(&r)),
     );
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
 }
@@ -1836,16 +1970,19 @@ pub fn artist_number_in_tests(name: &str) -> i64 {
 }
 
 /// An album's labels as its first file that names any names them (Vorbis LABEL, MP4's, ID3v2 TPUB read as "label"), several
-/// in one value split as the crates split them, the catalogue number going with the first.
+/// in one value split as the crates split them, the catalogue number going with the first. Each through the one tag rule: a site's
+/// stamp names no label (WM.5 (d)).
 fn labels_of_album(list: &[&Song]) -> Vec<(String, String)> {
-    let Some(s) = list.iter().find(|s| s.row.first("label").is_some()) else { return Vec::new() };
+    use cratarr_rules::hygiene::{Field, value};
+    let labels = |s: &Song| -> Vec<String> { s.row.all("label").filter_map(|v| value(Field::Label, v)).flat_map(|v| crate::crates::labels_of(&v)).collect() };
+    let Some(s) = list.iter().find(|s| !labels(s).is_empty()) else { return Vec::new() };
     let mut names: Vec<String> = Vec::new();
-    for l in s.row.all("label").flat_map(crate::crates::labels_of) {
+    for l in labels(s) {
         if !names.iter().any(|n| n.eq_ignore_ascii_case(&l)) {
             names.push(l);
         }
     }
-    let catno = s.row.first("catalognumber").unwrap_or_default().to_string();
+    let catno = fact(s.row, "catalognumber").unwrap_or_default();
     names.into_iter().enumerate().map(|(i, name)| (name, if i == 0 { catno.clone() } else { String::new() })).collect()
 }
 
@@ -1890,19 +2027,20 @@ pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::c
             });
             let first = list[0];
             // The file that named the album: one of a folder's that disagrees was settled to it, and its own tags say another.
-            let named = list.iter().copied().find(|s| ids::album(s.row, &s.album_artist, s.folder) == s.group).unwrap_or(first);
+            let named = list.iter().copied().find(|s| ids::album(s.row, &s.raw_album_artist, s.folder) == s.group).unwrap_or(first);
             crate::catalogue::AlbumCopy {
                 facts: RecordFacts {
                     release: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_albumid"))),
                     artist: fold(&first.album_artist),
-                    title: fold(&first.album),
+                    // A copy whose files name no album says nothing of its title (WM.5, WM.15: a stamp is no title key).
+                    title: list.iter().find(|s| s.album_named).map(|s| fold(&s.album)).unwrap_or_default(),
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
                 group: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_releasegroupid"))),
                 artists: first.album_artists.clone(),
                 artist_ids: first.row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect(),
                 labels: labels_of_album(&list),
-                title: first.album.clone(),
+                title: list.iter().find(|s| s.album_named).unwrap_or(&first).album.clone(),
                 artist: first.album_artist.clone(),
                 year: list.iter().filter_map(|s| s.row.first("date").and_then(year_of)).max(),
                 tracks: list
@@ -1920,7 +2058,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &FolderRules) -> Vec<crate::c
                 folder: first.folder,
                 old_id: first.group.clone(),
                 old_base: first.album_base.clone(),
-                pid: ids::album_pid(named.row, &named.album_artist),
+                pid: ids::album_pid(named.row, &named.raw_album_artist),
             }
         })
         .collect();
@@ -2048,15 +2186,17 @@ fn write_albums(
             if !lead.get(&r.track.unwrap_or_default()).is_some_and(|l| std::ptr::eq(l.1, s)) {
                 continue;
             }
+            // A file that names no album shows its record's (WM.3).
+            let album = if s.album_named { s.album.as_str() } else { facts.credits.titles.get(&s.record).map_or(s.album.as_str(), String::as_str) };
             ins_song.execute(params![
                 id,
-                ids::song_pid(r, &s.album_artist),
+                ids::song_pid(r, &s.raw_album_artist),
                 s.folder,
                 r.rel,
                 s.album_id,
                 s.title,
                 s.artist_credit,
-                s.album,
+                album,
                 s.album_artist,
                 r.first("tracknumber").and_then(leading_number),
                 r.first("discnumber").and_then(leading_number),
@@ -2081,10 +2221,10 @@ fn write_albums(
                 total_of(r),
             ])?;
             let n = tx.last_insert_rowid();
-            ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
+            ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), album])?;
             ins_tri.execute(params![n, s.title])?;
             for (i, name) in s.artists.iter().enumerate() {
-                let aid = facts.artist(name)?;
+                let aid = facts.song_artist(s, i, name)?;
                 ins_artist.execute(params![id, aid, name, i as i64])?;
                 credited.insert(aid);
             }
@@ -2128,6 +2268,14 @@ fn write_albums(
     }
     for (album_id, songs) in &albums {
         let first = songs[0];
+        // Its name: the first song's that names one (a copy whose files name none, or only a site's stamp, says nothing: WM.3).
+        // None names it: the record's stored title (WM.3, WM.12: "Long Pier" by the rule), never "[Unknown Album]" for a record that has one.
+        let album_name = songs
+            .iter()
+            .find(|s| s.album_named)
+            .map(|s| s.album.as_str())
+            .or_else(|| facts.credits.titles.get(&first.record).map(String::as_str))
+            .unwrap_or(first.album.as_str());
         let copies = &records[album_id];
         let row = &copies[orders[album_id.as_str()][0]];
         // What the record is: what the copy that plays for most people says, and where it says nothing, any other's, as a record must
@@ -2173,7 +2321,7 @@ fn write_albums(
         let dir = &row.copy.dir;
         let discs = said.iter().filter_map(|s| s.row.first("discnumber").and_then(leading_number)).max().unwrap_or(1);
         let compilation = said.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
-        let artist_id = facts.artist(&first.album_artists[0])?;
+        let artist_id = facts.album_artist(first, &first.album_artists[0])?;
         // The art's id: the album's, with a fingerprint of its picture (see `art`).
         let root = roots.get(&row.copy.folder).copied().unwrap_or("");
         let first_track = row.songs.first().map(|s| Path::new(root).join(&s.row.rel));
@@ -2185,7 +2333,7 @@ fn write_albums(
             tracks: songs.len(),
             duration_ms,
             longest_ms: songs.iter().filter_map(|s| s.row.duration_ms).max().unwrap_or(0),
-            name: &first.album,
+            name: album_name,
             various: first.album_artist.eq_ignore_ascii_case("Various Artists"),
             titles: &titles,
         }
@@ -2203,7 +2351,7 @@ fn write_albums(
         }
         ins_album.execute(params![
             album_id,
-            first.album,
+            album_name,
             first.album_artist,
             artist_id,
             album_year,
@@ -2217,7 +2365,7 @@ fn write_albums(
             every().filter_map(|s| s.row.born).chain(facts.added.get(album_id).copied()).min(),
             release,
             compilation,
-            order_name(&first.album),
+            order_name(album_name),
             row.copy.format,
             row.copy.min_kbps,
             cover,
@@ -2231,10 +2379,10 @@ fn write_albums(
             first.record,
         ])?;
         let n = tx.last_insert_rowid();
-        ins_fts.execute(params![n, first.album, first.album_artist])?;
-        ins_tri.execute(params![n, first.album])?;
+        ins_fts.execute(params![n, album_name, first.album_artist])?;
+        ins_tri.execute(params![n, album_name])?;
         for (i, name) in first.album_artists.iter().enumerate() {
-            let aid = facts.artist(name)?;
+            let aid = facts.album_artist(first, name)?;
             let mbid = if i == 0 { first.row.first("musicbrainz_albumartistid") } else { None };
             ins_aa.execute(params![album_id, aid, name, i as i64, mbid])?;
             credited.insert(aid);
@@ -2254,6 +2402,37 @@ fn genres_of<'s, 'r: 's>(songs: impl Iterator<Item = &'s Song<'r>>) -> Vec<Strin
         }
     }
     genres
+}
+
+/// Each album's artist line, the served `albums.artist` OpenSubsonic and every list read (NAMES.24's DC1a half, NAMES.10): its
+/// album artists' served names, each its id's one name (`artists_again`), joined by the one formatter (`credit_text`), never the
+/// files' ALBUMARTIST text. Written where it changed, its search row with it.
+fn albums_credited_again(tx: &Connection) -> Result<()> {
+    let mut lines: Vec<(String, i64, String, Vec<String>)> = Vec::new();
+    {
+        let mut st = tx.prepare(
+            "SELECT al.id, al.n, al.name, ar.name FROM albums al JOIN album_artists aa ON aa.album_id = al.id JOIN artists ar ON ar.id = aa.artist_id
+             ORDER BY al.id, aa.position",
+        )?;
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+            let (album, n, title, name) = row?;
+            match lines.last_mut() {
+                Some((a, _, _, names)) if *a == album => names.push(name),
+                _ => lines.push((album, n, title, vec![name])),
+            }
+        }
+    }
+    let mut set = tx.prepare_cached("UPDATE albums SET artist = ?2 WHERE id = ?1 AND artist IS NOT ?2")?;
+    // A contentless table's row is written whole.
+    let mut fts = tx.prepare_cached("UPDATE albums_fts SET name = ?2, artist = ?3 WHERE rowid = ?1")?;
+    for (album, n, title, names) in lines {
+        let named: Vec<&str> = names.iter().map(String::as_str).collect();
+        let line = cratarr_rules::names::credit_text(&named, None);
+        if set.execute(params![album, line])? > 0 {
+            fts.execute(params![n, title, line])?;
+        }
+    }
+    Ok(())
 }
 
 /// The artists counted again from what the songs and albums credit now: all of them, or `only` these (those no longer
@@ -2364,43 +2543,56 @@ fn genres_again(tx: &Connection) -> Result<()> {
 /// a move.
 fn one_album_per_folder(songs: &mut [Song]) {
     let dir = |s: &Song| (s.folder, s.row.rel.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string()));
-    let mut votes: HashMap<(i64, String), Vec<(usize, &str)>> = HashMap::new();
+    // (real votes, files, group, stamped alone): a file whose ALBUM is a site's stamp has no vote (WM.16, T-WM-10), so it never
+    // wins a tie; a folder of nothing but stamped files votes as before, a file a vote.
+    let mut votes: HashMap<(i64, String), Vec<(usize, usize, &str, bool)>> = HashMap::new();
     let mut order: Vec<usize> = (0..songs.len()).collect();
     order.sort_by(|a, b| songs[*a].row.rel.cmp(&songs[*b].row.rel));
     for &i in &order {
         let s = &songs[i];
         let list = votes.entry(dir(s)).or_default();
-        match list.iter_mut().find(|(_, id)| *id == s.group) {
-            Some(v) => v.0 += 1,
-            None => list.push((1, s.group.as_str())),
+        let real = usize::from(!s.stamped);
+        match list.iter_mut().find(|(_, _, id, _)| *id == s.group) {
+            Some(v) => {
+                v.0 += real;
+                v.1 += 1;
+                v.3 &= s.stamped;
+            }
+            None => list.push((real, 1, s.group.as_str(), s.stamped)),
         }
     }
     let chosen: HashMap<(i64, String), (String, usize)> = votes
         .into_iter()
         .map(|(d, list)| {
-            let best = list.iter().max_by(|a, b| a.0.cmp(&b.0).then(std::cmp::Ordering::Greater)).map_or("", |v| v.1).to_string();
+            let any_real = list.iter().any(|v| !v.3);
+            let weight = |v: &(usize, usize, &str, bool)| if any_real { v.0 } else { v.1 };
+            let best = list.iter().filter(|v| !any_real || !v.3).max_by(|a, b| weight(a).cmp(&weight(b)).then(std::cmp::Ordering::Greater)).map_or("", |v| v.2).to_string();
             (d, (best, list.len()))
         })
         .collect();
     // The album's own name and artist come from a song that named it.
-    let mut lead: HashMap<String, (String, String, Vec<String>, String)> = HashMap::new();
+    type Lead = (String, bool, String, Vec<String>, String, String);
+    let mut lead: HashMap<String, Lead> = HashMap::new();
     for s in songs.iter() {
         if let Some((id, _)) = chosen.get(&dir(s))
             && *id == s.group
         {
-            lead.entry(id.clone()).or_insert_with(|| (s.album.clone(), s.album_artist.clone(), s.album_artists.clone(), s.album_base.clone()));
+            lead.entry(id.clone())
+                .or_insert_with(|| (s.album.clone(), s.album_named, s.album_artist.clone(), s.album_artists.clone(), s.album_base.clone(), s.raw_album_artist.clone()));
         }
     }
     for s in songs.iter_mut() {
         let Some((id, kinds)) = chosen.get(&dir(s)) else { continue };
         if *kinds > 1
-            && let Some((album, artist, artists, base)) = lead.get(id)
+            && let Some((album, named, artist, artists, base, raw)) = lead.get(id)
         {
             s.group = id.clone();
             s.album_base = base.clone();
             s.album = album.clone();
+            s.album_named = *named;
             s.album_artist = artist.clone();
             s.album_artists = artists.clone();
+            s.raw_album_artist = raw.clone();
         }
     }
 }
@@ -4674,6 +4866,10 @@ mod tests {
         assert_eq!(leading_number("03/12"), Some(3));
     }
 }
+
+#[cfg(test)]
+#[path = "library_wm_tests.rs"]
+mod wm_tests;
 
 /// What an album lacks of what the library requires (`Library::lacking`).
 #[derive(Debug, Clone, Default, PartialEq)]
