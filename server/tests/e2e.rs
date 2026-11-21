@@ -4168,8 +4168,8 @@ async fn a_length_fix_stays_in_its_file_end_to_end() {
 }
 
 /// The one lock, seen: one reading of the list shows a run writing and a second waiting, not done; the second takes its turn once the
-/// first is through. Two file runs 0.18 keeps on the one lock: Health's length repair (`fix:files:sound-breaks`; the owner, 2026-11-20
-/// 17:17), its sheet's records in two runs (Change cover, the second kind until 0.18, is no file run any more: the coordinator,
+/// first is through. Two file runs 0.18 keeps on the one lock: Health's length repairs (the owner, 2026-11-20 17:17), the FLACs'
+/// (`fix:files:sound-breaks`) and the MP3s' (Change cover, the second kind until 0.18, is no file run any more: the coordinator,
 /// 2026-11-21, "the lock's proof keeps two runs"). And Change cover waits for no lock (COU.11, GEN.58): chosen while a run writes, it
 /// answers at once with its Undo, the record shows it at once, no file is written.
 #[tokio::test(flavor = "multi_thread")]
@@ -4184,28 +4184,38 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
     let db = rusqlite::Connection::open(root.join("data/catalogue.sqlite")).unwrap();
     db.busy_timeout(Duration::from_secs(10)).unwrap();
     let heard = "INSERT OR REPLACE INTO analysis (folder, rel, size, mtime, version, duration_secs, analysed_at)
-                 SELECT f.folder, f.rel, f.size, f.mtime, 1, 1.0, 0 FROM files f WHERE f.rel LIKE '%.flac' AND f.gone_at IS NULL";
+                 SELECT f.folder, f.rel, f.size, f.mtime, 1, 1.0, 0 FROM files f WHERE f.gone_at IS NULL AND (f.rel LIKE '%.flac' OR f.rel LIKE '%.mp3')";
     assert!(db.execute(heard, []).unwrap() > 2);
     drop(db);
-    let kind = "fix:files:sound-breaks";
-    let repair = |r: &Value| r["what"].as_str().is_some_and(|w| w.contains("sound-breaks"));
-    // The sheet's records in two runs: the first most of them, the second the last.
-    let sheet = s.get(&format!("/api/file-changes/plans/{kind}")).await;
-    let records = sheet["records"].as_array().unwrap().clone();
-    assert!(records.len() > 2, "two runs' worth: {sheet}");
+    // A kind writes one run at a time ("Already writing"), so the two runs are two kinds of Health's length repair: the FLACs' (their
+    // sound breaking off), and the MP3s', as Health tells them (cut short, or a length misread or guessed).
+    let repair = |r: &Value| r["what"].as_str().is_some_and(|w| w.contains("files:"));
     let ticked = |rs: &[Value]| {
         let albums: Vec<&Value> = rs.iter().map(|r| &r["album"]).collect();
         let stamps: serde_json::Map<String, Value> = rs.iter().map(|r| (r["album"].as_str().unwrap().to_string(), r["stamp"].clone())).collect();
         json!({ "albums": albums, "stamps": stamps })
     };
-    let (last, most) = records.split_last().unwrap();
-    s.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/{kind}/apply"), ticked(most)).await;
+    let kind = "fix:files:sound-breaks";
+    let sheet = s.get(&format!("/api/file-changes/plans/{kind}")).await;
+    let records = sheet["records"].as_array().unwrap().clone();
+    assert!(records.len() > 1, "a run with some to go: {sheet}");
+    let mut other: Option<(&str, Vec<Value>)> = None;
+    for k in ["fix:files:cut-short", "fix:files:length-misread", "fix:files:length-guessed"] {
+        let (status, sheet) = s.send(reqwest::Method::GET, &format!("/api/file-changes/plans/{k}"), Value::Null).await;
+        let records = if status == 200 { sheet["records"].as_array().cloned().unwrap_or_default() } else { Vec::new() };
+        if !records.is_empty() {
+            other = Some((k, records));
+            break;
+        }
+    }
+    let (other_kind, other_records) = other.expect("a second kind of repair offered: the MP3s'");
+    s.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/{kind}/apply"), ticked(&records)).await;
     // Albums go at least 50 ms apart, so asked this often the run is caught with most of them to go.
     let asked = Instant::now();
     while s.get("/api/file-changes/runs").await[0]["state"] != "writing" {
         assert!(asked.elapsed() < Duration::from_secs(60), "waited for the run to get going");
     }
-    let second = s.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/{kind}/apply"), ticked(std::slice::from_ref(last))).await;
+    let second = s.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/{other_kind}/apply"), ticked(&other_records)).await;
     assert_eq!(second["state"], "waiting", "{second}");
     let runs = s.get("/api/file-changes/runs").await;
     let states: Vec<Value> = runs.as_array().unwrap().iter().filter(|r| repair(r)).map(|r| r["state"].clone()).collect();
