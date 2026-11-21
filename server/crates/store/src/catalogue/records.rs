@@ -987,7 +987,16 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
                         Some(artist)
                     }
                 },
-                None => artists.get(&ids::artist_key(name)).copied(),
+                // T-COU-2 (NAMES.25 (e)): the absence of an id is no evidence. A credit by id (a source's reference, the hand's) of an
+                // artist of this name stays while the files name that name with no id; else the first artist of the name (C55).
+                None => {
+                    let key = ids::artist_key(name);
+                    let held: Option<i64> = tx
+                        .prepare_cached("SELECT ra.artist FROM record_artists ra JOIN artists a ON a.id = ra.artist WHERE ra.record = ?1 AND a.key = ?2 ORDER BY ra.position LIMIT 1")?
+                        .query_row(params![record, key], |r| r.get(0))
+                        .optional()?;
+                    held.or_else(|| artists.get(&key).copied())
+                }
             };
             if let Some(id) = id
                 && !ids.contains(&id)

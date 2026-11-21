@@ -9,6 +9,7 @@
 //! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
 mod artists;
+pub use artists::Credits;
 mod editions;
 pub mod facts;
 mod first;

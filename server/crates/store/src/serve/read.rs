@@ -519,6 +519,13 @@ impl Library {
     }
 
     /// An artist with their albums, newest release last.
+    /// The songs credited to an artist by id (`song_artists`): what its plays are worked out from (NAMES.25). Blocking.
+    pub fn artist_songs(&self, id: &str) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT DISTINCT song_id FROM song_artists WHERE artist_id = ?1 ORDER BY song_id")?;
+        Ok(st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn artist(&self, id: &str) -> Result<Option<Artist>> {
         let db = self.db();
         let artist = {

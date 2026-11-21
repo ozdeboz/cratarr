@@ -514,6 +514,11 @@ fn a_differing_arrival_is_an_edition_by_its_item() {
     f.pass();
     assert_eq!((f.record_of(1, &arrived[0]), f.record_of(MUSIC, &lidarr[0])), (Some(edition), Some(r)));
     assert_eq!(f.cat.db().query_row("SELECT count(*) FROM edition_links", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    // Every surface shows its record's names (WM.3, OQ-WM-3 (a)): the served album of the edition, never the site or "[Unknown Album]".
+    let lib = crate::serve::library::Library::open(None).unwrap();
+    crate::serve::library::testing::build_now(&lib, &f.cat);
+    let name: String = lib.db().query_row("SELECT name FROM albums WHERE id = ?1", [ids::record(edition)], |r| r.get(0)).unwrap();
+    assert_eq!(name, "Long Pier");
     // One card: the two are editions of one album.
     let groups = f.cat.edition_groups(&[r, edition], &[MUSIC], &[]).unwrap();
     assert_eq!(groups, [vec![r, edition]], "one card, two versions");
@@ -724,4 +729,196 @@ fn a_fetched_track_joins_its_record_untouched() {
     std::fs::remove_file(f.roots[0].join(&old)).unwrap();
     f.add(MUSIC, &[(better.as_str(), vec![("album", "Another Release"), ("title", "Sea Wall (Remastered)")])]);
     assert_eq!(f.cat.track_of(MUSIC, &better), Some(two), "(c) track 2's id: plays and hearts stay on it");
+}
+
+/// WM.22 (T-WM-5, T-WM-9): 0.18's step part `wm`, on 0.17's data. (b1) `al-3215`, made of `ss-140`'s folder by its tags and titled
+/// by the site, its folder still expected for `al-3211` within its week: merged into `al-3211` by the placement the step seeds, its
+/// files `al-3211`'s tracks; (b2) a record titled by a stamp with no evidence: titled as a file with no album titles it, listed;
+/// a stamp beside a name cut. One IMMEDIATE transaction (a part cut off changed nothing), the raw tags byte for byte, run twice it does
+/// nothing. Red first: no part.
+#[test]
+fn the_018_step_cleans_shown_values_once() {
+    let f = Folders::new("wm22");
+    let r = mumia_in_music(&f);
+    let rels = electronicfresh(&f, false);
+    f.pass();
+    let made = f.record_of(1, &rels[0]).expect("0.17 made a record of it");
+    assert_ne!(made, r);
+    // As 0.17 left them: its title the site's, its folder expected (no placement then), and two more records named by stamps.
+    let db = || f.cat.db();
+    db().execute("UPDATE records SET title = 'www.electronicfresh.com' WHERE id = ?1", [made]).unwrap();
+    db().execute("DELETE FROM placements", []).unwrap();
+    db().execute("INSERT INTO expected (folder, dir, record, at) VALUES (1, ?1, ?2, strftime('%s','now'))", params![MUMIA_DIR, r]).unwrap();
+    let lone = record(&f.cat, "flacsite.net", "Kite Theory");
+    let lights = record(&f.cat, "Harbour Lights [www.flacsite.net]", "Glass Harbour");
+    let raw = || -> Vec<(i64, String, String, String)> {
+        db().prepare("SELECT folder, rel, name, value FROM tags ORDER BY folder, rel, n").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect()
+    };
+    let tags = raw();
+    let title = |id: i64| f.cat.record(id).unwrap().map(|r| r.title);
+
+    // Cut off before its mark: nothing written.
+    assert!(f.cat.step_018_wm(&[], &|| anyhow::bail!("cut off")).is_err());
+    assert_eq!((title(made).as_deref(), title(lone).as_deref()), (Some("www.electronicfresh.com"), Some("flacsite.net")), "whole or nothing");
+
+    let (report, merges) = f.cat.step_018_wm(&[], &|| Ok(())).unwrap().expect("run once");
+    assert_eq!(merges, [(made, r)], "(b1) merged by its seeded placement");
+    for (rel, n) in rels.iter().zip(1..) {
+        assert_eq!(f.cat.track_of(1, rel), f.cat.track_of(MUSIC, &format!("Polo & Pan/Mumia/0{n} T{n}.mp3")), "{rel}: al-3211's track");
+    }
+    assert_eq!(title(r).as_deref(), Some("Mumia"));
+    assert_eq!(title(lone).as_deref(), Some(super::records::UNKNOWN_ALBUM), "(b2) as a file with no album titles it");
+    assert!(report.listed["made by a stamp, no placement known"].iter().any(|l| l.contains(&ids::record(lone))), "(b2) listed, nothing merged");
+    assert_eq!(title(lights).as_deref(), Some("Harbour Lights"), "a stamp beside a name cut");
+    assert_eq!(raw(), tags, "the raw tags byte for byte");
+    assert!(f.cat.step_018_wm(&[], &|| Ok(())).unwrap().is_none(), "the second run does nothing");
+}
+
+const SALAMANDA_1: &str = "c18f3ccc-0000-4000-8000-000000000221";
+const SALAMANDA_2: &str = "ced3fdc3-0000-4000-8000-000000000222";
+const CARIBOU: &str = "00000000-0000-4000-8000-000000000321";
+
+/// NAMES.25's fixture in MUSIC: (a) both Salamandas, each album's files naming its own id; (b) a Various Artists sampler, one track
+/// "Salamanda" with `ced3fdc3…`, its twin with none; (c) Caribou's id spelled "Caribou" and "Manitoba"; (d) a "Various Artists"
+/// album whose album-artist id is Caribou's; (e) "Glass Mirage", credited to the second "Mirage" by its Discogs reference, its files
+/// "Mirage" with no ids. The artists, in C55's order: ar-221 (the first Salamanda) and the first Mirage before their namesakes.
+fn namesakes(f: &Folders) -> (i64, i64, i64, i64) {
+    let first_salamanda = f.cat.artist_for("Salamanda").unwrap();
+    f.cat.set_reference(&ids::artist(first_salamanda), &super::records::Ref::new("musicbrainz", "artist", SALAMANDA_1), "files").unwrap();
+    let (first_mirage, second_mirage) = {
+        let db = f.cat.db();
+        (super::artists::give_artist(&db, "mirage", "Mirage", 1).unwrap(), super::artists::give_artist(&db, "mirage", "Mirage", 2).unwrap())
+    };
+    let mirage = record(&f.cat, "Glass Mirage", "Mirage");
+    f.cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", [mirage, second_mirage]).unwrap();
+    f.cat.expect_record(MUSIC, "Mirage/Glass Mirage", mirage).unwrap();
+    let file = |artist: &'static str, album_artist: &'static str, album: &'static str, artist_id: Option<&'static str>, album_artist_id: Option<&'static str>, title: &'static str| {
+        let mut tags = vec![("artist", artist), ("albumartist", album_artist), ("album", album), ("title", title)];
+        tags.extend(artist_id.map(|id| ("musicbrainz_artistid", id)));
+        tags.extend(album_artist_id.map(|id| ("musicbrainz_albumartistid", id)));
+        tags
+    };
+    f.add(MUSIC, &[
+        ("Salamanda/Our Lair/01 Lair.flac", file("Salamanda", "Salamanda", "Our Lair", Some(SALAMANDA_1), Some(SALAMANDA_1), "Lair")),
+        ("Salamanda/Allez/01 Allez.flac", file("Salamanda", "Salamanda", "Allez", Some(SALAMANDA_2), Some(SALAMANDA_2), "Allez")),
+        ("Salamanda/Allez/02 Sphere.flac", file("Salamanda", "Salamanda", "Allez", Some(SALAMANDA_2), Some(SALAMANDA_2), "Sphere")),
+        ("Various/Sampler/01 Seeds.flac", file("Salamanda", "Various Artists", "Sampler", Some(SALAMANDA_2), None, "Seeds")),
+        ("Various/Sampler/02 Twin.flac", file("Salamanda", "Various Artists", "Sampler", None, None, "Twin")),
+        ("Caribou/Andorra/01 Melody Day.flac", file("Caribou", "Caribou", "Andorra", Some(CARIBOU), Some(CARIBOU), "Melody Day")),
+        ("Caribou/Andorra/02 Sandy.flac", file("Caribou", "Caribou", "Andorra", Some(CARIBOU), Some(CARIBOU), "Sandy")),
+        ("Manitoba/Up in Flames/01 Skunks.flac", file("Manitoba", "Manitoba", "Up in Flames", None, Some(CARIBOU), "Skunks")),
+        ("Various/Caribou Mix/01 Mix.flac", file("Caribou", "Various Artists", "Caribou Mix", None, Some(CARIBOU), "Mix")),
+        ("Mirage/Glass Mirage/01 Glass.flac", file("Mirage", "Mirage", "Glass Mirage", None, None, "Glass")),
+    ]);
+    f.pass();
+    (first_salamanda, first_mirage, second_mirage, mirage)
+}
+
+/// The served library's albums, (name, artist id, artist line), by name; and its artists (id, name), by id.
+fn served(lib: &crate::serve::library::Library) -> (std::collections::BTreeMap<String, (String, String)>, Vec<(String, String)>) {
+    let db = lib.db();
+    let albums = db.prepare("SELECT name, artist_id, artist FROM albums").unwrap().query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?)))).unwrap().map(Result::unwrap).collect();
+    let artists = db.prepare("SELECT id, name FROM artists ORDER BY id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    (albums, artists)
+}
+
+fn song_artist(lib: &crate::serve::library::Library, title: &str) -> Vec<String> {
+    lib.db().prepare("SELECT sa.artist_id FROM songs s JOIN song_artists sa ON sa.song_id = s.id WHERE s.title = ?1 ORDER BY sa.position").unwrap().query_map([title], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+}
+
+/// NAMES.25 (MATCH.4's track rule, T-DC3-17): artists are served by id, namesakes apart, spellings of one id together. (a) two
+/// served Salamandas, each with its own albums and songs; (b) the sampler's track by its own id, its twin C55's first; (c) "Up in
+/// Flames" under Caribou's id, no served row of the key "manitoba"; (d) a "Various Artists" album credited by its album-artist id;
+/// (e) "Glass Mirage" under the second Mirage by its Discogs credit, never by the name; the same served ids from a whole build and a
+/// restart's. DC1a changes ids, not names. Red first: every namesake served under its key's lowest id; (e) re-credited by the name.
+#[test]
+fn namesakes_are_served_apart() {
+    let f = Folders::new("names25");
+    let (salamanda, _, second_mirage, mirage) = namesakes(&f);
+    let lib = crate::serve::library::Library::open(None).unwrap();
+    crate::serve::library::testing::build_now(&lib, &f.cat);
+    let (albums, artists) = served(&lib);
+    let id = |a: &str| albums.get(a).unwrap_or_else(|| panic!("{a} served: {albums:?}")).0.clone();
+    let salamandas: Vec<&(String, String)> = artists.iter().filter(|(_, n)| n == "Salamanda").collect();
+    assert_eq!(salamandas.len(), 2, "(a) two served Salamandas: {artists:?}");
+    assert_eq!(id("Our Lair"), ids::artist(salamanda), "(a) the first by its own id");
+    assert_ne!(id("Allez"), id("Our Lair"), "(a) namesakes apart");
+    assert_eq!(song_artist(&lib, "Sphere"), [id("Allez")]);
+    assert_eq!(song_artist(&lib, "Seeds"), [id("Allez")], "(b) by its own id");
+    assert_eq!(song_artist(&lib, "Twin"), [ids::artist(salamanda)], "(b) no id: C55's first");
+    assert_eq!(id("Up in Flames"), id("Andorra"), "(c) one id spelled two ways");
+    assert_eq!(song_artist(&lib, "Skunks"), [id("Andorra")]);
+    assert!(!artists.iter().any(|(_, n)| n == "Manitoba"), "(c) no served row of the key manitoba: {artists:?}");
+    assert_eq!(id("Caribou Mix"), id("Andorra"), "(d) as the catalogue credits it");
+    assert_eq!(f.cat.record_artists(mirage).unwrap(), [second_mirage], "(e) the credit by id stays (T-COU-2)");
+    assert_eq!(id("Glass Mirage"), ids::artist(second_mirage), "(e) by its Discogs credit, never the name");
+    assert_eq!(albums["Allez"].1, "Salamanda", "DC1a changes ids, not names");
+    // A restart's build (a library made afresh) serves the same ids.
+    let again = crate::serve::library::Library::open(None).unwrap();
+    crate::serve::library::testing::build_now(&again, &f.cat);
+    assert_eq!(served(&again), (albums, artists), "every build path, one rule");
+    // A synced device learns of each record served under other ids, once (the change log's record kind, no reset): a build that
+    // serves Allez's artist anew owes Allez, though no catalogue row of its credit changed.
+    let allez_file = "Salamanda/Allez/01 Allez.flac";
+    let allez = f.record_of(MUSIC, allez_file).unwrap();
+    lib.db().execute("UPDATE album_artists SET artist_id = ?1 WHERE album_id = ?2", params![ids::artist(salamanda), ids::record(allez)]).unwrap();
+    f.cat.tag_for_tests(MUSIC, allez_file, &[("artist", "Salamanda"), ("albumartist", "Salamanda"), ("album", "Allez"), ("title", "Allez"), ("musicbrainz_artistid", SALAMANDA_2), ("musicbrainz_albumartistid", SALAMANDA_2), ("date", "2015")]);
+    f.cat.db().execute("DELETE FROM record_owed", []).unwrap();
+    crate::serve::library::testing::build_now(&lib, &f.cat);
+    let owed: Vec<i64> = f.cat.db().prepare("SELECT record FROM record_owed").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert!(owed.contains(&allez), "served under another id: owed ({owed:?})");
+}
+
+/// NAMES.11's first half: every served reader names an artist by its id, one name each; search finds each Salamanda by its own row.
+/// And NAMES.24's DC1a half: the served `albums.artist` is `credit_text` over the album's artists' served names. Red first: one
+/// served artist for both Salamandas; the album line the files' ALBUMARTIST text.
+#[test]
+fn every_served_reader_names_an_artist_by_its_id() {
+    let f = Folders::new("names11");
+    namesakes(&f);
+    f.add(MUSIC, &[
+        ("Kite Theory/Twin Rooms/01 One.flac", vec![("albumartists", "Kite Theory"), ("albumartists", "Glass Harbour"), ("albumartist", "Kite Theory; Glass Harbour"), ("artist", "Kite Theory"), ("album", "Twin Rooms"), ("title", "One")]),
+        ("Kite Theory/Three Rooms/01 Two.flac", vec![("albumartists", "Kite Theory"), ("albumartists", "Glass Harbour"), ("albumartists", "Low Tide Choir"), ("albumartist", "Kite Theory / Glass Harbour / Low Tide Choir"), ("artist", "Kite Theory"), ("album", "Three Rooms"), ("title", "Two")]),
+    ]);
+    f.pass();
+    let lib = crate::serve::library::Library::open(None).unwrap();
+    crate::serve::library::testing::build_now(&lib, &f.cat);
+    let (albums, artists) = served(&lib);
+    for (aid, name) in &artists {
+        assert_eq!(lib.artist_name(aid).unwrap().as_deref(), Some(name.as_str()), "one name by its id");
+    }
+    let db = lib.db();
+    let found: Vec<String> = db.prepare("SELECT a.id FROM artists_fts f JOIN artists a ON a.n = f.rowid WHERE artists_fts MATCH '\"salamanda\"' ORDER BY a.id").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(found.len(), 2, "search finds both, each by its own row");
+    drop(db);
+    assert_eq!(albums["Twin Rooms"].1, "Kite Theory & Glass Harbour", "NAMES.24: the one formatter");
+    assert_eq!(albums["Three Rooms"].1, "Kite Theory, Glass Harbour & Low Tide Choir");
+    assert_eq!(albums["Our Lair"].1, "Salamanda", "one artist: its name");
+}
+
+/// WM.14, a pin (green before WM's build, kept green by it): "Glass Rooms" `al-153`, had in MUSIC, its files naming release `R153`; a
+/// folder dropped into IN by hand (no item, no placement) whose ten files name `R153`, their titles and lengths agreeing, every ALBUM
+/// a site's stamp: one record, two copies (FA17), the IN copy its arrival, whatever its album tag.
+#[test]
+fn a_files_release_joins_a_had_record_whatever_its_album_tag() {
+    let f = Folders::new("wm14");
+    let release = "00000000-0000-4000-8000-000000000153";
+    let files = |dir: &str, album: &'static str| -> Vec<(String, Vec<(&'static str, String)>)> {
+        (1..=10).map(|n| (format!("{dir}/{n:02} Q{n}.flac"), vec![("album", album.to_string()), ("albumartist", "Glass Harbour".to_string()), ("title", format!("Q{n}")), ("tracknumber", n.to_string()), ("musicbrainz_albumid", release.to_string())])).collect()
+    };
+    let add = |folder: i64, list: &[(String, Vec<(&'static str, String)>)]| {
+        for (rel, tags) in list {
+            f.add(folder, &[(rel.as_str(), tags.iter().map(|(n, v)| (*n, v.as_str())).collect())]);
+        }
+        f.lengths(folder, &list.iter().zip(1..).map(|((rel, _), n)| (rel.as_str(), 170_000 + n * 8_000)).collect::<Vec<_>>());
+    };
+    let music = files("Glass Harbour/Glass Rooms", "Glass Rooms");
+    add(MUSIC, &music);
+    f.pass();
+    let r = f.record_of(MUSIC, &music[0].0).unwrap();
+    let dropped = files("Dropped/Glass Rooms", "www.flacsite.net");
+    add(1, &dropped);
+    f.pass();
+    assert!(dropped.iter().all(|(rel, _)| f.record_of(1, rel) == Some(r)), "one record, two copies");
+    assert_eq!(f.cat.record(r).unwrap().unwrap().title, "Glass Rooms");
 }

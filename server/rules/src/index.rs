@@ -1451,8 +1451,9 @@ impl Index {
         let (a, words) = (&self.packed.artists, &self.packed.words);
         let mut out = HashMap::new();
         for row in 0..a.id.len() {
+            // A name two artists share goes to the first (C55's, the lowest id), as the server's `crates::artist_ids` has it (NAMES.25).
             for name in std::iter::once(&a.name[row]).chain(a.spelled.of(row)) {
-                out.insert(words.word(*name).to_string(), artist_id(a.id[row]));
+                out.entry(words.word(*name).to_string()).or_insert_with(|| artist_id(a.id[row]));
             }
         }
         out
