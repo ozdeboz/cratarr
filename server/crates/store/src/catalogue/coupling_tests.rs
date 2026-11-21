@@ -255,6 +255,18 @@ fn a_placed_file_is_no_source_of_its_records_facts() {
     assert_eq!(labels_of(&f, r), ["Harbour Tapes"]);
     assert_eq!(releases_of(&f, r), [R1], "never the reissue's reference");
     assert_eq!(served_album(&f, r), ("Night Ferry".into(), Some(2014), Some(R1.into()), Some(GH1.into())));
+    // (c) Health's seek-table repair rewrites the placed file (Cratarr's own write, read again at once, its tags as they were): still
+    // as placed, still silent.
+    let path = f.roots[0].join(&rels[0]);
+    std::fs::write(&path, b"a repaired seek table, the same tags").unwrap();
+    f.cat.reread(std::slice::from_ref(&path)).unwrap();
+    // What the repaired file's read gives (these tests' files are no audio): its tags as they were, read.
+    f.cat.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE folder = ?1 AND rel = ?2", params![MUSIC, rels[0]]).unwrap();
+    f.cat.tag_for_tests(MUSIC, &rels[0], &REISSUE);
+    let told = f.cat.served_rows(MUSIC).unwrap().into_iter().find(|row| row.rel == rels[0]).unwrap().told;
+    assert_eq!(told, Some((1, 1)), "(c) Cratarr's own repair ends no placed file's silence");
+    f.pass();
+    assert_eq!((f.cat.record(r).unwrap().unwrap().title, labels_of(&f, r)), ("Night Ferry".to_string(), vec!["Harbour Tapes".to_string()]), "(c)");
 }
 
 /// COU.18 (T-COU-17): what is read and when. (a) N1 retagged keeping its size and time: nothing is read, it stays as placed, at its

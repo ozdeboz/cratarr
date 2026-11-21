@@ -1698,6 +1698,13 @@ impl Catalogue {
             let Some(before) = before else { continue };
             if (before.0 as u64, before.1) != after {
                 self.carry_over(folder, &rel, (before.0 as u64, before.1), after)?;
+                // COU.3 (c) (T-COU-17): Cratarr's own write (a Health repair) never ends a placed file's silence: as placed it was,
+                // as placed it stays, its new size and time noted; its tags as first read still decide (a changed tag speaks).
+                self.db().execute(
+                    "UPDATE placements SET size = ?3, mtime = ?4 WHERE folder = ?1 AND path = ?2 AND number IS NOT NULL
+                       AND (size IS NULL OR size = ?5) AND (mtime IS NULL OR mtime = ?6)",
+                    params![folder, rel, after.0 as i64, after.1, before.0, before.1],
+                )?;
             }
             todo.push((folder, rel));
         }
