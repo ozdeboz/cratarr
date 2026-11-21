@@ -9,7 +9,7 @@ import type { LinkView } from '../src/lib/generated/LinkView';
 import type { Section } from '../src/lib/generated/Section';
 import type { Version } from '../src/lib/generated/Version';
 
-const { deviceItems, headChips, PLACES, playRow, sectionsOf, stateLine, versionLines } = await import('../src/lib/sheet/record.ts');
+const { askAt, deviceItems, headChips, PLACES, playRow, sectionsOf, stateLine, versionLines } = await import('../src/lib/sheet/record.ts');
 const { when } = await import('../src/lib/settings/when.ts');
 type Entity = import('../src/lib/recordCache.ts').RecordEntity;
 
@@ -106,7 +106,7 @@ test('the Library section draws what is sent, in its groups, each entry naming i
     act('play', 'play'),
     act('move_to', 'library', { title: 'Move to MORE from MUSIC', group: 'library', fields: { from: 'MUSIC', to: 'MORE' } }),
     act('save_to', 'library', { title: 'Save to Your music from MUSIC', group: 'library' }),
-    act('delete_from', 'library', { title: 'Delete from MUSIC', group: 'remove', confirm: 'Delete from MUSIC?' }),
+    act('delete_from', 'library', { title: 'Delete from MUSIC', group: 'remove', confirm: ['Delete from MUSIC?'] }),
     act('play_from', 'library', { title: 'Play from IN', group: 'library' }),
     act('favourite', 'go', { title: 'Favourite', group: 'feel' }),
   ];
@@ -117,9 +117,25 @@ test('the Library section draws what is sent, in its groups, each entry naming i
   const library = parts[0].cards;
   assert.deepEqual(library.map((c) => c.group), ['library', 'remove'], "the groups' order");
   assert.deepEqual(library.flatMap((c) => c.items.map((i) => i.title)), ['Move to MORE from MUSIC', 'Save to Your music from MUSIC', 'Play from IN', 'Delete from MUSIC'], 'the titles as sent');
-  assert.equal(library[1].items[0].action?.confirm, 'Delete from MUSIC?', 'its confirm with it, asked first');
+  assert.deepEqual(library[1].items[0].action?.confirm, ['Delete from MUSIC?'], 'its confirm with it, asked first');
   assert.deepEqual(parts[1].cards.map((c) => [c.group, c.items.map((i) => i.name)]), [['go', ['view']], ['feel', ['favourite']], ['know', ['web_search']]], 'links beside actions, by group');
   assert.deepEqual(sectionsOf(entity({ sections: ['head', 'play'] })), [], 'an entry the server did not send is never drawn');
+});
+
+// RS25 (decision 0034, "Primary should get an extra step in the confirmation"): an action's yeses are the server's steps, asked in
+// order before anything is sent; a no at any step sends nothing. The page works out no step of its own.
+test('main library: two asks, then one send', () => {
+  const main = act('delete_from', 'library', { title: 'Delete from MUSIC', group: 'remove', confirm: ['Delete from MUSIC?', 'MUSIC is your main library. Delete it anyway?'] });
+  const other = act('delete_from', 'library', { title: 'Delete from IN', group: 'remove', confirm: ['Delete from IN?'] });
+  assert.deepEqual([askAt(main, 0), askAt(main, 1), askAt(main, 2)], ['Delete from MUSIC?', 'MUSIC is your main library. Delete it anyway?', null], 'two asks, then nothing left: sent');
+  assert.deepEqual([askAt(other, 0), askAt(other, 1)], ['Delete from IN?', null], 'one ask for a library that is not the main one');
+  assert.equal(askAt(act('play', 'play'), 0), null, 'no yes asked: sent at once');
+  const sheet = read('lib/sheet/Record.svelte');
+  // Each step's words are the server's; the action is sent only once no step is left, and Cancel at any step sends nothing.
+  assert.ok(sheet.includes('askAt(a, askStep)'), 'the ask shows the step it is at');
+  assert.match(sheet, /askAt\(a, askStep \+ 1\) \? askStep\+\+ : void runs\.once\(/, 'a further step asks again; the last one sends');
+  const script = sheet.slice(sheet.indexOf('<script'), sheet.indexOf('</script>'));
+  assert.ok(!/library_kind|\.kind === 'main'/.test(script), 'the page reads no library kind to decide a step');
 });
 
 test('View is the server\'s link alone: none on the record\'s own page', () => {
