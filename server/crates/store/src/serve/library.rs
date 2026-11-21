@@ -258,17 +258,14 @@ fn release_type_of(album: &Shape) -> (Option<String>, Option<&'static str>) {
 /// A record's secondary types where no hand set them (rule 8; the coordinator, 2026-11-21): a set, so a union with none ranked:
 /// MusicBrainz's and Discogs', in the order first heard, each once, and the rule's "compilation" for a Various Artists album last.
 /// Which source said each is the facts layer's (the entity's secondaries as `Said`s).
+/// The domain's one rule (`facts::secondaries`, VR49), which the record's view reads with the sources named: the same words, in the same
+/// order. `various`: the rule's compilation applies (rule 8 as SPLIT narrowed it, `facts::rule_secondaries`).
 fn secondaries_of(musicbrainz: Option<&Kept>, discogs: Option<&Kept>, various: bool) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for s in musicbrainz.into_iter().chain(discogs).flat_map(|k| k.1.iter()) {
-        if !out.contains(s) {
-            out.push(s.clone());
-        }
-    }
-    if various && !out.iter().any(|s| s == "compilation") {
-        out.push("compilation".into());
-    }
-    out
+    use cratarr_domain::facts::{Said, secondaries};
+    let said = |source: &str, k: Option<&Kept>| k.map(|k| Said { reference: None, source: source.to_string(), value: Some(k.1.clone()), guessed: false });
+    let heard: Vec<Said<Vec<String>>> = said("musicbrainz", musicbrainz).into_iter().chain(said("discogs", discogs)).collect();
+    let rule: Vec<String> = if various { vec!["compilation".to_string()] } else { Vec::new() };
+    secondaries(None, &heard, &rule).into_iter().map(|s| s.word).collect()
 }
 
 /// Another server's album typed by the owner's rule (0.13, the owner: a record's type is always known): its track
@@ -2400,7 +2397,13 @@ fn write_albums(
             duration_ms,
             longest_ms: songs.iter().filter_map(|s| s.row.duration_ms).max().unwrap_or(0),
             name: album_name,
-            various: first.album_artist.eq_ignore_ascii_case("Various Artists"),
+            // Rule 8 as SPLIT narrowed it (VR49 (b), (f); NAMES.20's rows 3 and 4): Various Artists over five or more track artists is
+            // a compilation; a split (one to four) is none.
+            various: !cratarr_domain::facts::rule_secondaries(
+                first.album_artist.eq_ignore_ascii_case("Various Artists"),
+                songs.iter().flat_map(|s| s.artists.iter().map(|a| ids::artist_key(a))).collect::<BTreeSet<String>>().len(),
+            )
+            .is_empty(),
             titles: &titles,
         }
         .whole(whole);
