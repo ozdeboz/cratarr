@@ -1238,6 +1238,16 @@ pub fn wake() {
     wake_starts();
 }
 
+/// The placings 0.17 still holds (SCENARIOS-WM WM.22's seeds, T-WM-9): each Placed item still listing its placing folder, as the
+/// catalogue knows that folder (its catalogue folder and its path there), with the record it was fetched for; read from
+/// `soulseek.json` before DC2 moves it onto rows. Never one invented: an item with no folder, or one the catalogue does not hold, is
+/// none. Blocking.
+pub fn placed_seeds(data_dir: &Path, cat: &crate::catalogue::Catalogue) -> Vec<(i64, String, i64)> {
+    // RED STUB: the base's, none read (`main` passed none).
+    let _ = (data_dir, cat);
+    Vec::new()
+}
+
 /// Whether Soulseek fetches here: slskd set up and switched on (Settings › Server), as single-track intake's.
 pub async fn connected() -> bool {
     super::track_fetch::slskd_ready().await.is_ok()
@@ -5368,6 +5378,52 @@ pub mod tests {
         assert_eq!(kept_now.tracks, list);
         assert!(door.asked().is_empty(), "nothing asked of Bandcamp: {:?}", door.asked());
         assert!(door.violations().is_empty(), "{:?}", door.violations());
+    }
+
+    /// WM.22's seeds (T-WM-9): Soulseek's items still Placed, listing their placing folder, go to the step as placements, with the
+    /// record each was fetched for; one fetching, one placed with no folder, and one whose folder no library holds give none; the
+    /// step seeds exactly those. Never a placement invented where 0.17 holds no evidence of one. Red first: `main` passed none.
+    #[test]
+    fn soulseeks_placed_items_seed_the_018_step() {
+        let d = std::env::temp_dir().join(format!("cratarr-wm22-seeds-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let (data, inc) = (d.join("data"), d.join("incoming"));
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(inc.join("Glass Harbour").join("Tide Tables (2012)")).unwrap();
+        let cat = crate::catalogue::Catalogue::open(None, vec![inc.clone()]).unwrap();
+        let record = cat.record_for_tests("Tide Tables", 0);
+        let item = |id: &str, state: &str, placed: Option<std::path::PathBuf>| {
+            serde_json::json!({ "id": id, "record": { "record": record, "artist": "Glass Harbour", "album": "Tide Tables", "year": 2012, "request": 7 },
+                "state": state, "tracks": [], "folders": [], "failed": [], "misses": 0, "due": 0, "percent": 0.0, "set_aside": [], "placed": placed })
+        };
+        let queue = serde_json::json!({ "next": 4, "items": [
+            item("ss-1", "placed", Some(inc.join("Glass Harbour").join("Tide Tables (2012)"))),
+            item("ss-2", "fetching", None),
+            item("ss-3", "placed", None),
+            item("ss-4", "placed", Some(d.join("elsewhere").join("Tide Tables"))),
+        ] });
+        std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&queue).unwrap()).unwrap();
+        let seeds = placed_seeds(&data, &cat);
+        assert_eq!(seeds, [(0, "Glass Harbour/Tide Tables (2012)".to_string(), record)], "the placed item with its folder, alone");
+        let (report, _) = cat.step_018_wm(&seeds, &|| Ok(())).unwrap().expect("the step's part ran");
+        let counts = serde_json::to_value(&report.counts).unwrap();
+        assert_eq!(counts["placements seeded from placed items"], 1, "{counts}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// WM.25's Soulseek half (T-WM-7): a folder's file names are read by the one reader (`hygiene::file_titles`), so a name whose
+    /// title is a site's stamp after its own ("T4 - www.electronicfresh.com.mp3") pairs with its track "T4" by its cleaned name and
+    /// its length; and no reader of a name of Soulseek's own is left. Never two functions reading a file's name. Red first: Soulseek's
+    /// `titles_of` read "T4 - www.electronicfresh.com" and "www.electronicfresh.com", never "T4".
+    #[test]
+    fn soulseek_reads_a_files_name_through_the_one_reader() {
+        let tracks = vec![track(1, "Lamplight", 200), track(2, "T4", 180)];
+        let folder = answer("peer-a", true, vec![file(r"x\Kite Theory\Lamplight\01 Lamplight.mp3", 200), file(r"x\Kite Theory\Lamplight\T4 - www.electronicfresh.com.mp3", 180)]);
+        let found = folders_of(&[folder], &tracks, &[]);
+        assert_eq!(found.len(), 1, "the folder pairs whole by its cleaned names: {found:?}");
+        let code = include_str!("soulseek.rs").split("#[cfg(test)]").next().unwrap().to_string();
+        assert!(!code.contains(&["fn ", "titles_of"].concat()), "no reader of a name of Soulseek's own");
+        assert!(code.contains("hygiene::file_titles"), "the one reader");
     }
 
     /// LK.B4 (row 33): the Soulseek page starts nothing; the round is the server's. (a) The list read twice begins nothing: no round,

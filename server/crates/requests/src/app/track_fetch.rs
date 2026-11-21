@@ -1138,8 +1138,9 @@ struct Added {
     track: Option<i64>,
 }
 
-fn undo_file(id: &str) -> Result<PathBuf> {
-    let data = served()?.data_dir.clone().context("Cratarr's data folder is needed")?;
+/// Where a placed track's Undo is kept, in the server `s`'s data folder.
+fn undo_file_in(s: &crate::serve::Serve, id: &str) -> Result<PathBuf> {
+    let data = s.data_dir.clone().context("Cratarr's data folder is needed")?;
     Ok(Path::new(&data).join("track-fetch-undo").join(format!("{id}.json")))
 }
 
@@ -1205,7 +1206,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let copy = s.library.row_copy(&wanted.album)?.context("No such album in Cratarr's own library")?;
     let (folder, dir) = (copy.folder, copy.dir);
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
-    let (tracks, ..) = super::renumber_base::tracks_of(&wanted.album)?;
+    let (tracks, ..) = super::renumber_base::tracks_of_in(s, &wanted.album)?;
     let t = &wanted.track;
     let replaced = wanted.replace.as_ref().map(|id| tracks.iter().find(|x| &x.id == id).context("The track to replace is gone")).transpose()?;
     // The neighbour: the closest track on its disc, else any other.
@@ -1245,7 +1246,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         tracing::warn!("track fetch: {} not handed its track: {e:#}", dest.display());
     }
     let undo = Added { root: root.clone(), added: rel_of(&root, &dest)?, trashed, track: handed };
-    let file = undo_file(&id)?;
+    let file = undo_file_in(s, &id)?;
     std::fs::create_dir_all(file.parent().context("no folder")?)?;
     std::fs::write(&file, serde_json::to_vec(&undo)?)?;
     let mut changed = vec![dest.clone()];
@@ -1423,6 +1424,44 @@ mod tests {
         let a = Added { root: root.clone(), added: added.into(), trashed: Some(format!("100/{old}")), track: None };
         std::fs::write(&undo, serde_json::to_vec(&a).unwrap()).unwrap();
         (root, undo)
+    }
+
+    /// WM.23's placing half (COU.18 (d), T-COU-17; C-WM-7): a fetched track is placed untouched, its bytes the staged file's
+    /// (sha256 before and after), beside its neighbours under their naming, through a hidden name; the placement (its record, the
+    /// track's place on the list) said to the catalogue before it appears; no cover written in or beside. Never a tag cleared, copied
+    /// or set; never a file but the track written. Red first: the track was retagged from a neighbour and the cover put inside.
+    #[tokio::test]
+    async fn a_fetched_track_is_placed_untouched() {
+        use sha2::Digest;
+        let d = std::env::temp_dir().join(format!("cratarr-wm23-place-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let (music, data) = (d.join("music"), d.join("data"));
+        std::fs::create_dir_all(&data).unwrap();
+        let cat = std::sync::Arc::new(crate::catalogue::Catalogue::open(None, vec![music.clone()]).unwrap());
+        let serve = crate::serve::Serve::open(Some(&data), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.library.set_kinds(vec![(0, crate::serve::copies::Kind::Main)]);
+        serve.attach_catalogue(cat.clone());
+        crate::serve::testing::add(&cat, &music, 0, &[("Glass Harbour/Deep Water/01 Breakwater.flac", "Breakwater"), ("Glass Harbour/Deep Water/02 Sea Wall.flac", "Sea Wall"), ("Glass Harbour/Deep Water/04 Undertow.flac", "Undertow")]);
+        serve.refresh().unwrap();
+        let album = serve.library.album_in(0, "Glass Harbour/Deep Water").unwrap().expect("built");
+        let record = crate::serve::ids::record_number(&album).unwrap();
+        let staged = d.join("a1b2c3.mp3");
+        std::fs::write(&staged, b"the staged bytes, tags and all").unwrap();
+        let before = sha2::Sha256::digest(std::fs::read(&staged).unwrap());
+        let track = ReleaseTrack { disc: 1, position: 3, title: "Night Pier".into(), artist: "Glass Harbour".into(), length_ms: Some(200_000), recording: "rec-3".into(), have: None, track_id: "t-3".into(), artist_id: None, path: None };
+        let wanted = Wanted { album: album.clone(), track, replace: None };
+        let (dest, _undo) = place_track(&serve, &wanted, &staged).expect("placed");
+        assert_eq!(dest, music.join("Glass Harbour/Deep Water/03 Night Pier.mp3"), "named as its neighbours are");
+        assert_eq!(sha2::Sha256::digest(std::fs::read(&dest).unwrap()), before, "its bytes the staged file's: no tag written, no cover inside");
+        let mut names: Vec<String> = std::fs::read_dir(music.join("Glass Harbour/Deep Water")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["01 Breakwater.flac", "02 Sea Wall.flac", "03 Night Pier.mp3", "04 Undertow.flac"], "nothing written beside it, no hidden name left");
+        let placed: Option<(i64, u32, u32)> = cat
+            .db_for_tests()
+            .query_row("SELECT record, disc, number FROM placements WHERE folder = 0 AND path = ?1", ["Glass Harbour/Deep Water/03 Night Pier.mp3"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok();
+        assert_eq!(placed, Some((record, 1, 3)), "said to the catalogue as placed, at its place");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     fn album(tag: &str) -> PathBuf {

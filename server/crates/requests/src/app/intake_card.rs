@@ -636,6 +636,21 @@ mod tests {
         assert_eq!(format_of(&[f("FLAC", Some(16), Some(44_100), None), f("MP3", None, None, Some(320))]), "FLAC 16/44.1 · MP3 320");
     }
 
+    /// C-WM-6 (T-WM-2): the arrival's file checks read the facts' cleaned values (`hygiene`), never the raw tags: an album name
+    /// with a site's stamp beside it is the same album as without, and a stamp alone is no album name. Red first: the raw values,
+    /// two album names.
+    #[test]
+    fn the_file_checks_read_the_cleaned_values() {
+        let t = |path: &str| Track { id: "s".into(), path: path.into(), place: (0, path.into()), file: "f".into(), title: "t".into(), ms: 0, disc: None, no: None };
+        let tags = |album: &str, artist: &str| crate::catalogue::tags::FileTags {
+            items: vec![("ALBUM".into(), Some("album"), album.into()), ("ALBUMARTIST".into(), Some("albumartist"), artist.into())],
+            ..Default::default()
+        };
+        let files = [t("/in/Mumia - Answered/1.mp3"), t("/in/Mumia - Answered/2.mp3"), t("/in/Mumia - Answered/3.mp3")];
+        let c = file_checks(&files, &[tags("Answered", "Mumia"), tags("Answered [www.electronicfresh.com]", "Mumia"), tags("Answered", "www.electronicfresh.com")]);
+        assert_eq!(c.iter().map(|c| (c.key, c.state)).collect::<Vec<_>>(), [("one_record", "green"), ("folder_name", "green")], "{c:?}");
+    }
+
     #[test]
     fn the_folder_and_the_tags_say_one_record() {
         let t = |path: &str| Track { id: "s".into(), path: path.into(), place: (0, path.into()), file: "f".into(), title: "t".into(), ms: 0, disc: None, no: None };
