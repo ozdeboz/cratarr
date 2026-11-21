@@ -1242,7 +1242,7 @@ const IDENTIFYING: [(&str, &str); 5] = [("musicbrainz", "release-group"), ("musi
 pub(super) type FoldedNames = Option<std::collections::HashMap<(String, String), Vec<i64>>>;
 
 /// Ids as a query holds them: numbers alone, so the text is safe.
-fn id_list(ids: &[i64]) -> String {
+pub(super) fn id_list(ids: &[i64]) -> String {
     ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
 }
 
@@ -1279,6 +1279,57 @@ fn refs_of(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap
         if let Some(id) = ids::record_number(&subject) {
             out.entry(id).or_default().push((source, kind, value));
         }
+    }
+    Ok(out)
+}
+
+/// `Catalogue::requested` on the caller's connection.
+pub(super) fn requested_in(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap<i64, Requested>> {
+    let mut ends: Vec<(i64, i64)> = Vec::new();
+    for &id in records {
+        if let Some(end) = merged_end(db, id)? {
+            ends.push((id, end));
+        }
+    }
+    let wanted: Vec<i64> = ends.iter().map(|(_, end)| *end).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let mut names = None;
+    let mut by_id: std::collections::HashMap<i64, Requested> = read_records_in(db, &wanted, &mut names)?.into_iter().map(|q| (q.row.id, q)).collect();
+    // What each holder holds of it (W4): partly, in Incoming alone, or whole in a library.
+    for q in by_id.values_mut() {
+        if let Some(holder) = q.holder {
+            (q.copies, q.present, q.list) = holding_in(db, q.row.id, holder)?;
+        }
+    }
+    Ok(ends.into_iter().filter_map(|(id, end)| Some((id, by_id.get(&end)?.clone()))).collect())
+}
+
+/// `Catalogue::went_of` on the caller's connection: the holding's copies read their `went` by it too (`holding::copies_in`).
+pub(super) fn went_in(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Went>>> {
+    let mut out: std::collections::HashMap<i64, Vec<Went>> = std::collections::HashMap::new();
+    if records.is_empty() {
+        return Ok(out);
+    }
+    let ids = id_list(records);
+    let mut st = db.prepare(&format!("SELECT t.record, f.folder, f.came, f.gone_at, f.trashed FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IN ({ids})"))?;
+    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<String>>(4)?)))? {
+        let (record, folder, came, gone, token) = row?;
+        // A trash token begins with its time (`trash::token`).
+        let trashed = token.map(|t| t.split('/').next().and_then(|t| t.parse().ok()).unwrap_or(0));
+        out.entry(record).or_default().push(Went { folder, came, gone, trashed });
+    }
+    let mut st = db.prepare(&format!(
+        "SELECT record, was_folder, COALESCE(was_gone, retired_at) FROM tracks WHERE record IN ({ids}) AND retired_at IS NOT NULL AND was_folder IS NOT NULL"
+    ))?;
+    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
+        let (record, folder, at) = row?;
+        out.entry(record).or_default().push(Went { folder, came: None, gone: Some(at), trashed: None });
+    }
+    let mut st = db.prepare(&format!(
+        "SELECT r.id, j.value, r.was_gone FROM records r, json_each(r.was_folders) j WHERE r.id IN ({ids}) AND r.retired_at IS NOT NULL AND r.was_gone IS NOT NULL"
+    ))?;
+    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
+        let (record, folder, at) = row?;
+        out.entry(record).or_default().push(Went { folder, came: None, gone: Some(at), trashed: None });
     }
     Ok(out)
 }
@@ -1908,27 +1959,9 @@ impl Catalogue {
     /// rows and references in one query each, holders by the had rule in a few). By the id asked; one not known is left out.
     /// Blocking.
     pub fn requested(&self, records: &[i64]) -> Result<std::collections::HashMap<i64, Requested>> {
-        let read = |db: &Connection| -> Result<std::collections::HashMap<i64, Requested>> {
-            let mut ends: Vec<(i64, i64)> = Vec::new();
-            for &id in records {
-                if let Some(end) = merged_end(db, id)? {
-                    ends.push((id, end));
-                }
-            }
-            let wanted: Vec<i64> = ends.iter().map(|(_, end)| *end).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-            let mut names = None;
-            let mut by_id: std::collections::HashMap<i64, Requested> = read_records_in(db, &wanted, &mut names)?.into_iter().map(|q| (q.row.id, q)).collect();
-            // What each holder holds of it (W4): partly, in Incoming alone, or whole in a library.
-            for q in by_id.values_mut() {
-                if let Some(holder) = q.holder {
-                    (q.copies, q.present, q.list) = holding_in(db, q.row.id, holder)?;
-                }
-            }
-            Ok(ends.into_iter().filter_map(|(id, end)| Some((id, by_id.get(&end)?.clone()))).collect())
-        };
         match self.reader() {
-            Some(c) => read(&c),
-            None => read(&self.db()),
+            Some(c) => requested_in(&c, records),
+            None => requested_in(&self.db(), records),
         }
     }
 
@@ -2447,38 +2480,9 @@ impl Catalogue {
     /// another record's), each folder they lay in, gone then (RF4: `records.was_folders`, `was_gone`). By record; a record with none
     /// of these is not in the answer. On a reader. Blocking.
     pub fn went_of(&self, records: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Went>>> {
-        let read = |db: &Connection| -> Result<std::collections::HashMap<i64, Vec<Went>>> {
-            let mut out: std::collections::HashMap<i64, Vec<Went>> = std::collections::HashMap::new();
-            if records.is_empty() {
-                return Ok(out);
-            }
-            let ids = id_list(records);
-            let mut st = db.prepare(&format!("SELECT t.record, f.folder, f.came, f.gone_at, f.trashed FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IN ({ids})"))?;
-            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<String>>(4)?)))? {
-                let (record, folder, came, gone, token) = row?;
-                // A trash token begins with its time (`trash::token`).
-                let trashed = token.map(|t| t.split('/').next().and_then(|t| t.parse().ok()).unwrap_or(0));
-                out.entry(record).or_default().push(Went { folder, came, gone, trashed });
-            }
-            let mut st = db.prepare(&format!(
-                "SELECT record, was_folder, COALESCE(was_gone, retired_at) FROM tracks WHERE record IN ({ids}) AND retired_at IS NOT NULL AND was_folder IS NOT NULL"
-            ))?;
-            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
-                let (record, folder, at) = row?;
-                out.entry(record).or_default().push(Went { folder, came: None, gone: Some(at), trashed: None });
-            }
-            let mut st = db.prepare(&format!(
-                "SELECT r.id, j.value, r.was_gone FROM records r, json_each(r.was_folders) j WHERE r.id IN ({ids}) AND r.retired_at IS NOT NULL AND r.was_gone IS NOT NULL"
-            ))?;
-            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
-                let (record, folder, at) = row?;
-                out.entry(record).or_default().push(Went { folder, came: None, gone: Some(at), trashed: None });
-            }
-            Ok(out)
-        };
         match self.reader() {
-            Some(c) => read(&c),
-            None => read(&self.db()),
+            Some(c) => went_in(&c, records),
+            None => went_in(&self.db(), records),
         }
     }
 
@@ -2570,6 +2574,14 @@ impl Catalogue {
             db.execute("INSERT INTO tracks (born, record, disc, number) VALUES (1, ?1, 1, ?2)", params![record, n]).unwrap();
         }
         record
+    }
+
+    /// Tests elsewhere: a track of `record` at place `number` on disc 1, its id.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn track_for_tests(&self, record: i64, number: u32) -> i64 {
+        let db = self.db();
+        db.execute("INSERT INTO tracks (born, record, disc, number) VALUES (1, ?1, 1, ?2)", params![record, number]).unwrap();
+        db.last_insert_rowid()
     }
 
     /// A subject's references of `source` found by guessing, confirmed once (0.14's "That's it"): they stay guesses, said to

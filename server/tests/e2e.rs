@@ -3848,6 +3848,42 @@ async fn a_requests_story_is_its_askers_and_the_administrators_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// CN2 (SB8): Want follows "Request albums". Carol, without it, posts a Want anyway: refused 403 in the table's words, and no request
+/// row is made; alice's goes ahead. Never a 409 for a right. Red first: refused 409 (`Refused`), the words alone.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_want_without_request_albums_is_refused_403_end_to_end() {
+    use reqwest::Method;
+    let root = temp("want-403");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("alice", false), ("carol", false)] {
+        s.ok(Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    s.ok(Method::PUT, "/api/users/carol/permissions", json!({ "offline": false, "playlists": true, "share": true, "links": false, "request": false, "manage_requests": false })).await;
+    let (alice, carol) = (s.sign_in("alice", "alice pw").await, s.sign_in("carol", "carol pw").await);
+    let (status, answer) = carol.send(Method::POST, "/api/requests/want", json!({ "artist": "Kite Theory", "album": "Answered" })).await;
+    assert_eq!(status, 403, "a right is a 403, never a 409: {answer}");
+    assert_eq!(answer["error"].as_str(), Some("Requesting albums is not on for this account"), "{answer}");
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let rows = |db: &rusqlite::Connection| -> i64 { db.query_row("SELECT count(*) FROM request", [], |r| r.get(0)).unwrap() };
+    assert_eq!(rows(&db), 0, "no request row made");
+    let asked = alice.ok(Method::POST, "/api/requests/want", json!({ "artist": "Kite Theory", "album": "Answered" })).await;
+    assert!(asked["request"]["id"].as_i64().is_some(), "alice's goes ahead: {asked}");
+    assert_eq!(rows(&db), 1);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// RQ01.2: only administrators act on a story. Alice's request A has an item of its record on Soulseek's list, Found with peer-a's
 /// and peer-b's folders, written into `soulseek.json` before the start (slskd unset, as on staging: nothing moves). Her tick, her
 /// Search now and her read of the whole list are refused (403), the list as it was; root's tick of peer-b's folder approves it, and

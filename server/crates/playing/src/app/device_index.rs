@@ -105,7 +105,11 @@ pub fn build(serve: &Serve, facts: &[Facts], libraries: &[index::Library], rev: 
         to.artist(&Artist { id: a.id, name: a.name, sort: a.sort, spelled });
     }
     listed.records.sort_unstable_by_key(|r| r.id);
+    // HD12 (H5): a record's whole is the holding's, `holding()` over the one reader's copies, so the device's "whole" is the
+    // server's: where it is partly there, the shortest list kept; else none.
+    let wholes = whole_tracks(serve, &listed.records.iter().map(|r| r.id).collect::<Vec<_>>())?;
     for r in &mut listed.records {
+        r.whole_tracks = wholes.get(&r.id).copied();
         r.copies.retain(|c| seen.contains(&c.library));
         to.record(r);
     }
@@ -119,6 +123,27 @@ pub fn build(serve: &Serve, facts: &[Facts], libraries: &[index::Library], rev: 
         }
     }
     to.build(rev).map_err(refused)
+}
+
+/// The shortest list kept of each of these records that is partly there (HD12), by the holding (`holding()`, rules) over the copies
+/// the one reader gives (`Catalogue::copies_of`), every library counted: what the index's `whole_tracks` carries. The holding
+/// reads no fetcher and no owner here: whether a record is partly there is no account's. Blocking.
+fn whole_tracks(serve: &Serve, records: &[i64]) -> Result<HashMap<i64, u32>> {
+    use cratarr_rules::holding::{Fetcher, Holding, Library, On, holding};
+    let kinds = serve.library.kinds();
+    let library = |folder: i64| match crate::serve::library::kind_in(&kinds, folder).0 {
+        crate::settings::LibraryKind::Main => Library::Main,
+        crate::settings::LibraryKind::Incoming => Library::Incoming { fetcher: Fetcher::Lidarr, uploader: None },
+        crate::settings::LibraryKind::Own => Library::Own(String::new()),
+    };
+    let held = serve.catalogue().copies_of(records, &library)?;
+    Ok(held
+        .into_iter()
+        .filter_map(|(record, c)| match holding(&c.copies, c.shortest, "", &On::all()) {
+            Holding::Partly { of, .. } => Some((record, u32::from(of))),
+            _ => None,
+        })
+        .collect())
 }
 
 pub use crate::serve::device_index_settled::Settled;
@@ -704,6 +729,32 @@ pub(super) mod tests {
         in_step(&s, &mut device);
         let row = device.track(track).unwrap();
         assert_eq!((device.record(record).unwrap().copies.len(), row.facts.folders.as_slice(), row.facts.lines.len()), (1, &[0][..], 0));
+    }
+
+    /// HD12 (kind 6, H5): the index is built from `holding()`: Night Ferry's copy of 7 against its shortest list of 10 carries
+    /// `whole_tracks` 10, as the holding says Partly { 7, 10 }; Signal, whole, carries none. Red first: `whole_tracks` came from the
+    /// found-missing reading alone (`album_complete`), none here. Its kind as `resolve()` gives it is VR01's (DC1a).
+    #[test]
+    fn the_index_is_built_from_holding_and_resolve() {
+        let s = served("hd12", &[CopyKind::Main]);
+        let titles: Vec<String> = (1..=10).map(|n| format!("Night Ferry {n}")).collect();
+        let seven: Vec<&str> = titles[..7].iter().map(String::as_str).collect();
+        with_album(&s, 0, "Glass Harbour/Night Ferry", "Night Ferry", "Glass Harbour", &seven);
+        with_album(&s, 0, "Glass Harbour/Signal", "Signal", "Glass Harbour", &["Pier", "Landing"]);
+        s.built();
+        let id = |title: &str| s.index().rows().records.iter().find(|r| r.title == title).map(|r| r.id).expect(title);
+        let (night_ferry, signal) = (id("Night Ferry"), id("Signal"));
+        let list = |names: &[&str]| -> Vec<crate::catalogue::identity::RefTrack> {
+            names.iter().enumerate().map(|(n, t)| crate::catalogue::identity::RefTrack { disc: 1, position: n as u32 + 1, title: t.to_string(), length_ms: None, recording: None }).collect()
+        };
+        let ten: Vec<&str> = titles.iter().map(String::as_str).collect();
+        s.cat.set_reference_tracks(night_ferry, "musicbrainz", &list(&ten)).unwrap();
+        s.cat.set_reference_tracks(signal, "musicbrainz", &list(&["Pier", "Landing"])).unwrap();
+        let rows = s.index().rows();
+        let row = |id: i64| rows.records.iter().find(|r| r.id == id).unwrap().clone();
+        let (nf, sg) = (row(night_ferry), row(signal));
+        assert_eq!((nf.whole_tracks, nf.copies.iter().map(|c| c.tracks).collect::<Vec<_>>()), (Some(10), vec![7]), "its copy 7, whole at 10");
+        assert_eq!(sg.whole_tracks, None, "whole: none to make up");
     }
 
     /// What the library's build makes of what is no file: a year set by hand, a type, a whole release's count. Nothing is written

@@ -91,16 +91,8 @@ pub struct Track {
     pub track: Option<u32>,
 }
 
-/// A title as compared: loose, its "(Remastered)" or "- Live" left off too.
-fn titled(t: &str) -> [String; 2] {
-    let base = t.split(" (").next().unwrap_or(t).split(" [").next().unwrap_or(t).split(" - ").next().unwrap_or(t);
-    [super::import::loose(t), super::import::loose(base)]
-}
-
-pub fn same_title(a: &str, b: &str) -> bool {
-    let (x, y) = (titled(a), titled(b));
-    !x[0].is_empty() && (x[0] == y[0] || (!x[1].is_empty() && x[1] == y[1]))
-}
+/// Titles compared as Renumber compares them: the domain's, the one title rule's base (PAIR01, C4).
+pub use cratarr_domain::identity::same_title;
 
 /// A record's tracks to read: one file a track, the one that plays. What writes goes by `files_in`.
 pub fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {

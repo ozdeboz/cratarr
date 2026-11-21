@@ -127,6 +127,8 @@ pub struct Serve {
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
+    /// Records a view shows, moved into the change log (`subscribe_records`, LV3).
+    records: tokio::sync::broadcast::Sender<Arc<RecordsChanged>>,
     /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
     device: std::sync::Mutex<device_index_settled::Settled>,
     /// Who asked for what, as last read (`app::requests::requesters`, R30).
@@ -136,6 +138,27 @@ pub struct Serve {
     /// What keeps a record not had, as the app knows it, once the app is made (`set_protected`).
     protected: std::sync::OnceLock<Arc<dyn protected::Protected>>,
 }
+
+/// Records a view shows changed (LV3), as the change log has them now: the rev they were logged at, and each record's id with what
+/// it is now (`changed`, `merged` with the record it went `into`, or `forgotten`). The live channel tells every page (app/events.rs
+/// `changed`); what one account alone sees is no record row (its hearts are its favourites').
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RecordsChanged {
+    pub rev: i64,
+    pub ids: Vec<RecordChanged>,
+}
+
+/// One record in `RecordsChanged`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RecordChanged {
+    pub id: String,
+    pub op: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub into: Option<String>,
+}
+
+/// The most owed records moved at once: a burst goes in several, each its own rev (LV12).
+const OWED_AT_ONCE: usize = 5_000;
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
 /// (app/events.rs `cover`), which ask for its cover again by the new stamp.
@@ -208,6 +231,7 @@ impl Serve {
             play_on: Default::default(),
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
+            records: tokio::sync::broadcast::channel(16).0,
             device: Default::default(),
             requesters: Default::default(),
             facts_from: Default::default(),
@@ -462,8 +486,61 @@ impl Serve {
     }
 
     /// Builds the library again when the catalogue's files changed; after a rebuilt catalogue, user data follows its
-    /// songs to their new ids. Blocking.
+    /// songs to their new ids. Then what the catalogue owes the change log is moved into it, now that the library the views read
+    /// has it (LV11): at a start, what a crash left owed too (LV10). Blocking.
     pub fn refresh(&self) -> Result<bool> {
+        let built = self.check()?;
+        self.records_logged();
+        Ok(built)
+    }
+
+    /// Records a view shows that changed, moved from what the catalogue owes into the change log and told (`subscribe_records`).
+    /// A failure is logged; what is owed stays owed for the next check. Blocking.
+    fn records_logged(&self) {
+        use crate::catalogue::record_log::Now;
+        use crate::userdata::offline::Op;
+        loop {
+            let owed = match self.catalogue().owed_records(OWED_AT_ONCE) {
+                Ok(owed) if !owed.is_empty() => owed,
+                Ok(_) => return,
+                Err(e) => {
+                    tracing::warn!(target: "library", reason = %format!("{e:#}"), "the records' changes were not read for the change log");
+                    return;
+                }
+            };
+            let ids: Vec<RecordChanged> = owed
+                .iter()
+                .map(|o| match o.now {
+                    Now::Changed => RecordChanged { id: ids::record(o.record), op: "changed", into: None },
+                    Now::Merged { into } => RecordChanged { id: ids::record(o.record), op: "merged", into: Some(ids::record(into)) },
+                    Now::Forgotten => RecordChanged { id: ids::record(o.record), op: "forgotten", into: None },
+                })
+                .collect();
+            let rows: Vec<(String, Op, Option<String>)> =
+                ids.iter().map(|c| (c.id.clone(), if c.op == "changed" { Op::Changed } else { Op::Deleted }, c.into.clone())).collect();
+            let logged = self.userdata.log_records(&rows).and_then(|rev| self.catalogue().owed_moved(&owed).map(|()| rev));
+            match logged {
+                Ok(rev) => {
+                    let _ = self.records.send(Arc::new(RecordsChanged { rev, ids }));
+                }
+                Err(e) => {
+                    tracing::warn!(target: "library", reason = %format!("{e:#}"), "the records' changes were not logged: owed for the next check");
+                    return;
+                }
+            }
+            if owed.len() < OWED_AT_ONCE {
+                return;
+            }
+        }
+    }
+
+    /// Every record a view shows that changes from now on, as the change log has it (LV3).
+    pub fn subscribe_records(&self) -> tokio::sync::broadcast::Receiver<Arc<RecordsChanged>> {
+        self.records.subscribe()
+    }
+
+    /// `refresh`'s check and build. Blocking.
+    fn check(&self) -> Result<bool> {
         // The libraries as they are now, with each folder's tag rules (OQ-GEN-22): `main` set them before the first build, a
         // change in Settings arrives here.
         if let Some(incoming) = self.incoming() {
@@ -1156,6 +1233,32 @@ mod tests {
     use super::testing::*;
     use crate::serve::copies::Kind;
     use crate::userdata::{Heard, Kind as Item};
+
+    /// LV11 (kind 4): a change is logged once the store the view reads has it: the catalogue commits, and the record's row moves into
+    /// the change log after the check that builds the library, then the pages are told (LV3). Never told before the library has
+    /// it. Red first: no record kind (a build tells nothing of a record).
+    #[test]
+    fn a_change_is_told_once_its_store_has_it() {
+        use crate::userdata::offline::{ChangeKind, Since};
+        let (roots, cat, serve) = on_two_folders("lv11");
+        let mut told = serve.subscribe_records();
+        let logged = |s: &Serve| match s.userdata.changes_since(Some(0), "me", "", &[ChangeKind::Record], 1_000).unwrap() {
+            Since::Changes { changes, .. } => changes.into_iter().map(|c| c.item).collect::<Vec<_>>(),
+            Since::Reset { .. } => panic!("a reset"),
+        };
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One")]);
+        assert!(logged(&serve).is_empty(), "the catalogue has it, the library not yet: nothing logged");
+        assert!(told.try_recv().is_err(), "nothing told");
+        serve.refresh().unwrap();
+        let record = ids::record(record_in(&serve, 0, "A"));
+        assert!(logged(&serve).contains(&record), "logged once built: {:?}", logged(&serve));
+        let c = told.try_recv().expect("told");
+        assert!(c.ids.iter().any(|i| i.id == record && i.op == "changed"), "{c:?}");
+        // Nothing more owed: the next check logs nothing again.
+        serve.refresh().unwrap();
+        assert!(told.try_recv().is_err());
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
 
     /// N1: `identify` hands a new file an id retired before there were records, plays and all, and the take then takes it. The
     /// plays go to the record's track at the same build, and nothing is left to follow.

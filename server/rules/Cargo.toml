@@ -34,6 +34,9 @@ device = ["dep:serde_json"]
 made-up = []
 
 [dependencies]
+# A record's tracklist paired one for one with a copy's files (PAIR01, `assign`): the assignment solver, integer costs and
+# rectangles, MIT or Apache-2.0 (DOMAIN-CORE B.3). Pure, so it builds for wasm32-unknown-unknown and rules-ffi alike.
+pathfinding = "=4.16.0"
 # A quick hash for what a crate looks up by the tens of thousands, a file's line above all: the standard one guards against keys an
 # attacker chose, and these are the library's own (rustc's own FxHash, no_std, wasm32 alike).
 rustc-hash = "2"

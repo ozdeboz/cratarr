@@ -1,0 +1,445 @@
+[
+  {
+    "about": "HD1 (a) MUSIC 10",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "had"
+  },
+  {
+    "about": "HD1 (b) OWN-A 10, her own music",
+    "copies": [
+      {
+        "folder": 2,
+        "library": {
+          "own": "alice"
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "had"
+  },
+  {
+    "about": "HD1 (c) IN 10",
+    "copies": [
+      {
+        "folder": 1,
+        "library": {
+          "incoming": {
+            "fetcher": "lidarr",
+            "uploader": null
+          }
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "arrived"
+  },
+  {
+    "about": "HD1 (d) OWN-B 10, someone else's own music",
+    "copies": [
+      {
+        "folder": 3,
+        "library": {
+          "own": "bob"
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "elsewhere"
+  },
+  {
+    "about": "HD1 (e) MUSIC 7",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 7,
+        "paired": 7,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    }
+  },
+  {
+    "about": "HD1 (f) MUSIC 7 and IN 6: the fullest copy",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 7,
+        "paired": 7,
+        "went": null
+      },
+      {
+        "folder": 1,
+        "library": {
+          "incoming": {
+            "fetcher": "lidarr",
+            "uploader": null
+          }
+        },
+        "present": 6,
+        "paired": 6,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": {
+      "partly": {
+        "has": 7,
+        "of": 10
+      }
+    }
+  },
+  {
+    "about": "HD1 (g) none present, the last gone at t from MORE",
+    "copies": [
+      {
+        "folder": 4,
+        "library": "main",
+        "present": 0,
+        "paired": 0,
+        "went": {
+          "at": 1772539200,
+          "from": 4
+        }
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 4
+      }
+    }
+  },
+  {
+    "about": "HD1 (h) none, ever",
+    "copies": [],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "not_had"
+  },
+  {
+    "about": "HD1 (i) IN 10 and MUSIC 7",
+    "copies": [
+      {
+        "folder": 1,
+        "library": {
+          "incoming": {
+            "fetcher": "lidarr",
+            "uploader": null
+          }
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      },
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 7,
+        "paired": 7,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "arrived"
+  },
+  {
+    "about": "HD1 (j) MUSIC 10 and IN 10",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 10,
+        "paired": 10,
+        "went": null
+      },
+      {
+        "folder": 1,
+        "library": {
+          "incoming": {
+            "fetcher": "lidarr",
+            "uploader": null
+          }
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "had"
+  },
+  {
+    "about": "HD2: ten files, eight paired with the list",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 10,
+        "paired": 8,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": {
+      "partly": {
+        "has": 8,
+        "of": 10
+      }
+    }
+  },
+  {
+    "about": "HD2: twelve files, the ten of the list among them",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 12,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "had"
+  },
+  {
+    "about": "HD2: a record that keeps no list, its copy of nine",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 9,
+        "paired": 9,
+        "went": null
+      }
+    ],
+    "shortest": null,
+    "viewer": "alice",
+    "without": [],
+    "holding": "had"
+  },
+  {
+    "about": "HD3: two halves are never whole",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 6,
+        "paired": 6,
+        "went": null
+      },
+      {
+        "folder": 1,
+        "library": {
+          "incoming": {
+            "fetcher": "lidarr",
+            "uploader": null
+          }
+        },
+        "present": 6,
+        "paired": 6,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": {
+      "partly": {
+        "has": 6,
+        "of": 10
+      }
+    }
+  },
+  {
+    "about": "HD4: bob's own music, for bob",
+    "copies": [
+      {
+        "folder": 3,
+        "library": {
+          "own": "bob"
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "bob",
+    "without": [],
+    "holding": "had"
+  },
+  {
+    "about": "HD5: IN and bob's own music, for alice",
+    "copies": [
+      {
+        "folder": 1,
+        "library": {
+          "incoming": {
+            "fetcher": "lidarr",
+            "uploader": null
+          }
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      },
+      {
+        "folder": 3,
+        "library": {
+          "own": "bob"
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "elsewhere"
+  },
+  {
+    "about": "HD6: bob's waiting upload, for bob",
+    "copies": [
+      {
+        "folder": 6,
+        "library": {
+          "incoming": {
+            "fetcher": "uploads",
+            "uploader": "bob"
+          }
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "bob",
+    "without": [],
+    "holding": "arrived"
+  },
+  {
+    "about": "HD6: bob's waiting upload, for alice",
+    "copies": [
+      {
+        "folder": 6,
+        "library": {
+          "incoming": {
+            "fetcher": "uploads",
+            "uploader": "bob"
+          }
+        },
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": "not_had"
+  },
+  {
+    "about": "HD7: MUSIC switched off where the place follows the switch",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 10,
+        "paired": 10,
+        "went": null
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [
+      0
+    ],
+    "holding": "not_had"
+  },
+  {
+    "about": "HD9: two copies went, the latest names its library",
+    "copies": [
+      {
+        "folder": 0,
+        "library": "main",
+        "present": 0,
+        "paired": 0,
+        "went": {
+          "at": 1772539100,
+          "from": 0
+        }
+      },
+      {
+        "folder": 4,
+        "library": "main",
+        "present": 0,
+        "paired": 0,
+        "went": {
+          "at": 1772539200,
+          "from": 4
+        }
+      }
+    ],
+    "shortest": 10,
+    "viewer": "alice",
+    "without": [],
+    "holding": {
+      "retired": {
+        "since": 1772539200,
+        "from": 4
+      }
+    }
+  }
+]

@@ -33,8 +33,9 @@
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, listsShown, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import ChoiceList from './ChoiceList.svelte';
-  import { clearPlaced, dropSoulseek, fetchFound, loadSoulseek, searchSoulseekNow, soulseek } from './soulseek.svelte';
-  import { approvePayload, folderLine, GROUPS, itemLine, itemTone, recordOf, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
+  import { dropSoulseek, fetchFound, loadSoulseek, searchSoulseekNow, soulseek } from './soulseek.svelte';
+  import { approvePayload, folderLine, grouped, itemLine, itemTone, recordOf, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
+  import Section from './Section.svelte';
   import { fillOf, mayTakeBack, standing, standingTone } from './requestState';
   import { requestStory, storyAgainIn, tickOf } from './requestStory';
   import SelectBar from './SelectBar.svelte';
@@ -78,6 +79,10 @@
   let slskOpen = $state<SoulseekItem | null>(null);
   let fetching = $state(false);
   const slskItems = $derived(soulseek.view?.items ?? []);
+  // The pill's search: a record whose title or artist holds every word.
+  const slskShown = $derived(slskItems.filter((i) => matchesSearch(i.record.album, i.record.artist)));
+  // Done (placed) folded at first, as the list polls.
+  let slskDoneOpen = $state(false);
   const slskFound = $derived(slskItems.filter(tickable));
   const slskPayload = $derived(approvePayload(slskItems, slskTicks, slskPicks));
   // A tick kept only where it can still be (a record fetched or gone loses it).
@@ -264,6 +269,19 @@
   {/if}
 {/snippet}
 
+{#snippet slskRow(i: SoulseekItem)}
+  <ReleaseRow cover={recordOf(i) ? albumCoverUrl('cratarr', recordOf(i)!) : null} title={i.record.album} line={itemLine(i, undefined, slskItems)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
+    {#if tickable(i)}
+      {@const on = slskTicks.has(i.id)}
+      <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.record.album}`} onclick={() => slskTick(i.id)}
+        ><ChoiceMark kind="several" on={on} /></button
+      >
+    {:else if searchable(i)}
+      <button onclick={() => void searchSoulseekNow(i.id)}>Search now</button>
+    {/if}
+  </ReleaseRow>
+{/snippet}
+
 <div class="view" class:handed>
   {#if !handed}
     <div class="bar" {@attach rowRoot()} class:beside>
@@ -292,35 +310,30 @@
           <!-- Nothing is searched until an Incoming library takes Soulseek's records (decision 0099). -->
           <p class="note">Soulseek's records need an Incoming library to come into: choose one in <a href={viewOn('settings', 'settings:libraries')}>Libraries</a>.</p>
         {/if}
-        {#if slskFound.length}
-          <Group>
-            <Item name={`${slskTicks.size} of ${slskFound.length} ticked`}>
-              <button onclick={() => (slskTicks = slskTicks.size === slskFound.length ? new Set() : new Set(slskFound.map((i) => i.id)))}
-                >{slskTicks.size === slskFound.length ? 'None' : 'Tick all found'}</button
-              >
-              <button class="primary" disabled={!slskPayload.length || fetching} aria-busy={fetching || undefined} onclick={() => void fetchTicked()}
-                >{slskPayload.length ? `Fetch ${slskPayload.length}` : 'Fetch'}</button
-              >
-            </Item>
-          </Group>
-        {/if}
-        {#each GROUPS as g (g.title)}
-          {@const these = slskItems.filter((i) => g.states.includes(i.state) && matchesSearch(i.record.album, i.record.artist))}
-          {#if these.length}
+        <!-- The owner's groups (lib/soulseekRules, 2026-11-20): Looking for it at the top; what Found's ticks fetch over Found;
+             Done folded at the end, kept as history (nothing is cleared). -->
+        {#each grouped(slskShown) as g (g.title)}
+          {#if g.title === 'Found' && slskFound.length}
+            <Group>
+              <Item name={`${slskTicks.size} of ${slskFound.length} ticked`}>
+                <button onclick={() => (slskTicks = slskTicks.size === slskFound.length ? new Set() : new Set(slskFound.map((i) => i.id)))}
+                  >{slskTicks.size === slskFound.length ? 'None' : 'Tick all found'}</button
+                >
+                <button class="primary" disabled={!slskPayload.length || fetching} aria-busy={fetching || undefined} onclick={() => void fetchTicked()}
+                  >{slskPayload.length ? `Fetch ${slskPayload.length}` : 'Fetch'}</button
+                >
+              </Item>
+            </Group>
+          {/if}
+          {#if g.folded}
+            <Section title={g.title} count={plural(g.items.length, 'record')} bind:open={slskDoneOpen}>
+              <Group>
+                {#each g.items as i (i.id)}{@render slskRow(i)}{/each}
+              </Group>
+            </Section>
+          {:else}
             <Group title={g.title}>
-              {#snippet tail()}{#if g.states.includes('placed')}<button class="tailact" onclick={() => void clearPlaced()}>Clear</button>{/if}{/snippet}
-              {#each these as i (i.id)}
-                <ReleaseRow cover={recordOf(i) ? albumCoverUrl('cratarr', recordOf(i)!) : null} title={i.record.album} line={itemLine(i, undefined, slskItems)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
-                  {#if tickable(i)}
-                    {@const on = slskTicks.has(i.id)}
-                    <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.record.album}`} onclick={() => slskTick(i.id)}
-                      ><ChoiceMark kind="several" on={on} /></button
-                    >
-                  {:else if searchable(i)}
-                    <button onclick={() => void searchSoulseekNow(i.id)}>Search now</button>
-                  {/if}
-                </ReleaseRow>
-              {/each}
+              {#each g.items as i (i.id)}{@render slskRow(i)}{/each}
             </Group>
           {/if}
         {/each}
@@ -554,6 +567,11 @@
 
   .tick.on {
     color: var(--accent);
+  }
+
+  /* Done's rows under its folding heading (lib/Section), as a group's under its title. */
+  .scroll :global(.sect > .group) {
+    margin-top: 6px;
   }
 
   /* Its glass handed to App's row on a phone (lib/glass): the list starts under it, its first heading where the page's

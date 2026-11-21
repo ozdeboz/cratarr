@@ -877,6 +877,8 @@ impl UserData {
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         week_before_the_log(&conn).context("writing the week before the log from the last plays")?;
+        // Last: the triggers read the tables as every step above leaves them (an older review table gains its folder above).
+        offline::record_triggers(&conn).context("logging the records' views' changes")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default() })
     }
 
