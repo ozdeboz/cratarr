@@ -534,14 +534,14 @@ pub mod testing {
     /// What a record's picture is now, and the Change that picked it.
     fn picked(serve: &Serve, record: i64) -> Result<Option<(String, i64)>, ToggleError> {
         let facts = serve.catalogue().facts_said(record)?;
-        Ok(facts.into_iter().find(|f| f.fact == FACT && f.source == HAND).map(|f| (f.value, f.at)))
+        Ok(facts.into_iter().find(|f| f.fact == FACT && f.source == HAND).and_then(|f| Some((f.value?, f.at))))
     }
 
     /// Its picture set to `to` by Change `by`, or none.
     fn set(serve: &Serve, record: i64, to: Option<&(String, i64)>) -> Result<(), ToggleError> {
         let cat = serve.catalogue();
         match to {
-            Some((picture, by)) => cat.said(record, FACT, HAND, picture, *by)?,
+            Some((picture, by)) => cat.said(record, FACT, HAND, "", Some(picture), *by)?,
             None => cat.execute_for_tests(&format!("DELETE FROM facts WHERE record = {record} AND fact = '{FACT}' AND source = '{HAND}'")),
         }
         Ok(())
@@ -714,7 +714,7 @@ mod tests {
         }
 
         fn picture(&self) -> Option<String> {
-            self.serve.catalogue().facts_said(self.record).unwrap().into_iter().find(|f| f.fact == "test-picture").map(|f| f.value)
+            self.serve.catalogue().facts_said(self.record).unwrap().into_iter().find(|f| f.fact == "test-picture").and_then(|f| f.value)
         }
 
         async fn undo(&self, v: &Viewer, token: &str) -> UndoAnswer {
@@ -911,7 +911,7 @@ mod tests {
         w.serve.refresh().unwrap();
         assert_eq!(w.serve.userdata.change_rev().unwrap(), a.rev, "the refresh logged it no second time");
         // Outside any command: owed, and moved at the refresh, as LIVE has it.
-        w.serve.catalogue().said(w.record, "year", "musicbrainz", "2015", 9).unwrap();
+        w.serve.catalogue().said(w.record, "year", "musicbrainz", "", Some("2015"), 9).unwrap();
         assert!(!change_log_names(&w.serve, a.rev, &id));
         w.serve.refresh().unwrap();
         assert!(change_log_names(&w.serve, a.rev, &id), "moved at the refresh");

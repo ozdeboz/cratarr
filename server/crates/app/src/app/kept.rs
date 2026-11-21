@@ -57,6 +57,11 @@ pub struct Track {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_id: Option<String>,
+    /// Its record's type and secondary types as the Library list serves them (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     pub duration_secs: Option<f64>,
     /// Bytes as the file is; none when the library does not know it.
     pub size: Option<u64>,
@@ -155,6 +160,8 @@ fn tracks_of(source: &str, rows: &[PlaylistRow]) -> Vec<Track> {
                 artist: r.artist.clone(),
                 album: r.album.clone(),
                 album_id: r.album_id.clone(),
+                album_type: r.album_type.clone(),
+                album_secondary: r.album_secondary.clone(),
                 duration_secs: r.duration_secs,
                 size,
                 copy_size,

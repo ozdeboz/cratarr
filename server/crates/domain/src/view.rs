@@ -38,6 +38,8 @@ pub enum Is {
     Had,
     Elsewhere,
     Retired,
+    // Only guesses' lists kept (VR12 rule 6): not known whole, no count until a pick.
+    Unknown,
 }
 
 /// How an action is asked of the server.
@@ -114,7 +116,8 @@ pub struct What {
 }
 
 /// One action this viewer may take now (RV10): its entry's name, words, icon and group (`words::entry`), the section it is drawn
-/// in, and its address: today's handler, its copy named where it acts on one. `confirm`: the yes `decide` asks for first.
+/// in, and its address: today's handler, its copy named where it acts on one. `confirm`: the yeses `decide` asks for first, in order
+/// (RS25: a main library's Delete asks twice, decision 0034).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
@@ -131,7 +134,9 @@ pub struct ActionView {
     pub fields: Option<Fields>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(any(test, feature = "ts"), ts(optional))]
-    pub confirm: Option<String>,
+    pub confirm: Option<Vec<String>>,
+    /// Whether it works with Cratarr away (RS8, RS17): the device offers it from its cached entity only where this is true.
+    pub away: bool,
 }
 
 fn is_empty(f: &Option<Fields>) -> bool {
@@ -151,6 +156,8 @@ pub struct Link {
     pub group: Group,
     pub section: Section,
     pub href: String,
+    /// Whether it works with Cratarr away (RS17): a navigation and the web searches do.
+    pub away: bool,
 }
 
 /// A fact as the view carries it (FA1): its value and the sources it is by. `by` is `resolve()`'s (VR01): until it lands, the
@@ -161,12 +168,23 @@ pub struct Link {
 pub struct FactView<T> {
     pub value: T,
     pub by: Vec<String>,
+    /// Where its sources differ and none is chosen (FA13, VR39): each value they give and the sources that give it; `value` none.
+    pub versions: Vec<FactVersion<T>>,
 }
 
 impl<T> FactView<T> {
     pub fn of(value: T) -> Self {
-        Self { value, by: Vec::new() }
+        Self { value, by: Vec::new(), versions: Vec::new() }
     }
+}
+
+/// One version of a fact its sources differ on (FA13, VR39): a value and the sources that give it, none chosen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct FactVersion<T> {
+    pub value: T,
+    pub by: Vec<String>,
 }
 
 /// An artist or a label as a record names it: by its id for life and its name.
@@ -190,6 +208,9 @@ pub struct Named {
 pub struct RecordProperties {
     #[serde(rename = "type")]
     pub kind: FactView<Option<String>>,
+    /// What its type is by, in the server's words (VR39): "by the release type rule", "by the picked list", "by its sources",
+    /// "set by you"; none where it has none.
+    pub type_why: String,
     pub title: FactView<String>,
     pub artists: FactView<Vec<Named>>,
     pub credit: String,
@@ -224,6 +245,8 @@ pub struct Version {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(any(test, feature = "ts"), ts(optional))]
     pub action: Option<String>,
+    /// A tracklist's sources, in the order asked (VR3, VR4: "9 tracks · MusicBrainz, Bandcamp"), each named.
+    pub sources: Vec<String>,
 }
 
 /// What a version line is.
@@ -234,6 +257,7 @@ pub struct Version {
 pub enum VersionKind {
     Copy,
     Edition,
+    Tracklist,
 }
 
 /// A page's or a sheet's object (RV1): one answer for a record, had or not (RV2), the page and its sheet reading one (RV9).

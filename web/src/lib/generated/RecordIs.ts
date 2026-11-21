@@ -3,4 +3,4 @@
 /**
  * A record's state by name (the holding's, HD1): one word each, the words beside it.
  */
-export type RecordIs = "not_had" | "partly" | "arrived" | "had" | "elsewhere" | "retired";
+export type RecordIs = "not_had" | "partly" | "arrived" | "had" | "elsewhere" | "retired" | "unknown";

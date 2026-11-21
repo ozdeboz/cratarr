@@ -75,6 +75,26 @@ pub enum Holding {
     Elsewhere,
     /// No present copy, though one was: when its last file went and the library it left (OQ-DC1-2 (a)).
     Retired { since: i64, from: i64 },
+    /// Present copies, but the only lists kept are guesses' (VR12 rule 6, C16, the owner 2026-11-21): not known whole. Never Had,
+    /// Arrived, Elsewhere or Partly, and no count ("of") until an administrator picks or confirms a list.
+    Unknown,
+}
+
+/// What a record keeps to judge its copies whole by (VR12 rules 1, 5, 6): no list (any present copy is whole, OQ-VR-6 (c)); the
+/// shortest list that judges, in tracks; or only guesses' lists, which judge nothing (not known whole).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kept {
+    NoList,
+    Shortest(u16),
+    OnlyGuesses,
+}
+
+impl Kept {
+    /// The shortest list kept, or none: the lists' input as `holding()` takes it.
+    pub fn of(shortest: Option<u16>) -> Self {
+        shortest.map_or(Kept::NoList, Kept::Shortest)
+    }
 }
 
 /// The libraries a place counts (HD7): every one but those its opener sends as switched off.
@@ -114,10 +134,32 @@ pub fn whole(copy: &CopyFacts, shortest: Option<u16>) -> bool {
     copy.present > 0 && shortest.is_none_or(|of| copy.paired >= of)
 }
 
+/// Whole, the lists kept said whole (`kept`): never by a guess (VR12 rule 6).
+pub fn whole_of(copy: &CopyFacts, kept: Kept) -> bool {
+    match kept {
+        Kept::OnlyGuesses => false,
+        Kept::NoList => whole(copy, None),
+        Kept::Shortest(of) => whole(copy, Some(of)),
+    }
+}
+
 /// The holding (HD1's rule, in order): what `viewer` (an account) has of a record with these `copies`, the shortest list
 /// kept `shortest` tracks long (none where it keeps no list), from a place that counts the libraries `on`.
 pub fn holding(copies: &[CopyFacts], shortest: Option<u16>, viewer: &str, on: &On) -> Holding {
+    holding_of(copies, Kept::of(shortest), viewer, on)
+}
+
+/// The holding as [`holding`] has it, the lists kept said whole (`kept`): where only guesses are kept, a present copy the viewer
+/// counts is not known whole ([`Holding::Unknown`], VR12 rule 6), never whole by them and never counted against them.
+pub fn holding_of(copies: &[CopyFacts], kept: Kept, viewer: &str, on: &On) -> Holding {
     let counted: Vec<&CopyFacts> = copies.iter().filter(|c| c.present > 0 && on.counts(c.folder) && seen_by(c, viewer)).collect();
+    if kept == Kept::OnlyGuesses && !counted.is_empty() {
+        return Holding::Unknown;
+    }
+    let shortest = match kept {
+        Kept::Shortest(of) => Some(of),
+        Kept::NoList | Kept::OnlyGuesses => None,
+    };
     let wholly_in: Vec<&Library> = counted.iter().filter(|c| whole(c, shortest)).map(|c| &c.library).collect();
     let theirs = |library: &Library| match library {
         Library::Main => true,
@@ -150,6 +192,15 @@ pub fn holding(copies: &[CopyFacts], shortest: Option<u16>, viewer: &str, on: &O
 /// an asker read it; whether the asker can get that copy (their own music on, their room) is the request machine's (DC2).
 pub fn house_has(copies: &[CopyFacts], shortest: Option<u16>) -> bool {
     copies.iter().any(|c| whole(c, shortest) && !matches!(c.library, Library::Incoming { uploader: Some(_), .. }))
+}
+
+/// Had for the house, the lists kept said whole (`kept`): only guesses kept, no copy is whole (VR12 rule 6).
+pub fn house_has_of(copies: &[CopyFacts], kept: Kept) -> bool {
+    match kept {
+        Kept::OnlyGuesses => false,
+        Kept::NoList => house_has(copies, None),
+        Kept::Shortest(of) => house_has(copies, Some(of)),
+    }
 }
 
 /// A state line: its words, and the time the page writes with its one `when()` (SB13).

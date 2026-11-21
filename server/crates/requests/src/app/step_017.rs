@@ -1620,7 +1620,7 @@ mod tests {
         let counting = |cat: &Catalogue, record: i64| cat.record(record).unwrap().unwrap().counting;
         assert_eq!((counting(&cat, 7), counting(&cat, 12)), (None, None), "no count from 0.16's certain matches");
         assert_eq!(cat.lists_to_read(100).unwrap(), [(1, mb(1)), (7, mb(7)), (10, FERRY.to_string()), (12, mb(30))], "Two Rooms' is a hand's, and Ferry Lights' younger copy holds none");
-        assert!(!cat.unreferenced(true).unwrap().contains(&12), "Undertow waits for its list");
+        assert!(!cat.unreferenced(true, &[]).unwrap().contains(&12), "Undertow waits for its list");
 
         let cat = std::sync::Arc::new(cat);
         let titled = |titles: &[&str], ms: i64| -> Vec<crate::catalogue::identity::Listed> { titles.iter().map(|t| crate::catalogue::identity::Listed::of(t, ms)).collect() };
@@ -1648,10 +1648,10 @@ mod tests {
             async move { Ok(read) }
         };
         assert_eq!(crate::app::references::read_lists(&cat, files.clone(), read, 100).await.unwrap(), 4);
-        assert_eq!(counting(&cat, 7).as_deref(), Some("musicbrainz"), "Signal's list agrees with its file");
+        assert_eq!(counting(&cat, 7), None, "VR10, changed by design: Signal's list kept, nothing counted");
         assert_eq!(counting(&cat, 12), None, "Undertow's does not");
         assert_eq!(counting(&cat, 10), None, "no list");
-        assert!(cat.unreferenced(true).unwrap().contains(&12), "on Health's item now");
+        assert!(cat.unreferenced(true, &[]).unwrap().contains(&12), "on Health's item now");
         assert!(cat.lists_to_read(100).unwrap().is_empty());
         assert_eq!(crate::app::references::read_lists(&cat, files, |_| async { Ok(None) }, 100).await.unwrap(), 0, "nothing waits");
         let report = &ud.migration_report().unwrap()[PART].1;
@@ -1986,8 +1986,8 @@ mod tests {
     /// RG2 (PA2): the two-copies join reads one rule, at the upgrade's fold as when a copy arrives (`Catalogue::join_copies`): a record
     /// kept in Incoming alone and one with a copy in a main library, never a copy in an account's own music. Glass Harbour's untagged
     /// "Low Tide" in Music beside bob's own rip of it (the same tracks; his year set by hand on his): two records, his facts on his alone;
-    /// "Drift Maps" in bob's own music, the older, beside Music's: two, Music's tracks its own; "Pale Signal" twice in Music: two, as
-    /// after the upgrade; "Brine Flats" in Music and in Incoming: one record, the older. RG1 between two had records: "Grey Cove" (a
+    /// "Drift Maps" in bob's own music, the older, beside Music's: two, Music's tracks its own; "Pale Signal" twice in Music: one
+    /// record (FA18, changed by design: a main library with itself is a main pair); "Brine Flats" in Music and in Incoming: one record, the older. RG1 between two had records: "Grey Cove" (a
     /// single by the rule) in Music beside Incoming's "Grey Cove LP": two. An arrival joins none of the first three either.
     #[test]
     fn the_two_copies_join_reads_main_and_incoming_alone() {
@@ -2039,10 +2039,12 @@ mod tests {
         ud.set_overrides(&[ids::record(42)], &[("year".to_string(), Some(serde_json::json!(2014)))], 1).unwrap();
         super::run(&cat, &ud, &kinds, &FolderRules::default()).unwrap();
         let now = |r: i64| cat.record(r).unwrap().unwrap().id;
-        for ((a, b), what) in [((41, 42), "Music's and bob's own"), ((43, 44), "bob's own, the older, and Music's"), ((45, 46), "two in Music, as after the upgrade"), ((49, 50), "a single and an LP of its name (RG1)")] {
+        for ((a, b), what) in [((41, 42), "Music's and bob's own"), ((43, 44), "bob's own, the older, and Music's"), ((49, 50), "a single and an LP of its name (RG1)")] {
             assert_eq!((now(a), now(b)), (a, b), "{what}: two records");
         }
         assert_eq!(now(48), 47, "Music's and Incoming's: one record, the older");
+        // Changed by design (SCENARIOS-DC1 FA18, M11: RG2-wide, a main library with itself is a main pair; one tracklist is one record).
+        assert_eq!(now(46), 45, "two in Music: one record, the older");
         assert_eq!(
             data.rows_of("userdata.sqlite", "SELECT album, field, value FROM record_overrides WHERE album IN ('al-41', 'al-42') ORDER BY album, field"),
             ["Text(\"al-42\")|Text(\"year\")|Text(\"2014\")"],
@@ -2053,7 +2055,7 @@ mod tests {
             ["44"],
             "Music's copy keeps its own tracks"
         );
-        for (a, b) in [(41, 42), (43, 44), (45, 46)] {
+        for (a, b) in [(41, 42), (43, 44)] {
             assert_eq!(cat.join_copies(a, b, &kinds).unwrap(), None, "al-{a} and al-{b}: an arrival joins them neither");
         }
     }

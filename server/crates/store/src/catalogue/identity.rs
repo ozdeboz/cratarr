@@ -9,8 +9,6 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-
 /// What is compared, already folded (lower case, letters and digits only).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileFacts {
@@ -344,18 +342,8 @@ pub fn same_listing(a: &Known, b: &Known) -> bool {
     !a.title.is_empty() && a.artist == b.artist && a.title == b.title && same_tracks(&a.tracks, &b.tracks)
 }
 
-/// A track of a source's tracklist (0100, `reference_tracks`): its place, its title as the source writes it, and its length and
-/// MusicBrainz recording where the source gives them. Discogs may give no length, and only MusicBrainz gives a recording.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RefTrack {
-    pub disc: u32,
-    pub position: u32,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub length_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recording: Option<String>,
-}
+/// One track of a source's tracklist: the domain's (L6), as the store keeps it in `reference_tracks`.
+pub use cratarr_domain::facts::RefTrack;
 
 /// The sources in the order one counts where nothing else decides (decision 0100: MusicBrainz, then Discogs, then Bandcamp).
 pub const COUNTING_ORDER: [&str; 3] = ["musicbrainz", "discogs", "bandcamp"];

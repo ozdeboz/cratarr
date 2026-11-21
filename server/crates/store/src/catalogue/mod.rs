@@ -16,10 +16,18 @@ pub mod holding;
 mod id3;
 pub mod identity;
 mod index_log;
+#[cfg(test)]
+mod join_tests;
+#[cfg(test)]
+mod judging_tests;
+#[cfg(test)]
+mod step_018_tests;
 pub mod labels;
+pub mod lists;
 pub mod normalise;
 pub mod record_log;
 pub mod records;
+pub mod step_018;
 pub mod tags;
 pub mod walk;
 
@@ -572,7 +580,9 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 46] = [
+const ADDED_COLUMNS: [(&str, &str); 47] = [
+    // VR5 (H5): the administrator's pick names its reference: its kind and value, apart by U+001F, beside `counting`'s source.
+    ("records", "counting_ref TEXT"),
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -1143,7 +1153,9 @@ impl Catalogue {
             }
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track); CREATE INDEX IF NOT EXISTS tracks_by_record ON tracks (record);")?;
+        let set_aside = lists::reshape_before(&conn).context("keying the lists by reference")?;
         conn.execute_batch(records::SCHEMA).context("creating the records' references")?;
+        lists::reshape_after(&conn, set_aside).context("keying the lists by reference")?;
         conn.execute_batch(artists::SCHEMA).context("creating the artists' numbers")?;
         conn.execute_batch(labels::SCHEMA).context("creating the labels' kept rows")?;
         labels::add_also(&conn).context("adding the labels' rows' references")?;
@@ -6403,7 +6415,8 @@ mod tests {
             (refs, cat.reference_tracks(record).unwrap().len(), cat.record(record).unwrap().unwrap().counting)
         };
         cat.keep_files_names(&[incoming.clone()]).unwrap();
-        assert_eq!(state(), (vec![mbid(1)], 1, Some("musicbrainz".to_string())), "kept: its release, its list and its count");
+        // VR10, changed by design: a count worked out is never written (`set_counting(.., false)` writes nothing), so none to keep.
+        assert_eq!(state(), (vec![mbid(1)], 1, None), "kept: its release and its list");
         cat.keep_files_names(&[naming("Tide Tables", &[1, 2], &mbid(2), 2), incoming]).unwrap();
         assert_eq!(state(), (vec![mbid(2)], 0, None), "a retag lets them go");
     }
@@ -6424,8 +6437,10 @@ mod tests {
         let second = AlbumCopy { group: Some(fits_group.into()), ..arriving("Night Walks", &[3, 4], "Night Walks") };
         cat.assign_records(&[first, second]).unwrap();
         assert_eq!((record_of(&cat, 1), record_of(&cat, 3)), (Some(odd), Some(fits)));
+        // VR10, changed by design: no count is worked out, before the album came or after; the lists stay kept, none chosen.
         assert_eq!(cat.record(odd).unwrap().unwrap().counting, None, "a list of three against two files");
-        assert_eq!(cat.record(fits).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"));
+        assert_eq!(cat.record(fits).unwrap().unwrap().counting, None, "a list that agrees counts nothing either");
+        assert_eq!(cat.reference_tracks(fits).unwrap().len(), 1, "its list kept");
     }
 
     /// R28 (N11): a record's names change on a real retag only: a build without the copy that named it (its library parked, an

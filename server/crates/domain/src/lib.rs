@@ -6,6 +6,7 @@
 pub mod arrival;
 pub mod can;
 pub mod change;
+pub mod facts;
 pub mod identity;
 pub mod record;
 pub mod view;

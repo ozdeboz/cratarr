@@ -1,0 +1,66 @@
+{
+  "about": "A track's words (SCENARIOS-DC1 OBJ5), written by the rules crate's tests: its title (its name, else its file's) and its second line (its credit by credit_text, then ' · ' and its record's title line), one rule for the page, the app and the device.",
+  "cases": [
+    {
+      "name": "Pier",
+      "file": "Glass Harbour/Night Ferry/01 Pier.flac",
+      "artists": [
+        "Glass Harbour"
+      ],
+      "record": "Night Ferry",
+      "title": "Pier",
+      "line": "Glass Harbour · Night Ferry"
+    },
+    {
+      "name": "Hydra",
+      "file": "Deep Harbour/01 Hydra.flac",
+      "artists": [
+        "Commodo",
+        "Alfa Mist"
+      ],
+      "record": "Deep Harbour",
+      "title": "Hydra",
+      "line": "Commodo & Alfa Mist · Deep Harbour"
+    },
+    {
+      "name": "Echo",
+      "file": "Deep Harbour/03 Echo.flac",
+      "artists": [
+        "Anz",
+        "Commodo",
+        "Alfa Mist"
+      ],
+      "record": "Deep Harbour",
+      "title": "Echo",
+      "line": "Anz, Commodo & Alfa Mist · Deep Harbour"
+    },
+    {
+      "name": null,
+      "file": "Kite Theory/Answered/02 Lamplight.mp3",
+      "artists": [
+        "Kite Theory"
+      ],
+      "record": "Answered",
+      "title": "02 Lamplight",
+      "line": "Kite Theory · Answered"
+    },
+    {
+      "name": "  ",
+      "file": "Kite Theory/Answered/03 Morning.mp3",
+      "artists": [],
+      "record": "Answered",
+      "title": "03 Morning",
+      "line": "Answered"
+    },
+    {
+      "name": "Interlude",
+      "file": "loose/Interlude.flac",
+      "artists": [
+        "Kite Theory"
+      ],
+      "record": "",
+      "title": "Interlude",
+      "line": "Kite Theory"
+    }
+  ]
+}

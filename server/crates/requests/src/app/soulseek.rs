@@ -5705,13 +5705,17 @@ pub mod tests {
         let (cat, items, d) = fx01("bandcamp-list");
         let it = of_request(&items, 11);
         assert_eq!((it.record.artist.as_str(), it.record.album.as_str(), it.state), ("Tape Club", "After Hours", State::Waiting), "taken, though it has no release group");
-        let Listing::Ready(lists) = listing(it, &cat, bandcamp_list).await else { panic!("no list") };
-        let (source, tracks) = lists.timed.expect("Bandcamp's list has lengths");
-        assert_eq!((source.as_str(), tracks.len()), ("bandcamp", 2));
-        assert!(tracks.iter().all(|t| t.recording.is_none()), "no recording: AcoustID's check skipped at the gate");
+        // Changed by design (SCENARIOS-VR01 VR8; THE Bandcamp rule, AMENDMENTS 2026-11-21 02:03): the label's page, found by its
+        // names, is a guess, whose list is never read for the record, and no Soulseek job reads a Bandcamp page: Bandcamp asked
+        // nothing, and with every reference a guess it waits a round for one to be confirmed, never Stuck.
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let reader = |r| {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            bandcamp_list(r)
+        };
+        assert_eq!(listing(it, &cat, reader).await, Listing::Later("Waits for a reference to be confirmed".into(), ROUND_AT_LEAST));
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0, "Bandcamp asked nothing");
         assert_eq!(ladder(&it.record)[0], "Tape Club After Hours 2020");
-        let answers = [answer("bc", true, vec![file(r"Tape Club\After Hours\01 Night Ferry.flac", 241), file(r"Tape Club\After Hours\02 Last Lights.flac", 198)])];
-        assert_eq!(folders_of(&answers, &tracks, &[]).len(), 1, "judged by Bandcamp's list");
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
     }
