@@ -4168,20 +4168,29 @@ async fn a_length_fix_stays_in_its_file_end_to_end() {
 }
 
 /// The one lock, seen: one reading of the list shows a run writing and a second waiting, not done; the second takes its turn once the
-/// first is through. Two file runs of 0.18 on the one lock (the types sheet's records in two runs: Change cover, the second kind until
-/// 0.18, is no file run any more: the coordinator, 2026-11-21, "the lock's proof keeps two runs"). And Change cover waits for no lock
-/// (COU.11, GEN.58): chosen while a run writes, it answers at once with its Undo, the record shows it at once, no file is written.
+/// first is through. Two file runs 0.18 keeps on the one lock: Health's length repair (`fix:files:sound-breaks`; the owner, 2026-11-20
+/// 17:17), its sheet's records in two runs (Change cover, the second kind until 0.18, is no file run any more: the coordinator,
+/// 2026-11-21, "the lock's proof keeps two runs"). And Change cover waits for no lock (COU.11, GEN.58): chosen while a run writes, it
+/// answers at once with its Undo, the record shows it at once, no file is written.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_second_run_waits_while_the_first_writes_end_to_end() {
     let (s, root, music, _) = on_the_fixtures("waiting").await;
-    s.ok(reqwest::Method::PUT, "/api/settings/file-facts", json!({ "on": true })).await;
     let cover = music.join("Glass Harbour/Tide Tables (2012)/cover.jpg");
     let (old, new) = (std::fs::read(&cover).unwrap(), std::fs::read(music.join("Various Artists/Club Classics (2001)/cover.jpg")).unwrap());
     let album = s.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
 
+    // What a decode leaves, put there by hand as the length fix's test does: every FLAC heard to one second of its three.
+    let db = rusqlite::Connection::open(root.join("data/catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let heard = "INSERT OR REPLACE INTO analysis (folder, rel, size, mtime, version, duration_secs, analysed_at)
+                 SELECT f.folder, f.rel, f.size, f.mtime, 1, 1.0, 0 FROM files f WHERE f.rel LIKE '%.flac' AND f.gone_at IS NULL";
+    assert!(db.execute(heard, []).unwrap() > 2);
+    drop(db);
+    let kind = "fix:files:sound-breaks";
+    let repair = |r: &Value| r["what"].as_str().is_some_and(|w| w.contains("sound-breaks"));
     // The sheet's records in two runs: the first most of them, the second the last.
-    let sheet = s.get("/api/file-changes/plans/types").await;
+    let sheet = s.get(&format!("/api/file-changes/plans/{kind}")).await;
     let records = sheet["records"].as_array().unwrap().clone();
     assert!(records.len() > 2, "two runs' worth: {sheet}");
     let ticked = |rs: &[Value]| {
@@ -4190,16 +4199,16 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
         json!({ "albums": albums, "stamps": stamps })
     };
     let (last, most) = records.split_last().unwrap();
-    s.ok(reqwest::Method::POST, "/api/file-changes/plans/types/apply", ticked(most)).await;
+    s.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/{kind}/apply"), ticked(most)).await;
     // Albums go at least 50 ms apart, so asked this often the run is caught with most of them to go.
     let asked = Instant::now();
     while s.get("/api/file-changes/runs").await[0]["state"] != "writing" {
         assert!(asked.elapsed() < Duration::from_secs(60), "waited for the run to get going");
     }
-    let second = s.ok(reqwest::Method::POST, "/api/file-changes/plans/types/apply", ticked(std::slice::from_ref(last))).await;
+    let second = s.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/{kind}/apply"), ticked(std::slice::from_ref(last))).await;
     assert_eq!(second["state"], "waiting", "{second}");
     let runs = s.get("/api/file-changes/runs").await;
-    let states: Vec<Value> = runs.as_array().unwrap().iter().filter(|r| r["what"] == "types").map(|r| r["state"].clone()).collect();
+    let states: Vec<Value> = runs.as_array().unwrap().iter().filter(|r| repair(r)).map(|r| r["state"].clone()).collect();
     assert!(states.contains(&json!("writing")) && states.contains(&json!("waiting")), "one writing, one waiting: {runs}");
 
     let chosen = s.upload_cover(&album, &new).await;
@@ -4211,7 +4220,7 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
 
     s.until("the second run's turn", Duration::from_secs(120), || async {
         let runs = s.get("/api/file-changes/runs").await;
-        runs.as_array().unwrap().iter().filter(|r| r["what"] == "types" && r["state"] == "done").count() >= 2
+        runs.as_array().unwrap().iter().filter(|r| repair(r) && r["state"] == "done").count() >= 2
     })
     .await;
     assert!(std::fs::read(&cover).unwrap() == old, "nor after");
