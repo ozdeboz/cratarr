@@ -1461,6 +1461,13 @@ mod tests {
         assert_eq!(keys(&w, Kind::Genre), ["jazz", "funk"]);
         assert_eq!((keys_of(&w, "t2", Kind::Genre), keys_of(&w, "t2", Kind::Style)), (strings(&["hip hop", "electronic"]), strings(&["turntablism"])));
         assert_eq!(keys_of(&w, "t1", Kind::Genre), ["jazz", "funk"], "a track without a hand list reads the record's");
+        // GEN.25's Grey Archive after its routing: the hand's styles Hauntology and Leftfield, no hand genre list; its genres as
+        // given, Electronic by Leftfield's link as for any style, and never Leftfield as a genre.
+        let mut grey = on_every("al-104", 6, &["Hauntology"]);
+        grey.hand.insert(Kind::Style, strings(&["Hauntology", "Leftfield"]));
+        let w = record(&of(std::slice::from_ref(&grey), &HashMap::new()), &grey);
+        assert_eq!(kind(&w, Kind::Genre), [("Electronic", LINKED)]);
+        assert!(!shows(&w, Kind::Genre, "Leftfield") && !w.kinds.iter().find(|k| k.kind == Kind::Genre).unwrap().hand);
     }
 
     /// GEN.25 (C6, OQ-GEN-16, C12, R9): a typed word is routed by the word and edits its own kind's row as that row is shown;
