@@ -420,6 +420,8 @@ impl SettingsService {
         let old_rules = self.lib.tag_rules();
         let places = self.lib.place_folders();
         let tag_rules = tag_rules.unwrap_or(old_rules);
+        // The default for new libraries and own music: "&" is no genre separator (OQ-GEN-21, GEN.63).
+        tag_rules.encoding.check().map_err(|why| ToggleError::BadSettings(format!("For new libraries and own music: {why}")))?;
         let trash_days = trash_days.unwrap_or_else(|| self.incoming.trash_days());
         if !(1..=3650).contains(&trash_days) {
             return Err(ToggleError::BadSettings("keep deleted albums for 1 to 3650 days".into()));
@@ -430,7 +432,10 @@ impl SettingsService {
             Some(t) => Some(t.parse::<crate::naming::Template>().map_err(|e| ToggleError::BadSettings(format!("Naming: {e}")))?),
         };
         let saved: Vec<SourceConfig> = self.lib.live().iter().map(|a| a.cfg.clone()).collect();
-        let merged = merge(&saved, drafts)?;
+        let mut merged = merge(&saved, drafts)?;
+        // Each library its own tag rules (OQ-GEN-22): one sent without keeps its saved ones, a new one starts from the default
+        // as it stands now.
+        settings::fill_tag_rules(&mut merged, &saved, &tag_rules.encoding);
         let mut next = Vec::with_capacity(merged.len());
         for cfg in merged.iter().cloned() {
             if cfg.kind == crate::source::cratarr::KIND.id {
@@ -478,6 +483,13 @@ impl SettingsService {
         self.lib.set_saved_template(naming);
         self.incoming.apply_settings(lidarr, trash_days);
         self.lib.switch_to(next).await?;
+        // Each folder's tag rules at once (OQ-GEN-22, GEN.7): the crates' next read and the served library's next check go by
+        // them, a library's own and the default as just saved.
+        let rules = self.lib.folder_rules();
+        self.lib.catalogue().set_folder_rules(rules.clone());
+        if let Some(serve) = crate::serve::instance() {
+            serve.set_rules(rules);
+        }
         // Servers may have changed: link their tracks again soon.
         self.lib.catalogue().poke();
         *self.origin.write().unwrap_or_else(|p| p.into_inner()) = Origin::File;
@@ -578,6 +590,10 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
                     return Err(ChangeError::Invalid(format!("{}: {lib}'s colour {c:?} is not #rrggbb", d.id)));
                 }
                 l.colour = Some(c.to_ascii_lowercase());
+            }
+            // Its tag rules (OQ-GEN-22): "&" is no genre separator (OQ-GEN-21, GEN.63).
+            if let Some(why) = l.tag_rules.as_ref().and_then(|r| r.check().err()) {
+                return Err(ChangeError::Invalid(format!("{}: {lib}'s tag splitting: {why}", d.id)));
             }
             // A name kept trimmed; blank is none (the folder's name again).
             l.name = l.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);

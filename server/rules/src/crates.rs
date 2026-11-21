@@ -926,9 +926,18 @@ pub struct Facts {
     /// Its labels (0.11, quick crates): its tags' (LABEL, ID3 TPUB, PUBLISHER), else what Discogs said of its album
     /// where that is kept (never asked for here: the Discogs rounds fill it in).
     pub labels: Vec<String>,
-    /// Its files' STYLE and MOOD words as read, for the words' store (decision 0097) to weigh beside AudioMuse's
-    /// (`styles`, `moods` until the store makes them its own); none where its tags hold neither, and once read.
-    pub file_words: Option<Box<(Vec<String>, Vec<String>)>>,
+    /// What the words' store (decision 0097) weighs as read ([`ReadWords`]): none where there is nothing, and once read.
+    pub read_words: Option<Box<ReadWords>>,
+}
+
+/// A file's words as read, for the words' store (decision 0097) to sort and weigh before it makes `Facts`' words its own:
+/// its files' STYLE and MOOD words, and AudioMuse's top styles with their scores (GEN.26: a record's AudioMuse word rises by
+/// its average score over the heard tracks; `styles` holds their names until then).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReadWords {
+    pub style: Vec<String>,
+    pub mood: Vec<String>,
+    pub heard: Vec<(String, f32)>,
 }
 
 /// What a listener did with a line (the owner, 2026-10-23: crates on plays, last played and rating): how often it was

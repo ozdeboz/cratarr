@@ -103,6 +103,24 @@ pub fn folders_switched_off(a: &Active, without: &[String]) -> Vec<String> {
     out.into_iter().filter(|f| !on.contains(f)).collect()
 }
 
+/// Each catalogue folder's tag rules (GEN-DESIGN §4, OQ-GEN-22): `libraries` are the settings' libraries, each with its
+/// encoding and its folders as its server places them (as `folders_switched_off` finds a library's folders), and a folder
+/// one of them holds reads by its encoding, the first listed where two hold it. A folder none holds (own music, a library
+/// since removed) reads by the install's default, and every folder by the install's aliases.
+pub fn folder_rules_of<'a>(
+    install: crate::catalogue::Rules,
+    libraries: impl IntoIterator<Item = (&'a crate::catalogue::Encoding, &'a [String])>,
+    in_use: &crate::catalogue::InUse,
+) -> crate::catalogue::FolderRules {
+    let mut folders = std::collections::BTreeMap::new();
+    for (encoding, paths) in libraries {
+        for id in paths.iter().filter_map(|p| in_use.id_of(Path::new(p))) {
+            folders.entry(id).or_insert_with(|| encoding.clone());
+        }
+    }
+    crate::catalogue::FolderRules::new(install, folders)
+}
+
 /// A configured source and, when it is enabled and its settings work, the connection and where its music lies.
 pub struct Active {
     pub cfg: SourceConfig,
@@ -224,8 +242,8 @@ impl Active {
 
 /// The user data's keys for the catalogue its track ids are of, and the highest id given out (0101).
 /// A step a start runs once the first start is done (0.17's, `step_017::run`), with what the library knows by then: the
-/// catalogue, the user data, each catalogue folder's kind and the tag rules. Blocking.
-pub type Upgrade = fn(&Catalogue, &crate::userdata::UserData, &[(i64, LibraryKind)], &crate::catalogue::Rules) -> Result<()>;
+/// catalogue, the user data, each catalogue folder's kind and each folder's tag rules. Blocking.
+pub type Upgrade = fn(&Catalogue, &crate::userdata::UserData, &[(i64, LibraryKind)], &crate::catalogue::FolderRules) -> Result<()>;
 
 pub const CATALOGUE_KEY: &str = "catalogue";
 const TOP_KEY: &str = "catalogue_top";
@@ -350,6 +368,15 @@ async fn music_store(db: &Arc<crate::userdata::UserData>, cat: &Arc<Catalogue>, 
 /// A "stopped processing" notice that nothing confirmed again is dropped after this long.
 const STUCK_SECS: i64 = 30 * 60;
 
+/// `folder_rules_of` over the servers' libraries: each library of a source's list with its encoding (one with none yet,
+/// before a save or the upgrade gave it one, reads by the default) and its folders as the server places them.
+fn rules_of(install: crate::catalogue::Rules, live: &[Arc<Active>], in_use: &crate::catalogue::InUse) -> crate::catalogue::FolderRules {
+    let libraries = live.iter().flat_map(|a| {
+        a.cfg.libraries.0.iter().filter_map(move |l| Some((l.tag_rules.as_ref()?, a.placement.libraries.iter().find(|p| p.id == l.id)?.folders.as_slice())))
+    });
+    folder_rules_of(install, libraries, in_use)
+}
+
 /// `Library::folder_kinds`, of these folders.
 fn kinds_of(f: &Folders, in_use: &crate::catalogue::InUse) -> Vec<(i64, LibraryKind)> {
     let main = f.music.iter().chain(&f.more_main).map(|p| (p, LibraryKind::Main));
@@ -415,7 +442,10 @@ impl Library {
         }
         // Here, as nothing has read a store yet, and no list has been built: `playlists::import` below reads what it leaves.
         let kinds = kinds_of(&folders, &catalogue.folders());
-        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds: kinds.clone(), rules: tag_rules.clone() };
+        // Each folder's tag rules (OQ-GEN-22), before anything reads a file's tags: the first start's albums and the crates' facts.
+        let rules = rules_of(tag_rules.clone(), &active, &catalogue.folders());
+        catalogue.set_folder_rules(rules.clone());
+        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds: kinds.clone(), rules: rules.clone() };
         start.run().await.context("the first start of 0.16 did not finish")?;
         // 0.17's step, once (`step_017`): what 0.16 knew of each record's references, into the catalogue's tables, before
         // anything reads them. With the ids lost it waits, as the first start does. Failed, it stops the start as the first
@@ -424,7 +454,7 @@ impl Library {
         if let Some(upgrade) = upgrade
             && !catalogue.ids_lost()
         {
-            let (cat, ud, rules) = (catalogue.clone(), playlists_db.clone(), tag_rules.clone());
+            let (cat, ud, rules) = (catalogue.clone(), playlists_db.clone(), rules.clone());
             crate::run::spawn_blocking(move || upgrade(&cat, &ud, &kinds, &rules)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
         }
         follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
@@ -512,8 +542,15 @@ impl Library {
         self.naming.write().unwrap_or_else(|p| p.into_inner()).1 = Some(t);
     }
 
+    /// The install's tag rules: the default encoding (new libraries, own music) and the aliases.
     pub fn tag_rules(&self) -> crate::catalogue::Rules {
         self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// Each catalogue folder's tag rules (OQ-GEN-22): its library's encoding, else the default, with the install's aliases
+    /// (`folder_rules_of`). What every reader of a file's tags picks its rules from.
+    pub fn folder_rules(&self) -> crate::catalogue::FolderRules {
+        rules_of(self.tag_rules(), &self.live(), &self.catalogue.folders())
     }
 
     pub(super) fn set_tag_rules(&self, rules: crate::catalogue::Rules) {

@@ -37,6 +37,7 @@ pub mod brake;
 pub mod crates;
 pub mod excluded_artists;
 pub mod fresh;
+pub mod genres;
 pub mod holding;
 pub mod ids;
 pub mod index;

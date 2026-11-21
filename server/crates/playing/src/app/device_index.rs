@@ -425,7 +425,7 @@ pub(super) mod tests {
     use super::*;
     use crate::app::changes::IndexStands;
     use crate::app::device_index_base::stands_for;
-    use crate::catalogue::{Catalogue, Rules};
+    use crate::catalogue::{Catalogue, FolderRules, Rules};
     use crate::serve::copies::Kind as CopyKind;
     use cratarr_rules::index::Kind;
 
@@ -480,8 +480,8 @@ pub(super) mod tests {
 
         /// The library built from what the catalogue holds now, the facts kept as read.
         pub fn built_and_not_read(&self) {
-            let (_, print) = self.serve.library.change(&self.cat, &Rules::default()).unwrap();
-            self.serve.library.build_from(&self.cat, &Rules::default(), &print).unwrap();
+            let (_, print) = self.serve.library.change(&self.cat, &FolderRules::default()).unwrap();
+            self.serve.library.build_from(&self.cat, &FolderRules::default(), &print).unwrap();
             self.serve.build_passed_for_tests();
         }
 

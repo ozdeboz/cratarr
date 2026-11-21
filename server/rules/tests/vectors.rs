@@ -212,7 +212,7 @@ impl File {
             release_types: self.release_types.clone(),
             album: Some(Arc::from(self.album.as_str())),
             labels: self.labels.clone(),
-            file_words: None,
+            read_words: None,
         }
     }
 }

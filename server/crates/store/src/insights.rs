@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::catalogue::{Rules, TrackRow};
+use crate::catalogue::{FolderRules, TrackRow};
 use crate::playlists::playlist_stats;
 
 /// How good an album's files are: lossless where every track is; between lossy files the lowest bitrate counts. Here since the
@@ -358,7 +358,7 @@ pub fn build(
     rows: &[TrackRow],
     shown: &[TrackRow],
     on: &[TrackRow],
-    rules: &Rules,
+    rules: &FolderRules,
     playlists: &[(String, Vec<String>, usize)],
     facts: &HashMap<&str, &crate::crates::Facts>,
 ) -> Insights {
@@ -406,7 +406,7 @@ pub fn build(
 }
 
 /// How close every two playlists are, by tracks, genre, artists and sound (`facts` by playlist line).
-pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)], facts: &HashMap<&str, &crate::crates::Facts>) -> Proximity {
+pub fn proximity(rows: &[TrackRow], rules: &FolderRules, playlists: &[(String, Vec<String>, usize)], facts: &HashMap<&str, &crate::crates::Facts>) -> Proximity {
     let by_rel: HashMap<&str, &TrackRow> = rows.iter().map(|r| (r.rel.as_str(), r)).collect();
     let tracks: Vec<HashSet<&str>> = playlists.iter().map(|(_, l, _)| l.iter().map(String::as_str).collect()).collect();
     // Per playlist: how many of its tracks carry each genre / artist.
@@ -417,11 +417,7 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
                 let mut m: HashMap<String, f64> = HashMap::new();
                 for rel in set {
                     let Some(r) = by_rel.get(rel) else { continue };
-                    let values = if field == "artist" {
-                        r.artists(rules, field)
-                    } else {
-                        rules.values(field, &r.tag(field).map(str::to_string).collect::<Vec<_>>())
-                    };
+                    let values = if field == "artist" { r.artists(rules, field) } else { r.values(rules, field) };
                     for v in values.into_iter().collect::<HashSet<_>>() {
                         *m.entry(v).or_default() += 1.0;
                     }
@@ -599,7 +595,7 @@ fn strongest(m: &HashMap<String, f64>, k: usize) -> Vec<String> {
 }
 
 /// The library figures, counted per track and per album folder; `listed`: the tracks in a playlist (their lines).
-pub fn library_stats(rows: &[TrackRow], rules: &Rules, listed: &HashSet<&str>) -> LibraryStats {
+pub fn library_stats(rows: &[TrackRow], rules: &FolderRules, listed: &HashSet<&str>) -> LibraryStats {
     #[derive(Default)]
     struct Album<'a> {
         formats: Vec<&'a str>,
@@ -630,7 +626,7 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules, listed: &HashSet<&str>) -
         if let Some(y) = year {
             a.year = Some(a.year.map_or(y, |m| m.min(y)));
         }
-        let values = |field: &str| rules.values(field, &r.tag(field).map(str::to_string).collect::<Vec<_>>());
+        let values = |field: &str| r.values(rules, field);
         let here = listed.contains(r.rel.as_str());
         a.tracks += 1;
         a.listed += usize::from(here);
@@ -716,6 +712,7 @@ mod tests {
 
     fn row(rel: &str, format: &str, kbps: u32, tags: &[(&str, &str)]) -> TrackRow {
         TrackRow {
+            folder: 0,
             rel: rel.into(),
             format: Some(format.into()),
             kbps: Some(kbps),
@@ -738,7 +735,7 @@ mod tests {
     #[test]
     fn library_figures_count_tracks_albums_and_split_tags() {
         let air1 = "AIR - Moon Safari (1998)/01 Sexy Boy.flac";
-        let s = library_stats(&library(), &Rules::default(), &HashSet::from([air1]));
+        let s = library_stats(&library(), &FolderRules::default(), &HashSet::from([air1]));
         assert_eq!((s.tracks, s.albums, s.duration_ms, s.bytes), (5, 3, 1_000_000, 5_000));
         assert_eq!(s.formats, vec![Count { name: "MP3".into(), n: 3 }, Count { name: "FLAC".into(), n: 2 }]);
         assert_eq!((s.lossless_albums, s.below_320_albums), (1, 1), "AIR lossless; Bonobo has a 192 kbps track");
@@ -844,7 +841,7 @@ mod tests {
     fn a_compilation_s_various_artists_is_no_artist() {
         let mut lib = library();
         lib.push(row("VA - Mix (2001)/01 a.mp3", "MP3", 320, &[("albumartist", "Various Artists"), ("artist", "AIR"), ("title", "a")]));
-        let s = library_stats(&lib, &Rules::default(), &HashSet::new());
+        let s = library_stats(&lib, &FolderRules::default(), &HashSet::new());
         assert_eq!(s.top_artists.iter().map(|a| (a.name.as_str(), a.n)).collect::<Vec<_>>(), [("AIR", 2), ("Bonobo", 2)]);
         assert_eq!(s.artists, 2);
     }
@@ -860,7 +857,7 @@ mod tests {
             ("Evening".to_string(), lines(&[air1, air2, "Gone/01.mp3"]), 1),
             ("Party".to_string(), lines(&[kiara]), 0),
         ];
-        let i = build(&library(), &library(), &library(), &Rules::default(), &playlists, &HashMap::new());
+        let i = build(&library(), &library(), &library(), &FolderRules::default(), &playlists, &HashMap::new());
         let p = &i.playlists;
         assert_eq!((p.playlists, p.distinct_tracks, p.missing), (3, 4, 1));
         assert_eq!((p.library_tracks_in_playlists, p.albums_without_playlist), (3, 1), "only the untagged album is in none");
@@ -869,7 +866,7 @@ mod tests {
         // Music switched off, another folder's tracks only (prefixed, as the service reads them): none in a playlist,
         // the playlists themselves and how close they are as before.
         let other: Vec<TrackRow> = library().into_iter().map(|mut r| (r.rel = format!("1:{}", r.rel), r).1).collect();
-        let o = build(&library(), &other, &other, &Rules::default(), &playlists, &HashMap::new());
+        let o = build(&library(), &other, &other, &FolderRules::default(), &playlists, &HashMap::new());
         assert_eq!((o.playlists.library_tracks_in_playlists, o.playlists.albums_without_playlist, o.playlists.most_shared.len()), (0, o.library.albums, 0));
         assert_eq!((o.playlists.playlists, o.proximity.playlists.len()), (3, 0), "the playlists are still counted; the map has none");
         let x = &i.proximity;
@@ -889,7 +886,7 @@ mod tests {
             t("c/1", "Electronic; Polka", "Polka Band"),
         ];
         let pl = |name: &str, lines: &[&str]| (name.to_string(), lines.iter().map(|s| s.to_string()).collect::<Vec<_>>(), 0);
-        let p = proximity(&rows, &Rules::default(), &[pl("Deep", &["a/1", "a/2"]), pl("Night", &["b/1"]), pl("Odd", &["c/1"])], &HashMap::new());
+        let p = proximity(&rows, &FolderRules::default(), &[pl("Deep", &["a/1", "a/2"]), pl("Night", &["b/1"]), pl("Odd", &["c/1"])], &HashMap::new());
         let link = |a, b| p.links.iter().find(|l| (l.a, l.b) == (a, b));
         let deep_night = link(0, 1).expect("same rare genre and artist");
         assert_eq!(deep_night.shared_tracks, 0);
@@ -933,7 +930,7 @@ mod tests {
         let by_line: HashMap<&str, &crate::crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
         let lines = |p: &str, n: usize| (1..=n).map(|i| format!("{p}/{i}")).collect::<Vec<_>>();
         let lists = vec![("Calm".into(), lines("a", 3), 0), ("Quiet".into(), lines("b", 3), 0), ("Loud".into(), lines("c", 3), 0), ("Club".into(), lines("d", 3), 0), ("One".into(), lines("e", 1), 0)];
-        let p = proximity(&[], &Rules::default(), &lists, &by_line);
+        let p = proximity(&[], &FolderRules::default(), &lists, &by_line);
         let sound = |a, b| p.links.iter().find(|l| (l.a, l.b) == (a, b)).map_or(0.0, |l| l.sound);
         assert!(sound(0, 1) > 0.8 && sound(2, 3) > 0.8, "alike: {} {}", sound(0, 1), sound(2, 3));
         assert!(sound(0, 2) < 0.05 && sound(1, 3) < 0.05, "unlike: {} {}", sound(0, 2), sound(1, 3));
@@ -955,7 +952,7 @@ mod tests {
         let lists = [pl("Roots", &["a/1", "a/2"]), pl("Mixed", &["b/1"]), pl("Other", &["c/1"])];
         let with = |extra: &str| {
             let rows = vec![t("a/1", "Roots Reggae"), t("a/2", extra), t("b/1", "Roots Reggae"), t("c/1", "Polka")];
-            proximity(&rows, &Rules::default(), &lists, &HashMap::new()).links.iter().find(|l| (l.a, l.b) == (0, 1)).map(|l| l.genre).unwrap()
+            proximity(&rows, &FolderRules::default(), &lists, &HashMap::new()).links.iter().find(|l| (l.a, l.b) == (0, 1)).map(|l| l.genre).unwrap()
         };
         assert!((with("Ska") - with("Roots Reggae")).abs() < 1e-9, "Ska, in Roots only, changes nothing");
     }

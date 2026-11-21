@@ -62,6 +62,7 @@ fn from_of(words: &[super::words::store::Word]) -> String {
             Source::Musicbrainz => "MusicBrainz",
             Source::Discogs => "Discogs",
             Source::Lastfm => "Last.fm",
+            Source::Bandcamp => "Bandcamp",
         })
         .collect();
     named.join(", ")

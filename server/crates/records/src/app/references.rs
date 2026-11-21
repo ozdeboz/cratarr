@@ -397,6 +397,8 @@ where
 pub struct ReadMore {
     pub also: Vec<Ref>,
     pub artists: Vec<(Ref, String)>,
+    /// A Bandcamp album page's tags, as it lists them (GEN.60: kept by `read_reference_kept`).
+    pub tags: Vec<String>,
 }
 
 /// A list read through a reference (`tracklist`'s reader): its tracks, the release they were read from where the reference was a
@@ -406,7 +408,7 @@ pub type Read = (Vec<RefTrack>, Option<Ref>, ReadMore);
 /// What a MusicBrainz release's answer says besides its list (F14.5): its Bandcamp album page, where MusicBrainz links one.
 pub fn musicbrainz_more(links: &[String]) -> ReadMore {
     let page = links.iter().find_map(|u| crate::bandcamp::album_page(u));
-    ReadMore { also: page.map(|p| Ref::new("bandcamp", "album", &p)).into_iter().collect(), artists: Vec::new() }
+    ReadMore { also: page.map(|p| Ref::new("bandcamp", "album", &p)).into_iter().collect(), ..ReadMore::default() }
 }
 
 /// What a Discogs release's answer says besides its list (F15, F18.2): its master, where it was read as a release (`as_release`),
@@ -421,7 +423,7 @@ pub fn discogs_more(v: &serde_json::Value, as_release: bool) -> ReadMore {
         .filter(|(_, name)| !name.is_empty() && !name.eq_ignore_ascii_case("various"))
         .map(|(id, name)| (Ref::new("discogs", "artist", &id.to_string()), name))
         .collect();
-    ReadMore { also: master.into_iter().collect(), artists }
+    ReadMore { also: master.into_iter().collect(), artists, ..ReadMore::default() }
 }
 
 /// How long a record's list its page asked for and could not have is left before a page asks for it again (C54), unless a source
@@ -719,13 +721,31 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
             None => Ok(None),
         },
         ("bandcamp", "album") => match crate::bandcamp::Bandcamp::get().album(&r.value).await {
-            Ok(a) => Ok(Some((list_of_bandcamp(&a), None, ReadMore::default()))),
+            Ok(a) => Ok(Some((list_of_bandcamp(&a), None, ReadMore { tags: a.tags, ..ReadMore::default() }))),
             Err(e) if crate::bandcamp::not_read(&e) => Err(e),
             // Bandcamp has no such page (`Bandcamp::text` says its status in words).
             Err(e) if e.to_string().starts_with("Bandcamp answered 404") => Ok(None),
             Err(e) => Err(e),
         },
         _ => Ok(None),
+    }
+}
+
+/// The reader of a page's and Soulseek's reads: `read_reference`, keeping what a record's own Bandcamp page says of it besides
+/// its list as it is read (GEN.60): its tags, as Bandcamp's words of the record whose reference the page is (`words::keep_bandcamp`).
+/// A page read so is the record's own reference (`main_ref`), never a candidate. Without Cratarr's own library, `read_reference`.
+pub fn read_reference_kept(served: Option<Arc<crate::serve::Serve>>) -> impl Fn(Ref) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Read>>> + Send>> + Send + Sync + 'static {
+    move |r: Ref| {
+        let served = served.clone();
+        Box::pin(async move {
+            let read = read_reference(r.clone()).await;
+            if let Ok(Some((_, _, more))) = &read
+                && r.source == "bandcamp"
+            {
+                super::words::keep_bandcamp_read(served, &r.value, &more.tags).await;
+            }
+            read
+        })
     }
 }
 
@@ -1100,10 +1120,17 @@ async fn of_served(served: &Option<Arc<crate::serve::Serve>>, album: &str) -> Re
             read.push(("bandcamp".into(), list));
         }
     }
+    // GEN.60: the record's own page, read: its tags kept as its Bandcamp words. A page found now is a candidate's: nothing.
+    let own = kept_page.as_ref().and(page_read.as_ref()).map(|a| (a.url.clone(), a.tags.clone()));
     let found = page.filter(|_| kept_page.is_none());
     let (s, a) = (served.clone(), album.to_string());
     let k = crate::run::spawn_blocking(move || -> Result<Kept> {
         let cat = s.catalogue();
+        if let Some((p, tags)) = &own
+            && let Err(e) = super::words::keep_bandcamp(&s, p, tags)
+        {
+            tracing::debug!("references: Bandcamp's tags of {a} not kept: {e:#}");
+        }
         if let Some(p) = &found {
             cat.set_reference(&a, &Ref::new("bandcamp", "album", p), "search")?;
         }

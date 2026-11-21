@@ -512,8 +512,15 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     let libraries = &report["parts"]["libraries"];
     assert_eq!((libraries["tables"][0]["before"].as_u64(), libraries["tables"][2]["after"].as_u64()), (Some(1), Some(1)), "{libraries}");
     assert_eq!(libraries["unmatched"][1]["count"].as_u64(), Some(0), "{libraries}");
+    // And 0.18's step (GEN.62): the library a copy of the install's tag rules (here the defaults, as the file set none), the
+    // file 0.18's.
+    let rules = &report["parts"]["tag_rules"];
+    assert_eq!(rules["tables"][0]["after"].as_u64(), Some(1), "{rules}");
+    let copied = json!({ "artist_separators": ["/", ";"], "genre_separators": ["/", ";", ","], "artist_keep": [], "genre_keep": [] });
+    assert_eq!(rules["copied"], copied);
     let file: serde_json::Value = serde_json::from_slice(&std::fs::read(data.join("settings.json")).unwrap()).unwrap();
-    assert_eq!((file["version"].as_u64(), file["sources"][0]["libraries"].clone()), (Some(4), json!([{ "id": folder, "kind": "main" }])));
+    assert_eq!((file["version"].as_u64(), file["sources"][0]["libraries"].clone()), (Some(5), json!([{ "id": folder, "kind": "main", "tag_rules": copied }])));
+    assert_eq!(file["tag_rules"]["genre_separators"], copied["genre_separators"], "the default for new libraries and own music the same");
     s.stop();
 
     // Started again: nothing is brought in twice.
@@ -527,7 +534,8 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A crate of the fixture's Undated, four tracks of one genre, on a server of its own: (server, root, the crate, its tracks).
+/// A crate of the fixture's Undated, four tracks of one style (their files' GENRE "Downtempo", a style by GEN's sort), on a server
+/// of its own: (server, root, the crate, its tracks).
 async fn a_crate_of_four(name: &str) -> (Server, PathBuf, String, Vec<String>) {
     let root = temp(name);
     let (music, data) = (root.join("music"), root.join("data"));
@@ -537,8 +545,8 @@ async fn a_crate_of_four(name: &str) -> (Server, PathBuf, String, Vec<String>) {
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
     s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
-    let genre = json!([{ "axis": "genre", "value": { "kind": "any_of", "values": ["Downtempo"] } }]);
-    let made = s.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Downtempo", "conditions": genre })).await;
+    let style = json!([{ "axis": "style", "value": { "kind": "any_of", "values": ["Downtempo"] } }]);
+    let made = s.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Downtempo", "conditions": style })).await;
     let id = made["id"].as_str().unwrap().to_string();
     let tracks = row_ids(&s.get(&format!("/api/crates/{id}/rows")).await);
     assert_eq!(tracks.len(), 4);
@@ -674,10 +682,10 @@ impl Banks {
         db.query_row("SELECT count(*) FROM track_moved WHERE followed = 0", [], |r| r.get(0)).unwrap()
     }
 
-    /// A crate of the four tracks: the files' own genre.
+    /// A crate of the four tracks: the files' own GENRE, "Riverside", a style by GEN's sort.
     async fn crate_of(&self, who: &Caller<'_>) -> String {
-        let genre = json!([{ "axis": "genre", "value": { "kind": "any_of", "values": ["Riverside"] } }]);
-        let made = who.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Riverside", "conditions": genre })).await;
+        let style = json!([{ "axis": "style", "value": { "kind": "any_of", "values": ["Riverside"] } }]);
+        let made = who.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Riverside", "conditions": style })).await;
         let id = made["id"].as_str().unwrap().to_string();
         assert_eq!(in_order(row_ids(&who.get(&format!("/api/crates/{id}/rows")).await)), in_order([vec![self.stays.clone(), self.goes.clone()], self.others.clone()].concat()));
         id
@@ -4006,13 +4014,15 @@ async fn a_tracks_tag_reaches_its_file_in_every_copy_by_its_track_end_to_end() {
     let (crossing, return_) = (music.join(SHORES).join("02 Crossing.flac"), music.join(SHORES).join("03 Return.flac"));
     assert_eq!(genre(&renamed).as_deref(), Some("Electronic"));
 
-    s.ok(reqwest::Method::PUT, &format!("/api/track/cratarr/{}/words", songs[1]), json!({ "genre": ["Dub"] })).await;
+    // A genre of the 26: a word typed into the genre row edits it (GEN.25; "Dub", a style, would go to the style row).
+    s.ok(reqwest::Method::PUT, &format!("/api/track/cratarr/{}/words", songs[1]), json!({ "genre": ["Jazz"] })).await;
     let sheet = "fix:words:genre";
-    s.until("the word on the sheet", Duration::from_secs(60), || async { s.get(&format!("/api/file-changes/plans/{sheet}")).await["records"].as_array().is_some_and(|r| !r.is_empty()) }).await;
+    // The word itself on the sheet: other records may be listed already, their files' GENRE holding a style (GEN's sort).
+    s.until("the word on the sheet", Duration::from_secs(60), || async { s.get(&format!("/api/file-changes/plans/{sheet}")).await["records"].to_string().contains("\"Jazz\"") }).await;
     s.write_sheet(sheet).await;
     let run = s.done_run(None).await;
     assert_eq!(run["failed"], json!([]), "{run}");
-    assert_eq!((genre(&crossing).as_deref(), genre(&renamed).as_deref()), (Some("Dub"), Some("Dub")), "its file in both copies");
+    assert_eq!((genre(&crossing).as_deref(), genre(&renamed).as_deref()), (Some("Jazz"), Some("Jazz")), "its file in both copies");
     assert_eq!((genre(&return_).as_deref(), genre(&other).as_deref()), (Some("Electronic"), Some("Electronic")), "and no other track's");
     let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
     assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");

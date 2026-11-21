@@ -1396,7 +1396,7 @@ mod tests {
         served.library.set_kinds(vec![(0, LibraryKind::Main), (1, LibraryKind::Incoming), (2, LibraryKind::Own), (3, LibraryKind::Own)]);
         served.attach_catalogue(c.clone());
         let build = || {
-            let rules = crate::catalogue::Rules::default();
+            let rules = crate::catalogue::FolderRules::default();
             let (_, print) = served.library.change(&c, &rules).unwrap();
             served.library.build_from(&c, &rules, &print).unwrap();
         };

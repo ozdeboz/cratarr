@@ -173,48 +173,50 @@ fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'
 }
 
 /// The albums whose files' genres or artists a rule names otherwise (0.9.7): the files' tags as the catalogue read
-/// them, held against the rules' aliases. None without aliases.
+/// them, each split by its library's encoding (OQ-GEN-22), held against the install's aliases. None without aliases.
 pub fn ruled_albums(served: &crate::serve::Serve) -> Result<Vec<String>> {
     let rules = served.rules();
-    if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
+    if rules.install().genre_aliases.is_empty() && rules.install().artist_aliases.is_empty() {
         return Ok(Vec::new());
     }
     let cat = served.catalogue();
-    // Artists split as the library splits them (a slash only spaced, `artist_separators_as_used`).
-    let artist_seps = crate::catalogue::normalise::artist_separators_as_used(&rules.artist_separators);
     let mut places = Vec::new();
     for (folder, rel, name, value) in cat.tag_values(&["genre", "artist", "albumartist"])? {
-        let aliases = if name == "genre" { &rules.genre_aliases } else { &rules.artist_aliases };
-        let seps = if name == "genre" { &rules.genre_separators } else { &artist_seps };
-        let keep = if name == "genre" { &rules.genre_keep } else { &rules.artist_keep };
-        if crate::catalogue::normalise::split(&value, seps, keep).iter().any(|v| crate::catalogue::normalise::aliased(v, aliases) != v.trim()) {
+        let (parts, aliases) = parts_of(rules.encoding(folder), rules.install(), &name, &value);
+        if parts.iter().any(|v| crate::catalogue::normalise::aliased(v, aliases) != v.trim()) {
             places.push((folder, rel));
         }
     }
     served.library.albums_of_files(&places)
 }
 
+/// A value of `field` in its parts as its library writes them, with the aliases that name them: a genre by the one split
+/// (the owner's exceptions, then the library's genre separators and keep list), artists as the library splits them (a slash
+/// only spaced, `artist_separators_as_used`).
+fn parts_of<'r>(encoding: &crate::catalogue::Encoding, rules: &'r crate::catalogue::Rules, field: &str, value: &str) -> (Vec<String>, &'r [crate::catalogue::normalise::Alias]) {
+    if field == "genre" {
+        return (encoding.words(value), &rules.genre_aliases);
+    }
+    let seps = crate::catalogue::normalise::artist_separators_as_used(&encoding.artist_separators);
+    (crate::catalogue::normalise::split(value, &seps, &encoding.artist_keep), &rules.artist_aliases)
+}
+
 /// An album's rule fix: its tracks' genres and artists as the rules name them, where any differs (each value split as
-/// the rules split it, aliased, written joined by "; "); certain, the rules being the administrator's own.
+/// its library splits it, aliased, written joined by "; "); certain, the rules being the administrator's own.
 pub fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
     let rules = served.rules();
-    if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
+    if rules.install().genre_aliases.is_empty() && rules.install().artist_aliases.is_empty() {
         return Ok(None);
     }
-    let artist_seps = crate::catalogue::normalise::artist_separators_as_used(&rules.artist_separators);
-    let fields: [(&'static str, &[crate::catalogue::normalise::Alias], &[String], &[String]); 3] = [
-        ("genre", &rules.genre_aliases, &rules.genre_separators, &rules.genre_keep),
-        ("artist", &rules.artist_aliases, &artist_seps, &rules.artist_keep),
-        ("albumartist", &rules.artist_aliases, &artist_seps, &rules.artist_keep),
-    ];
-    let names: Vec<&str> = fields.iter().map(|f| f.0).collect();
+    let names = ["genre", "artist", "albumartist"];
     let (mut writes, mut said) = (Vec::new(), Vec::<String>::new());
-    for path in track_paths(served, album, at)? {
-        let now = values(&path, &names)?;
+    for track in super::renumber::files_in(served, album, at)? {
+        let encoding = rules.encoding(track.place.0);
+        let now = values(&track.path, &names)?;
         let mut set = Vec::new();
-        for ((name, aliases, seps, keep), value) in fields.iter().zip(now) {
+        for (name, value) in names.iter().zip(now) {
             let Some(value) = value else { continue };
-            let parts = crate::catalogue::normalise::split(&value, seps, keep);
+            let (parts, aliases) = parts_of(encoding, rules.install(), name, &value);
             let named: Vec<String> = parts.iter().map(|p| crate::catalogue::normalise::aliased(p, aliases)).collect();
             if named.iter().zip(&parts).any(|(n, p)| n != p.trim()) {
                 for (n, p) in named.iter().zip(&parts).filter(|(n, p)| *n != p.trim()) {
@@ -227,7 +229,7 @@ pub fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, Str
             }
         }
         if !set.is_empty() {
-            writes.push((path, set));
+            writes.push((track.path, set));
         }
     }
     let Some((first, rest)) = said.split_first() else { return Ok(None) };

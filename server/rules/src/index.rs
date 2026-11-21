@@ -147,7 +147,7 @@ pub struct Track {
     /// as it does there.
     pub artist_ids: Vec<i64>,
     /// What the crates read of it, as the server has it. Its `track` and `album` are this row's, its `sound` lies in [`Sounds`],
-    /// and `file_words` are the server's own, gone once read.
+    /// and `read_words` are the server's own, gone once read.
     pub facts: Facts,
 }
 
@@ -1289,7 +1289,7 @@ impl Packed {
             release_types: words.all(c.release_types.of(row)),
             album,
             labels: words.all(c.labels.of(row)),
-            file_words: None,
+            read_words: None,
         }
     }
 
@@ -2009,7 +2009,7 @@ pub fn made_up(tracks: usize, seed: u64) -> (Rows, Vec<(i64, Vec<f32>)>) {
                 release_types: types.clone(),
                 album: Some(Arc::from(album_id(record))),
                 labels: kept_labels.clone(),
-                file_words: None,
+                read_words: None,
             };
             let artist_ids = if compilation { vec![artist.id] } else { vec![artist.id, album_artist.id] };
             out.tracks.push(Track { id, record, disc: (t % 7 == 0).then_some(1), number: Some(number), title, artist: Some(credit), artist_ids, facts });
@@ -2152,7 +2152,7 @@ mod tests {
             release_types: words(&["EP", "Live"]),
             album: Some(Arc::from("al-6")),
             labels: words(&["Warp"]),
-            file_words: None,
+            read_words: None,
         };
         let track = Track { id: 3, record: 6, disc: Some(2), number: Some(11), title: "Tïtle".into(), artist: Some("Name feat. Other".into()), artist_ids: vec![5, 5], facts };
         let rows = Rows { libraries: vec![library, other], artists: vec![artist], records: vec![record], tracks: vec![track] };

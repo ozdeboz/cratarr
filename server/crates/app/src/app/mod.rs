@@ -37,6 +37,9 @@ pub mod import_files;
 mod every_copy;
 #[cfg(test)]
 mod file_words_tests;
+// GEN's tests on the whole app (lane C's run 2): Bandcamp's tags from a record's own page.
+#[cfg(test)]
+mod gen_words_tests;
 pub mod runtime;
 mod app_search;
 mod app_requests;
@@ -49,6 +52,8 @@ mod playing_tests_top;
 // The proof that moving the rules changes no answer (decision 0101 point 27), above every area it reads.
 #[cfg(test)]
 mod radio_proof;
+#[cfg(test)]
+mod tag_rules_tests;
 pub mod tracks;
 
 use std::sync::Arc;

@@ -557,7 +557,7 @@ mod tests {
     #[test]
     #[ignore = "slow (encodes every track): the Dockerfile's e2e stage"]
     fn the_whole_layout_holds_each_case_of_the_same_record() {
-        use crate::catalogue::{Catalogue, Rules};
+        use crate::catalogue::{Catalogue, FolderRules};
         use crate::serve::library::{FolderRows, album_copies};
         let d = std::env::temp_dir().join(format!("cratarr-layout-{}", std::process::id()));
         let albums = make_layout(&d).unwrap();
@@ -575,7 +575,7 @@ mod tests {
         let read = || -> Vec<FolderRows> {
             cat.folders().iter().map(|(folder, root)| FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect()
         };
-        cat.assign_records(&album_copies(&read(), &Rules::default())).unwrap();
+        cat.assign_records(&album_copies(&read(), &FolderRules::default())).unwrap();
         let folders = read();
         let records = |album: &str| -> (usize, std::collections::BTreeSet<i64>) {
             let of: Vec<&FolderRows> = folders.iter().filter(|f| f.rows.iter().any(|r| r.first("album") == Some(album))).collect();

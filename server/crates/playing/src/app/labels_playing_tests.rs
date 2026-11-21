@@ -45,7 +45,7 @@ async fn two_releases_of_one_master_become_one_record_once_the_master_is_known()
     cat.keep_label_rows(label, "discogs", &rows, None, true, 1).unwrap();
     let read = |r: Ref| {
         let track = |n: u32, t: &str| crate::catalogue::identity::RefTrack { disc: 1, position: n, title: t.into(), length_ms: Some(200_000), recording: None };
-        let more = crate::app::references::ReadMore { also: vec![Ref::new("discogs", "master", "5000001")], artists: Vec::new() };
+        let more = crate::app::references::ReadMore { also: vec![Ref::new("discogs", "master", "5000001")], ..Default::default() };
         std::future::ready(Ok(Some((vec![track(1, &format!("Lamplight {}", r.value)), track(2, "Morning")], None, more))))
     };
     let t = crate::app::moment::now_secs();

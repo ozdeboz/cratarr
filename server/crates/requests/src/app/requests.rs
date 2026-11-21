@@ -345,8 +345,9 @@ async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist
         _ => None,
     };
     let named = crate::bandcamp::named_by_page(read.as_ref(), artist, album);
-    // Its credit split as the record pass splits a file's (W6, the library's rules).
-    let artists = serve.rules().values("albumartist", std::slice::from_ref(&named.artist));
+    // Its credit split as the record pass splits a file's (W6), by the default rules: a value of no file is no library's
+    // (OQ-GEN-22).
+    let artists = serve.rules().install().values("albumartist", std::slice::from_ref(&named.artist));
     crate::run::spawn_blocking(move || -> Result<i64> {
         let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
         let record = record_of_album_paged(&cat, group.as_deref(), named, artists, year, cover, page.clone())?;
@@ -3276,7 +3277,7 @@ pub mod tests {
         crate::catalogue::records::data_0_16(&d).unwrap();
         let serve = Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music")]).unwrap()));
-        super::super::step_017::run(serve.catalogue(), &serve.userdata, &[], &crate::catalogue::Rules::default()).unwrap();
+        super::super::step_017::run(serve.catalogue(), &serve.userdata, &[], &crate::catalogue::FolderRules::default()).unwrap();
         let r = serve.userdata.requests(None, Some(APPROVED), LIST).unwrap().into_iter().find(|r| r.id == 12).unwrap();
         assert_eq!(r.release_group, None, "asked with none");
         let lidarr = Wanting::default();
@@ -4265,7 +4266,7 @@ pub mod tests {
         rusqlite::Connection::open(d.join("userdata.sqlite")).unwrap().execute_batch(more).unwrap();
         let serve = Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music")]).unwrap()));
-        super::super::step_017::run(serve.catalogue(), &serve.userdata, &[], &crate::catalogue::Rules::default()).unwrap();
+        super::super::step_017::run(serve.catalogue(), &serve.userdata, &[], &crate::catalogue::FolderRules::default()).unwrap();
         for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
             serve.users.create(name, "pw", admin).unwrap();
         }

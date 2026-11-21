@@ -1158,7 +1158,8 @@ export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
  *  music waiting to be heard and added. Own music is no setting (its folder's, 0101 point 9). Its own settings
  *  (decision 0034): its quality limit, its dot's colour and its name; an Incoming library's fetcher, whose records come
  *  into it (decision 0096: one Incoming library per fetcher), and where Add to puts them by default (`keep_to`, a main
- *  library; none: the first; 0101 point 2). */
+ *  library; none: the first; 0101 point 2); how its files write several values in one tag (`tag_rules`, its own since
+ *  0.18; one added starts from the default as it stands). */
 export type LibrarySetting = {
   /** Its id: a server's own; Cratarr's own library's, its folder's, kept for life (CU17). */
   id: string;
@@ -1171,6 +1172,7 @@ export type LibrarySetting = {
   name?: string | null;
   fetcher?: Fetcher | null;
   keep_to?: string | null;
+  tag_rules?: TagEncoding | null;
 };
 
 /** A server library as it is used: its kind in the list, someone's own music, or not used. */
@@ -1243,14 +1245,18 @@ export type NamingView = {
 export const checkNaming = (template?: string) =>
   quietly<NamingView>(`/api/settings/naming${template === undefined ? '' : `?template=${encodeURIComponent(template)}`}`);
 
-/** How tag values are split when read; the files are never changed. */
-export type TagRules = {
+/** How a library's files write several values in one tag, read so; the files are never changed. A library's own (its
+ *  `LibrarySetting`), and the default for new libraries and own music (`TagRules`). */
+export type TagEncoding = {
   artist_separators: string[];
   genre_separators: string[];
   /** Names containing a separator that are one artist (AC/DC). */
   artist_keep: string[];
   /** Genres containing a separator that are one genre ("Funk / Soul"). */
   genre_keep: string[];
+};
+/** The install's tag rules: the default encoding, and the names given otherwise, every library's. */
+export type TagRules = TagEncoding & {
   /** Names given otherwise (0.9.7): one `from` an alias ("Hip-Hop" → "Hip Hop"), several a merge; in what the library
    *  shows, in harvested words, and as a fix written into the files. */
   genre_aliases?: TagAlias[];
@@ -2675,7 +2681,7 @@ export const trackPlayed = (source: string, id: string) => quietly<{ counted: bo
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
 /** Decision 0097's words: a kind, a source (strongest first in a word's `sources`). */
 export type WordKind = 'genre' | 'style' | 'mood' | 'tag';
-export type WordSource = 'hand' | 'files' | 'audiomuse' | 'household' | 'musicbrainz' | 'discogs' | 'lastfm';
+export type WordSource = 'hand' | 'files' | 'audiomuse' | 'household' | 'musicbrainz' | 'discogs' | 'lastfm' | 'bandcamp';
 /** A kind's words, strongest first; `hand`: set by hand (exactly the hand's list). */
 export type KindWords = { kind: WordKind; hand: boolean; words: { word: string; sources: WordSource[] }[] };
 /** A record's words (the album view's `words`, the server's one store): its kinds that have any, in the order genre,

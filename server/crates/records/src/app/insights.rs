@@ -65,7 +65,7 @@ impl InsightsService {
             Ok(store) => store.snapshot().await?,
             Err(_) => Vec::new(),
         };
-        let (catalogue, rules) = (self.lib.catalogue(), self.lib.tag_rules());
+        let (catalogue, rules) = (self.lib.catalogue(), self.lib.folder_rules());
         let folders = catalogue.folders();
         let shown: Vec<i64> = match self.folders_on(want, without) {
             Some(on) => {

@@ -2,11 +2,12 @@
 //! every source, merged in `store` and read by every reader through the crates' facts (`build`: each file's facts take
 //! its record's words and its own), and by a record's view and a word's menu (`stored`).
 //!
-//! - **Sources**: the files' tags (Genre, STYLE, MOOD read again, Grouping), AudioMuse's styles and moods (mood is
-//!   AudioMuse's alone), MusicBrainz's genres and tags, Discogs' genres and styles, Last.fm's tags (by album, and by
-//!   artist for each of the artist's albums at half their weight), the household's album tags, and what is set by
-//!   hand (0089).
-//! - **Kind** by the word, not by who said it (`store::Library`); **weight** and floor as 0.9.7's (`store::FLOOR`).
+//! - **Sources**: the files' tags (Genre, STYLE, MOOD read again, Grouping), AudioMuse's styles with their scores and its
+//!   moods (mood is AudioMuse's alone), MusicBrainz's genres and tags, Discogs' genres and styles, Last.fm's tags (by album,
+//!   and by artist for each of the artist's albums at half their weight), a record's own Bandcamp page's tags (kept as the
+//!   page is read: `keep_bandcamp`), the household's album tags, and what is set by hand (0089).
+//! - **Kind** by the word, not by who said it (`store::Library`: the 26 of `shared/genres.json`, the callers' styles, the
+//!   rest tags); **weight** and floor as 0.9.7's (`store::FLOOR`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -18,36 +19,6 @@ pub mod store;
 
 /// The kinds, in search's order.
 pub const KINDS: [&str; 4] = ["genre", "style", "mood", "tag"];
-
-/// The broad genres (Discogs' top level, and the names others give its parts): a word among these is a genre.
-const GENRES: [&str; 26] = [
-    "rock",
-    "electronic",
-    "jazz",
-    "hip hop",
-    "funk soul",
-    "funk",
-    "soul",
-    "classical",
-    "pop",
-    "folk world country",
-    "folk",
-    "world",
-    "country",
-    "reggae",
-    "latin",
-    "blues",
-    "stage screen",
-    "soundtrack",
-    "non music",
-    "children s",
-    "brass military",
-    "metal",
-    "punk",
-    "r b",
-    "indie",
-    "alternative",
-];
 
 /// An artist's words count for each of their albums at this share.
 const ARTIST_SHARE: f32 = 0.5;
@@ -176,15 +147,15 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
                 .iter()
                 .map(|&i| {
                     let f = &facts[i];
-                    let (style, mood) = f.file_words.as_deref().cloned().unwrap_or_default();
+                    let read = f.read_words.as_deref().cloned().unwrap_or_default();
                     TrackIn {
                         id: track_id(f),
                         genre: f.genres.clone(),
-                        style,
-                        mood,
+                        style: read.style,
+                        mood: read.mood,
                         tag: f.tags.clone(),
                         heard: f.clap_moods.is_some(),
-                        heard_styles: f.styles.clone(),
+                        heard_styles: read.heard,
                         heard_moods: f.moods.clone(),
                         hand: own.get(&track_id(f)).cloned().unwrap_or_default(),
                     }
@@ -202,7 +173,7 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
             let list = |k: Kind| -> Vec<String> { w.of_track(&t.id, k).iter().map(|x| x.word.clone()).collect() };
             let f = &mut facts[i];
             (f.genres, f.styles, f.moods, f.tags) = (list(Kind::Genre), list(Kind::Style), list(Kind::Mood), list(Kind::Tag));
-            f.file_words = None;
+            f.read_words = None;
         }
         for k in w.kinds.iter().chain(w.tracks.iter().flat_map(|t| t.kinds.iter())) {
             for x in &k.words {
@@ -223,6 +194,96 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
     }
     *STORED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(out));
     Ok(())
+}
+
+/// A record's words as its Edit sets them by hand (0089's fields: `genres`, `styles`, … each a list, or null to reset; GEN.25):
+/// each word typed into the genre or the style row routed by the word into its own row as the record shows it now (`stored`), so a
+/// routed word edits that row, never a list of that word alone, and a row that gains or loses no word of its own kind is left as
+/// it is. The other fields as sent.
+pub fn record_by_hand(stored: &Stored, album: &str, facts: &[(String, Option<serde_json::Value>)]) -> Vec<(String, Option<serde_json::Value>)> {
+    let list = |field: &str| -> Option<Vec<String>> { facts.iter().find(|(f, _)| f == field)?.1.clone().and_then(|v| serde_json::from_value(v).ok()) };
+    let (genres, styles) = (list("genres"), list("styles"));
+    if genres.is_none() && styles.is_none() {
+        return facts.to_vec();
+    }
+    let shown = |kind: store::Kind| -> Vec<String> {
+        stored.records.get(album).and_then(|w| w.kinds.iter().find(|k| k.kind == kind)).map(|k| k.words.iter().map(|x| x.word.clone()).collect()).unwrap_or_default()
+    };
+    let routed = store::route(&shown(store::Kind::Genre), &shown(store::Kind::Style), genres.as_deref(), styles.as_deref());
+    let made = [("genres", routed.genres), ("styles", routed.styles)];
+    // The rows sent go; each list made comes in its row's place; a reset of a row nothing was routed into stays.
+    let mut out: Vec<(String, Option<serde_json::Value>)> = facts
+        .iter()
+        .filter(|(f, v)| match f.as_str() {
+            "genres" | "styles" => v.is_none() && !made.iter().any(|(m, l)| m == f && l.is_some()),
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    out.extend(made.into_iter().filter_map(|(f, l)| Some((f.to_string(), Some(serde_json::json!(l?))))));
+    out
+}
+
+/// A track's own words as its Edit sets them (`genre`, `style`, … each a list, or none to go back to its record's; GEN.25): routed
+/// as a record's are (`record_by_hand`), by the rows the track shows now (`album`: its record's id).
+pub fn track_by_hand(stored: &Stored, album: Option<&str>, track: &str, set: Vec<(String, Option<Vec<String>>)>) -> Vec<(String, Option<Vec<String>>)> {
+    let sent = |kind: &str| set.iter().find(|(k, _)| k == kind).and_then(|(_, l)| l.clone());
+    let (genres, styles) = (sent("genre"), sent("style"));
+    if genres.is_none() && styles.is_none() {
+        return set;
+    }
+    let words = album.and_then(|a| stored.records.get(a));
+    let shown = |kind: store::Kind| -> Vec<String> { words.map(|w| w.of_track(track, kind).iter().map(|x| x.word.clone()).collect()).unwrap_or_default() };
+    let routed = store::route(&shown(store::Kind::Genre), &shown(store::Kind::Style), genres.as_deref(), styles.as_deref());
+    let made = [("genre", routed.genres), ("style", routed.styles)];
+    let mut out: Vec<(String, Option<Vec<String>>)> = set
+        .into_iter()
+        .filter(|(k, l)| match k.as_str() {
+            "genre" | "style" => l.is_none() && !made.iter().any(|(m, x)| m == k && x.is_some()),
+            _ => true,
+        })
+        .collect();
+    out.extend(made.into_iter().filter_map(|(k, l)| Some((k.to_string(), Some(l?)))));
+    out
+}
+
+/// What a record's own Bandcamp page says of it, kept as it is read (GEN.60, OQ-GEN-25): where the page Cratarr just read on
+/// one of its paths (`page`, with its `tags`) is a record's Bandcamp album reference, its tags become Bandcamp's words of that
+/// record, each a tag at 1.0 as the page lists it (the sort is the store's, at read time). A page no record holds (a candidate,
+/// Discover's, a label's) keeps nothing; Bandcamp switched off, nothing; what is kept already is not written again. Whether
+/// anything was kept. Blocking.
+pub fn keep_bandcamp(serve: &crate::serve::Serve, page: &str, tags: &[String]) -> Result<bool> {
+    use crate::userdata::words::RawWord;
+    if !crate::app::switches::is_on(crate::app::switches::BANDCAMP) {
+        return Ok(false);
+    }
+    let Some(page) = crate::bandcamp::album_page(page) else { return Ok(false) };
+    let mut words: Vec<RawWord> = tags.iter().map(|t| RawWord { word: t.clone(), kind: "tag".into(), weight: 1.0 }).collect();
+    words.sort_by(|a, b| a.word.cmp(&b.word));
+    let mut kept = false;
+    for subject in serve.catalogue().subject_of(&crate::catalogue::records::Ref::new("bandcamp", "album", &page))? {
+        if crate::serve::ids::record_number(&subject).is_none() {
+            continue;
+        }
+        let subject = format!("album:{subject}");
+        if serve.userdata.words_of(&subject, "bandcamp")? != words {
+            serve.userdata.set_words(&subject, "bandcamp", &words, true, crate::app::moment::now_secs())?;
+            kept = true;
+        }
+    }
+    Ok(kept)
+}
+
+/// [`keep_bandcamp`] beside a read Cratarr made on its own path (the panel's, a preview's, a list's), off the request's thread:
+/// what it can't keep is logged, never the read's failure.
+pub async fn keep_bandcamp_read(serve: Option<Arc<crate::serve::Serve>>, page: &str, tags: &[String]) {
+    let Some(serve) = serve else { return };
+    let (page, tags) = (page.to_string(), tags.to_vec());
+    match crate::run::spawn_blocking(move || keep_bandcamp(&serve, &page, &tags)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::debug!("Bandcamp's tags not kept: {e:#}"),
+        Err(e) => tracing::debug!("Bandcamp's tags not kept: {e}"),
+    }
 }
 
 /// A record's words set by hand (0089's fields), by kind.
@@ -306,7 +367,7 @@ mod tests {
     fn words_follow_the_record() {
         let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         let folder = FolderRows { folder: 0, root: "/music".to_string(), rows: vec![track(1, 7, "Said"), track(2, 8, "Set")] };
-        serve.library.refresh(&[folder], &crate::catalogue::Rules::default()).unwrap();
+        serve.library.refresh(&[folder], &crate::catalogue::FolderRules::default()).unwrap();
         let said = |subject: &str, word: &str| serve.userdata.set_words(subject, "discogs", &[RawWord { word: word.to_string(), kind: "genre".to_string(), weight: 1.0 }], true, 1).unwrap();
         said("album:al-7", "Electronic");
         said(&format!("album:{OLD}"), "Rock");
@@ -317,5 +378,35 @@ mod tests {
         build(&serve, &serve.library.song_album_map().unwrap(), &mut facts).unwrap();
         assert_eq!((facts[0].genres.as_slice(), facts[0].tags.as_slice()), (["Electronic".to_string()].as_slice(), ["evening".to_string()].as_slice()));
         assert_eq!(facts[1].genres, ["Jazz"], "set by hand");
+    }
+
+    /// GEN.25, the Edit's side: a typed word kept in its own row's hand list, made from the row as the record shows it, by what
+    /// the Edit's handlers store (`record_by_hand` into the record's facts, `track_by_hand` into a track's own words).
+    #[test]
+    fn an_edits_typed_word_is_kept_in_its_own_rows_list() {
+        use super::store::{RecordIn, Said, Source, TrackIn};
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        // Lantern Rooms shows the genres Electronic and Dance (Deep House's link) and the style Deep House; Pale Dock Discogs' five
+        // styles, and their links' Electronic, Dance and Reggae (the scenarios' fixture map).
+        let lantern = RecordIn { id: "al-1".into(), tracks: vec![TrackIn { id: "t1".into(), genre: vec!["Electronic".into(), "Deep House".into()], ..TrackIn::default() }], ..RecordIn::default() };
+        let said = ["Abstract", "Deep House", "Dub", "Electro", "Glitch"].iter().map(|w| Said { source: Source::Discogs, word: w.to_string(), raw_kind: "style".into(), weight: 1.0 }).collect();
+        let pale = RecordIn { id: "al-2".into(), tracks: vec![TrackIn { id: "t2".into(), ..TrackIn::default() }], said, ..RecordIn::default() };
+        let lib = store::Library::of(&[lantern.clone(), pale.clone()], &HashMap::new()).with_genres(store::fixture());
+        let stored = Stored { records: HashMap::from([("al-1".to_string(), store::record(&lib, &lantern)), ("al-2".to_string(), store::record(&lib, &pale))]), words: HashMap::new() };
+        let edit = |album: &str, field: &str, words: &[&str]| {
+            let facts = record_by_hand(&stored, album, &[(field.to_string(), Some(serde_json::json!(words)))]);
+            serve.userdata.set_overrides(&[album.to_string()], &facts, 1).unwrap();
+            serve.userdata.overrides_of(album).unwrap()
+        };
+        let s = |w: &[&str]| Some(w.iter().map(|x| x.to_string()).collect::<Vec<String>>());
+        let o = edit("al-1", "styles", &["Deep House", "Jazz", "Wonky Jazz"]);
+        assert_eq!((o.genres, o.styles), (s(&["Electronic", "Dance", "Jazz"]), s(&["Deep House", "Wonky Jazz"])), "Jazz edits the genre row as shown: Dance stays");
+        let o = edit("al-2", "styles", &["Abstract", "Deep House", "Dub", "Electro", "Glitch", "Dance"]);
+        assert_eq!((o.genres, o.styles), (s(&["Electronic", "Dance", "Reggae"]), None), "the genre row as shown; the style row gained and lost no style: no hand list");
+        assert_eq!(record_by_hand(&stored, "al-1", &[("genres".to_string(), None)]), [("genres".to_string(), None)], "a reset stays one");
+        // A track's Edit, by the rows the track shows: Leftfield typed into its genre row (sent as shown, plus the word) edits its
+        // style row alone.
+        let set = track_by_hand(&stored, Some("al-1"), "t1", vec![("genre".into(), s(&["Electronic", "Dance", "Leftfield"]))]);
+        assert_eq!(set, [("style".to_string(), s(&["Deep House", "Leftfield"]))]);
     }
 }
