@@ -74,7 +74,6 @@ impl Namer {
 
     /// Whether the folder `to` in catalogue folder `target` holds a copy of the record the copy at `dir` in `folder` is (T-COU-14).
     /// Blocking.
-    #[allow(dead_code)]
     fn held_there(&self, folder: i64, dir: &str, target: i64, to: &str) -> Result<bool> {
         let there = self.cat.records_under(target, to)?;
         Ok(!there.is_empty() && self.cat.records_under(folder, dir)?.iter().any(|r| there.contains(r)))
@@ -1296,10 +1295,6 @@ impl IncomingService {
     /// COU.17 (c), (d), T-COU-16): the record the copy at `at` is. Never stops the move: what could not be told is logged, and the
     /// copy is gathered as before.
     async fn place(&self, at: &Located, target: i64, dir: &str) {
-        let _ = (at, target, dir);
-        if true {
-            return;
-        }
         let (c, from, to, id) = (self.lib.catalogue(), (at.dir.folder, at.dir.dir.clone()), dir.to_string(), at.album.id.clone());
         let placed = crate::run::spawn_blocking(move || -> Result<()> {
             let record = match crate::serve::ids::record_number(&id) {
@@ -1348,6 +1343,10 @@ impl IncomingService {
             let plan = crate::incoming::plan_keep(&template, &music_files, &others, year.as_deref())
                 .map(|p| crate::incoming::follow_spelling(p, |parent| crate::incoming::folders_in(&music_, parent)));
             Ok(match plan {
+                // A copy of its record lies there already (T-COU-14): two copies never share a folder; Replace in is the gate's way.
+                Ok(plan) if music_.join(&plan.folder).exists() && namer.held_there(folder, &dir, target, &plan.folder)? => {
+                    Err(KeepRefused::Other(format!("{name} already holds a copy of it in {}: Replace in {name} instead", plan.folder)))
+                }
                 Ok(plan) if music_.join(&plan.folder).exists() => Err(KeepRefused::Other(format!("{name} already has a folder named {}", plan.folder))),
                 Ok(plan) => Ok(plan),
                 Err(crate::incoming::KeepRefusal::NeedsYear) => Err(KeepRefused::NeedsYear),
@@ -1748,7 +1747,9 @@ impl IncomingService {
         let (what, title) = self.adopted_named(&at.source, at.dir.folder, target, &at.album.title);
         let run = super::file_runs::track(&self.journal, what, title);
         // The one lock over the library's files (0092): a Keep never writes beside a file run, nor one beside it.
+        let turn = super::file_runs::turn(&self.journal).await;
         let done = self.keep_moving(at, target, year, converted, job).await;
+        drop(turn);
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(at, target)),
             Err(e) => run.failed(&at.album.id, e.to_string()),

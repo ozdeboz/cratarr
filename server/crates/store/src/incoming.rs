@@ -184,11 +184,7 @@ pub fn plan_replace(
         };
         return Err(ReplaceRefusal::Unmatched(pairing.retired.iter().map(|&i| title(i)).collect()));
     }
-    let _ = names;
-    let old_year = old.iter().find_map(|f| f.tags.release_year());
-    let year = year.map(str::to_string).or(old_year);
-    let music: Vec<(String, crate::naming::Tags)> = new.iter().map(|f| (f.rel.clone(), f.tags.clone())).collect();
-    let keep = plan_keep(template, &music, new_others, year.as_deref()).map_err(|e| match e {
+    let keep = plan_keep(template, names, new_others, year).map_err(|e| match e {
         KeepRefusal::NeedsYear => ReplaceRefusal::NeedsYear,
         KeepRefusal::Names(n) => ReplaceRefusal::Names(n),
         KeepRefusal::Empty => ReplaceRefusal::Empty,
@@ -253,6 +249,15 @@ pub fn plan_keep(
         .collect();
     let names = template.render(&tracks).map_err(|e| match e {
         RenderError::Missing { token: "originalyear" | "year", .. } => KeepRefusal::NeedsYear,
+        // A file the names can't number or title is named, with what it lacks (COU.15 (d)).
+        RenderError::Missing { token, track: Some(i) } => {
+            let what = match token {
+                "track" => "track number",
+                "disc" => "disc number",
+                other => other,
+            };
+            KeepRefusal::Names(format!("no {what} for {}", tracks.get(i).map_or("a file", |t| t.file.as_str())))
+        }
         e => KeepRefusal::Names(e.to_string()),
     })?;
     let mut moves: Vec<(String, String)> =
@@ -487,7 +492,7 @@ mod tests {
             at(file("02.flac", "2", "Garçon sexy", 290_000, &[]), 7),
             at(file("03.flac", "3", "Le talisman", 250_000, &[]), 8),
         ];
-        let plan = plan_replace(&Default::default(), &old, &new, &names(&new, None), &[], None).unwrap();
+        let plan = plan_replace(&Default::default(), &old, &new, &names(&new, Some("1998")), &[], None).unwrap();
         assert_eq!(plan.takes_over, [("01.mp3".to_string(), "02.flac".to_string()), ("02.mp3".to_string(), "03.flac".to_string())]);
         assert_eq!(plan.added, 1, "the bonus track");
     }

@@ -1189,11 +1189,13 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let replaced = wanted.replace.as_ref().map(|id| tracks.iter().find(|x| &x.id == id).context("The track to replace is gone")).transpose()?;
     // What its name is made like: a better copy the file it replaces, beside it (COU.2: never refused for want of a neighbour, nothing
     // copied from one); a missing track its neighbour, the closest track on its disc, else any other.
-    let neighbour = tracks
-        .iter()
-        .filter(|x| replaced.is_none_or(|r| r.id != x.id))
-        .min_by_key(|x| (x.disc.unwrap_or(1) != t.disc, x.track.map_or(u32::MAX, |n| n.abs_diff(t.position))))
-        .context("The album has no other track to take its tags from")?;
+    let neighbour = match replaced {
+        Some(r) => r,
+        None => tracks
+            .iter()
+            .min_by_key(|x| (x.disc.unwrap_or(1) != t.disc, x.track.map_or(u32::MAX, |n| n.abs_diff(t.position))))
+            .context("The album has no other track to name it like")?,
+    };
     let album_dir = root.join(&dir);
     // Lossless above its library's quality limit is made FLAC at it, as a move into that library is (decision 0096's
     // amendment; before, always CD's 16 bit / 44.1 kHz).
@@ -1207,7 +1209,11 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         _ => staged.to_path_buf(),
     };
     let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("flac").to_ascii_lowercase();
-    let dest = album_dir.join(name_like(&neighbour.file, t.position, &t.title, &ext));
+    let dest = match replaced {
+        // A better copy: named as the file it replaces was, with its own extension, in its folder (COU.2).
+        Some(r) => r.path.with_extension(&ext),
+        None => album_dir.join(name_like(&neighbour.file, t.position, &t.title, &ext)),
+    };
     // The replaced file's track, handed to the new one (0101 point 11: a better copy keeps the id, as Replace does).
     let handed = replaced.and_then(|r| s.catalogue().place_of_path(&r.path)).and_then(|(f, rel)| s.catalogue().track_of(f, &rel));
     let old = replaced.map(|r| rel_of(&root, &r.path)).transpose()?;
@@ -1218,7 +1224,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let record = crate::serve::ids::record_number(&wanted.album).context("No such album in Cratarr's own library")?;
     s.catalogue().place_file(folder, &rel_of(&root, &dest)?, record, handed, (t.disc, t.position))?;
     // The replaced file's picture, where it gives the record's, kept in Cratarr's store before the file goes to the trash (T-COU-15).
-    if let Some(old) = old.as_deref().filter(|_| false) {
+    if let Some(old) = old.as_deref() {
         let by = format!("files@{}", root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
         if let Err(e) = s.keep_picture_of(&wanted.album, folder, old, &by) {
             tracing::warn!("track fetch: the replaced file's picture not kept: {e:#}");

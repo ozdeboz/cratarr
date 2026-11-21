@@ -5143,7 +5143,8 @@ async fn replace_in_music_from_bobs_music_copies_his_and_keeps_it_end_to_end() {
     let preview = admin.get(&preview_path).await;
     assert_eq!((&preview["refused"], preview["tracks"].as_u64(), preview["added"].as_u64(), preview["files"].as_u64()), (&Value::Null, Some(3), Some(0), Some(4)), "{preview}");
     assert_eq!((preview["old"].as_str(), preview["from"].as_str()), (Some(SHORES), Some(id_of(&p.bob).as_str())), "Music's old folder, and whose copy: {preview}");
-    assert!(preview["folder"].is_string() && preview["carry"].as_array().is_some_and(Vec::is_empty) && preview["covers"]["current"].is_null(), "no cover to choose, nothing carried: {preview}");
+    // Nothing is carried into a new copy any more (T-COU-5): no preview offers it.
+    assert!(preview["folder"].is_string() && preview.get("carry").is_none() && preview["covers"]["current"].is_null(), "no cover to choose, nothing carried: {preview}");
     // RF10: the sheet names Bob's copy by its folder, and the tap carries it: none, or another folder, is refused with nothing written.
     assert_eq!(preview["from_dir"].as_str(), Some(SHORES), "Bob's copy, by its folder: {preview}");
     let mut bare = tap_of(&preview, &p);

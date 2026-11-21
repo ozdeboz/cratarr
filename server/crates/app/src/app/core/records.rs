@@ -647,8 +647,9 @@ mod tests {
     fn the_copy_reader_is_read_once_per_list() {
         const READERS: [&str; 5] = ["catalogue().copies_of(", "cat.copies_of(", ".copies_held(", ".requested_held(", ".record_read("];
         // (file, calls): what each reads.
-        let allowed: [(&str, usize, &str); 6] = [
+        let allowed: [(&str, usize, &str); 7] = [
             ("app/src/app/core/records.rs", 1, "one record: its view, or the handler deciding (`decided`)"),
+            ("store/src/catalogue/adding.rs", 1, "one record: the copy the gate places, named from its facts (COU.15)"),
             ("incoming/src/app/albums.rs", 1, "one record's copies judged for copying (`judged_copies`: VR28, by the holding's pairs)"),
             ("playing/src/app/device_index.rs", 1, "every record of the index at once, at its build"),
             ("requests/src/app/requests.rs", 2, "every open request's record at once (`records_held`); one request's story (`held_for`)"),

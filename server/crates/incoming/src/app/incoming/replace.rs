@@ -620,7 +620,9 @@ impl IncomingService {
         let (what, title) = self.replaced_from_named(&at.source, at.dir.folder, main.0, &at.album.title);
         let run = crate::app::file_runs::track(&self.journal, what, title);
         // The one lock over the library's files (0092): a Replace never writes beside a file run.
+        let turn = crate::app::file_runs::turn(&self.journal).await;
         let done = self.replacing_from_copy(&at, main.clone(), year, Some(sheet)).await;
+        drop(turn);
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(&at, main.0)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
@@ -980,7 +982,9 @@ impl IncomingService {
     #[allow(clippy::too_many_arguments)]
     pub async fn replace(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
         // "Replace and carry over" writes into the new copy: refused whole, nothing moved (T-COU-5, GEN.58).
-        let _ = carry;
+        if carry {
+            return Err(ToggleError::Refused(super::QUIET.into()));
+        }
         let at = self.locate(source_id, album_id, from).await?;
         self.refuse_if_queued(album_id, at.dir.folder)?;
         let into = self.replaced_in(source_id, to)?;
@@ -1032,7 +1036,9 @@ impl IncomingService {
     ) -> Result<KeepResult, ToggleError> {
         let run = crate::app::file_runs::track(&self.journal, "replace", format!("Replaced: {}", at.album.title));
         // The one lock over the library's files (0092): a Replace never writes beside a file run.
+        let turn = crate::app::file_runs::turn(&self.journal).await;
         let done = self.replacing(at, into, year, converted, job).await;
+        drop(turn);
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(at, into)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
