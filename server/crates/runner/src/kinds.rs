@@ -24,7 +24,7 @@ const fn k(kind: &'static str, named: &'static str, resumes: bool, peak_mb: u64,
 }
 
 /// Every kind (the peaks: the plan's rough figures, until the rehearsal measures production's).
-pub const KINDS: [Kind; 17] = [
+pub const KINDS: [Kind; 18] = [
     k("import:lastfm", "Reading scrobbles", false, 120, false),
     k("import:listenbrainz", "Reading listens", false, 120, false),
     k("import:file", "Reading the file", false, 120, false),
@@ -43,6 +43,8 @@ pub const KINDS: [Kind; 17] = [
     // RV12: a record's read at its open (its sources' lists and what they say besides).
     k("record:read", "Reading the record", false, 40, false),
     k("decode", "Decoding", false, 500, true),
+    // LK.E1: Spotify's look (a schedule) and an account's Sync, its lists read and MusicBrainz asked about them.
+    k("spotify", "Reading Spotify", false, 40, false),
 ];
 
 /// A kind's facts, by its name or its first part; a person's work with nothing declared where it is none of these.

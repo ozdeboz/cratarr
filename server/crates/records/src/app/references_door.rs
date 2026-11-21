@@ -75,6 +75,9 @@ pub trait References: Send + Sync {
     fn recordings<'a>(&'a self, print: &'a Print) -> Fut<'a, Vec<Found>>;
     /// The releases MusicBrainz's search finds by an artist and a title, the best first.
     fn find<'a>(&'a self, artist: &'a str, title: &'a str) -> Fut<'a, Vec<Candidate>>;
+    /// The masters Discogs' search finds by an artist and a title ("Artist - Title" as the album's), in the search's order (F53.7:
+    /// an arrival's job asks it beside MusicBrainz's, each once). Its key needed: none without.
+    fn find_masters<'a>(&'a self, artist: &'a str, title: &'a str) -> Fut<'a, Vec<Candidate>>;
 }
 
 /// The real adapter: each source in its own turn, as each always was asked. AcoustID with the server's key, or the one it was made
@@ -130,6 +133,12 @@ impl References for Real {
 
     fn find<'a>(&'a self, artist: &'a str, title: &'a str) -> Fut<'a, Vec<Candidate>> {
         Box::pin(async move { musicbrainz_search(artist, title).await })
+    }
+
+    fn find_masters<'a>(&'a self, artist: &'a str, title: &'a str) -> Fut<'a, Vec<Candidate>> {
+        Box::pin(async move {
+            Ok(super::discogs::masters_by_names(artist, title).await?.into_iter().map(|id| Candidate { id: id.to_string(), score: 100, tracks: None }).collect())
+        })
     }
 }
 
@@ -190,6 +199,16 @@ pub fn door() -> Arc<dyn References> {
     Arc::new(Real::new())
 }
 
+/// The door as installed, the real adapter asking AcoustID with `key` (the server's, read by its caller): what a job begun by a
+/// handler takes with it, as the process's own server may not be the one it reads.
+pub fn door_with_acoustid(key: Option<String>) -> Arc<dyn References> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(d) = STAND_IN.with(|s| s.borrow().clone()) {
+        return d;
+    }
+    Arc::new(Real { acoustid_key: key })
+}
+
 /// `references::tracklist`'s reader (C51a) through the door as installed now.
 pub fn read(r: Ref) -> impl std::future::Future<Output = Result<Option<Read>>> + Send + 'static {
     let d = door();
@@ -218,6 +237,7 @@ pub struct StandIn {
     lists: std::sync::Mutex<Vec<(Ref, Answer<Option<Listing>>)>>,
     prints: std::sync::Mutex<Option<Answer<Vec<Found>>>>,
     finds: std::sync::Mutex<Vec<((String, String), Answer<Vec<Candidate>>)>>,
+    masters: std::sync::Mutex<Vec<((String, String), Answer<Vec<Candidate>>)>>,
     asked: std::sync::Mutex<Vec<Asked>>,
     violations: std::sync::Mutex<Vec<String>>,
 }
@@ -247,6 +267,7 @@ pub enum Asked {
     Tracklist(Ref),
     Recordings { fingerprint: String, duration_secs: f64 },
     Find(String, String),
+    FindMasters(String, String),
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -282,6 +303,12 @@ impl StandIn {
     /// Expects a find of `artist`'s `title`, answering `found`.
     pub fn find(self, artist: &str, title: &str, found: Vec<Candidate>) -> Self {
         self.finds.lock().unwrap().push(((artist.to_string(), title.to_string()), Answer::Gives(found)));
+        self
+    }
+
+    /// Expects Discogs' masters of `artist`'s `title`, answering `found`.
+    pub fn masters(self, artist: &str, title: &str, found: Vec<Candidate>) -> Self {
+        self.masters.lock().unwrap().push(((artist.to_string(), title.to_string()), Answer::Gives(found)));
         self
     }
 
@@ -339,6 +366,17 @@ impl References for StandIn {
             match answer {
                 Some(a) => a,
                 None => self.violation(format!("find {artist} / {title}")),
+            }
+        })
+    }
+
+    fn find_masters<'a>(&'a self, artist: &'a str, title: &'a str) -> Fut<'a, Vec<Candidate>> {
+        Box::pin(async move {
+            self.asked.lock().unwrap().push(Asked::FindMasters(artist.to_string(), title.to_string()));
+            let answer = self.masters.lock().unwrap().iter().find(|((a, t), _)| a == artist && t == title).map(|(_, a)| a.give());
+            match answer {
+                Some(a) => a,
+                None => self.violation(format!("masters {artist} / {title}")),
             }
         })
     }

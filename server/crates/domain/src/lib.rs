@@ -14,6 +14,7 @@ pub mod request;
 pub mod soulseek;
 pub mod view;
 pub mod when;
+pub mod which_release;
 pub mod wording;
 pub mod words;
 

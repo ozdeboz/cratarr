@@ -82,11 +82,10 @@ pub fn copies_in(db: &Connection, records: &[i64], library: &dyn Fn(i64) -> Libr
     held_in(db, &records.iter().map(|&r| (r, r)).collect::<Vec<_>>(), library)
 }
 
-/// `Catalogue::copies_held` on the caller's connection: one read where the caller holds a transaction (HD14).
-pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> Library) -> Result<HashMap<i64, Copies>> {
-    let mut out = HashMap::new();
-    let holders: Vec<i64> = asked.iter().map(|(_, holder)| *holder).collect();
-    let went = super::records::went_in(db, &holders)?;
+/// A record's present files by catalogue folder, each as the one pairing reads it (`facts::Present`: the tag rule's title, else its
+/// name's, the length the library serves, its told place while it is as placed), with its track. The holding's and the arrival
+/// row's one reader of a copy (F53.10: never two pairings of one copy).
+fn present_in(db: &Connection, holder: i64) -> Result<BTreeMap<i64, Vec<Present>>> {
     let mut files_of = db.prepare_cached(&format!(
         "SELECT f.folder, f.rel, f.track, f.duration_ms, a.duration_secs, a.complete, f.size, f.mtime FROM files f JOIN tracks t ON t.id = f.track
            LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
@@ -94,6 +93,43 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
         super::PRESENT_F
     ))?;
     let mut tags = db.prepare_cached("SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IS NOT NULL ORDER BY n")?;
+    let mut folders: BTreeMap<i64, Vec<Present>> = BTreeMap::new();
+    let rows = files_of.query_map([holder], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, Option<i64>>(3)?,
+            r.get::<_, Option<f64>>(4)?,
+            r.get::<_, Option<bool>>(5)?,
+            r.get::<_, i64>(6)?,
+            r.get::<_, i64>(7)?,
+        ))
+    })?;
+    // The files Cratarr placed for it (COU.18): each pairs at its told place while it is as placed (WM.25 (e)).
+    let told = super::provenance::told_files_in(db, holder)?;
+    for row in rows {
+        let (folder, rel, track, header, decoded, complete, size, mtime) = row?;
+        let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), &rel, None);
+        let ms = served_ms(header, decoded, complete);
+        let mut file = facts.side(rel, ms);
+        file.told = told.get(&(folder, file.key.clone())).and_then(|t| super::provenance::as_placed(t, size, mtime));
+        folders.entry(folder).or_default().push(Present { track, file });
+    }
+    Ok(folders)
+}
+
+/// `Catalogue::copy_files` on the caller's connection.
+pub fn copy_files_in(db: &Connection, record: i64) -> Result<BTreeMap<i64, Vec<cratarr_domain::facts::Present>>> {
+    Ok(present_in(db, record)?.into_iter().map(|(folder, files)| (folder, sides(&files))).collect())
+}
+
+/// `Catalogue::copies_held` on the caller's connection: one read where the caller holds a transaction (HD14).
+pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> Library) -> Result<HashMap<i64, Copies>> {
+    let mut out = HashMap::new();
+    let holders: Vec<i64> = asked.iter().map(|(_, holder)| *holder).collect();
+    let went = super::records::went_in(db, &holders)?;
     let mut parked_of = db.prepare_cached(
         "SELECT EXISTS (SELECT 1 FROM files f JOIN tracks t ON t.id = f.track
            WHERE t.record = ?1 AND t.retired_at IS NULL AND f.folder < 0 AND f.gone_at IS NULL AND f.trashed IS NULL)",
@@ -107,30 +143,7 @@ pub fn held_in(db: &Connection, asked: &[(i64, i64)], library: &dyn Fn(i64) -> L
         if lists.iter().all(|l| l.tracks.is_empty()) && holder != record {
             (lists, pick) = (super::lists::lists_in(db, holder)?, super::lists::pick_in(db, holder)?);
         }
-        let mut folders: BTreeMap<i64, Vec<Present>> = BTreeMap::new();
-        let rows = files_of.query_map([holder], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, Option<i64>>(3)?,
-                r.get::<_, Option<f64>>(4)?,
-                r.get::<_, Option<bool>>(5)?,
-                r.get::<_, i64>(6)?,
-                r.get::<_, i64>(7)?,
-            ))
-        })?;
-        // The files Cratarr placed for it (COU.18): each pairs at its told place while it is as placed (WM.25 (e)).
-        let told = super::provenance::told_files_in(db, holder)?;
-        for row in rows {
-            let (folder, rel, track, header, decoded, complete, size, mtime) = row?;
-            let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            let facts = crate::incoming::TrackFacts::of(&crate::naming::Tags(read), &rel, None);
-            let ms = served_ms(header, decoded, complete);
-            let mut file = facts.side(rel, ms);
-            file.told = told.get(&(folder, file.key.clone())).and_then(|t| super::provenance::as_placed(t, size, mtime));
-            folders.entry(folder).or_default().push(Present { track, file });
-        }
+        let folders = present_in(db, holder)?;
         // A guess today's pairing confirms is none (RV-22): a copy in a main library or own music, never an Incoming arrival not
         // yet added (C15), whose files and the list pair one for one, both ways. Worked out at each read, never stored.
         let sure = |folder: i64| matches!(library(folder), Library::Main | Library::Own(_));
@@ -222,6 +235,37 @@ impl Catalogue {
         match self.reader() {
             Some(mut c) => read(&mut c),
             None => read(&mut self.db()),
+        }
+    }
+
+    /// The records with present files in any of these catalogue folders (an Incoming library's arrivals, F53.7's job). On a reader.
+    /// Blocking.
+    pub fn records_held_in(&self, folders: &[i64]) -> Result<Vec<i64>> {
+        let read = |c: &Connection| -> Result<Vec<i64>> {
+            let mut st = c.prepare_cached(&format!(
+                "SELECT DISTINCT t.record FROM files f JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND t.retired_at IS NULL AND {} ORDER BY t.record",
+                super::PRESENT_F
+            ))?;
+            let mut out = Vec::new();
+            for folder in folders {
+                out.extend(st.query_map([folder], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<Vec<i64>>>()?);
+            }
+            out.sort_unstable();
+            out.dedup();
+            Ok(out)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// A record's present files by catalogue folder, as the one pairing reads them (the holding's reader): what an arrival's row
+    /// pairs its copy by (F53.10). On a reader. Blocking.
+    pub fn copy_files(&self, record: i64) -> Result<BTreeMap<i64, Vec<cratarr_domain::facts::Present>>> {
+        match self.reader() {
+            Some(c) => copy_files_in(&c, record),
+            None => copy_files_in(&self.db(), record),
         }
     }
 

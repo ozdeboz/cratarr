@@ -291,6 +291,12 @@ pub async fn master_of(release_group: Option<&str>, artist: &str, title: &str) -
     Ok(masters_of(release_group, artist, title).await?.into_iter().next())
 }
 
+/// The masters Discogs' search finds for an album by its names alone (F53.7, an arrival's job: never by a link it has not, never
+/// Bandcamp's): every one of its first five whose "Artist - Title" is the album's, in the search's order; none without a key.
+pub async fn masters_by_names(artist: &str, title: &str) -> Result<Vec<u64>> {
+    masters_of(None, artist, title).await
+}
+
 /// An album's possible masters: MusicBrainz's link from its release group alone, else every one of Discogs' first five
 /// search results whose "Artist - Title" is the album's, in the search's order (a same-named single or EP among them).
 async fn masters_of(release_group: Option<&str>, artist: &str, title: &str) -> Result<Vec<u64>> {

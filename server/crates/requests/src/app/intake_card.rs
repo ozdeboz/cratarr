@@ -257,6 +257,40 @@ fn reference_check(matched: Option<&super::matching::Match>, looking: bool, disc
     }
 }
 
+/// The sources an arrival's job searches by its names (F53.7).
+pub const SEARCHED: [&str; 2] = ["musicbrainz", "discogs"];
+
+/// The arrival's "Which release" row as read (F53): its check, the verdict, the versions it was worked out on, and the copy's files.
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub check: Check,
+    pub release: cratarr_domain::which_release::Release,
+    pub versions: Vec<cratarr_domain::facts::ListVersion>,
+    pub copy: Vec<cratarr_domain::facts::Present>,
+}
+
+/// The row as the card reads it today (plumbing at the base's behaviour): MusicBrainz's match as kept, else Discogs' facts.
+/// Blocking.
+pub fn which_release_row(served: &crate::serve::Serve, album: &str, _at: Option<&(i64, String)>) -> Result<Row> {
+    let matched: Option<super::matching::Match> = served.userdata.album_matches(&[album.to_string()])?.remove(album).and_then(|(_, j)| serde_json::from_str(&j?).ok());
+    let discogs = super::discogs_facts::album_kept(served, album).ok().flatten();
+    let check = reference_check(matched.as_ref(), false, discogs.as_ref(), &[]);
+    Ok(Row { check, release: cratarr_domain::which_release::row(&[], &Default::default()), versions: Vec::new(), copy: Vec::new() })
+}
+
+/// What a Confirm on the row did (F53.7 (b), (d)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confirmed {
+    Kept,
+    ChangedSince,
+    NoSuchGuess,
+}
+
+/// The row's Confirm: none today (plumbing at the base's behaviour). Blocking.
+pub fn confirm(_served: &crate::serve::Serve, _album: &str, _r: &cratarr_domain::facts::Reference) -> Result<Confirmed> {
+    Ok(Confirmed::NoSuchGuess)
+}
+
 /// Where the record came from: Bandcamp where its files say so (Bandcamp's own comment, "Visit https://….bandcamp.com"),
 /// the Soulseek user its files were downloaded from (slskd's transfers), Lidarr where it imported its folder; else a
 /// folder.
@@ -430,7 +464,7 @@ async fn card_on(app: &dyn RequestsHost, album: &str, at: Option<(i64, String)>,
 }
 
 /// What Cratarr suggests for a record by its checks: Keep where every one is green; else nothing, the checks saying why.
-fn suggested(checks: &[Check]) -> Option<&'static str> {
+pub(crate) fn suggested(checks: &[Check]) -> Option<&'static str> {
     checks.iter().all(|c| c.state == "green").then_some("keep")
 }
 

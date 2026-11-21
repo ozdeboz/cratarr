@@ -2654,6 +2654,13 @@ impl Catalogue {
         db.last_insert_rowid()
     }
 
+    /// Tests elsewhere: a file of `track` in catalogue folder `folder` at `rel`, read (its header's length `ms`), tagged `tags`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn file_for_tests(&self, folder: i64, rel: &str, track: i64, ms: i64, tags: &[(&str, &str)]) {
+        self.db().execute("INSERT INTO files (folder, rel, size, mtime, track, duration_ms, state) VALUES (?1, ?2, 1, 1, ?3, ?4, 1)", params![folder, rel, track, ms]).unwrap();
+        self.tag_for_tests(folder, rel, tags);
+    }
+
     /// A subject's references of `source` found by guessing, confirmed once (0.14's "That's it"): they stay guesses, said to
     /// be right. How many. Blocking.
     pub fn confirm_reference(&self, subject: &str, source: &str) -> Result<usize> {

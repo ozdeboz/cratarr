@@ -11,6 +11,11 @@ pub mod health_requests;
 #[cfg(test)]
 mod library_tests;
 pub mod intake_card;
+// An arrival's matching and Discogs' search by its names, its job (F53.7, LK.B1).
+pub mod arrival_job;
+// SCENARIOS-F53's app half: the arrival's row as read, its job, its Confirm.
+#[cfg(test)]
+mod arrival_row_tests;
 pub mod matching;
 pub mod track_fetch;
 pub mod soulseek;

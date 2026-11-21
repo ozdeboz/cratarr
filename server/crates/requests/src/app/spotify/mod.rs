@@ -120,9 +120,8 @@ static READING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 /// MusicBrainz is being asked (one pass at a time).
 static ASKING: Mutex<bool> = Mutex::new(false);
 
-/// Opens the store in Cratarr's data folder and starts the background (reading live lists every 6 hours, asking
-/// MusicBrainz). Without a data folder there is no Spotify.
-pub fn start(data_dir: Option<&str>) {
+/// Opens the store in Cratarr's data folder. Without a data folder there is no Spotify.
+pub fn open(data_dir: Option<&str>) {
     let Some(dir) = data_dir else { return };
     let dir = PathBuf::from(dir);
     match Store::open(Some(&dir.join("spotify.sqlite"))) {
@@ -130,10 +129,20 @@ pub fn start(data_dir: Option<&str>) {
             let _ = STORE.set(Arc::new(s));
             let _ = DATA.set(dir);
         }
-        Err(e) => {
-            tracing::warn!("spotify: the store could not be opened: {e:#}");
-            return;
-        }
+        Err(e) => tracing::warn!("spotify: the store could not be opened: {e:#}"),
+    }
+}
+
+/// The look's job kind.
+pub const LOOK_KIND: &str = "spotify:look";
+
+/// Tells the look to come at once.
+pub static LOOK_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Starts the background (reading live lists every 6 hours, asking MusicBrainz), where the store is open.
+pub fn start() {
+    if STORE.get().is_none() {
+        return;
     }
     crate::run::spawn(async {
         // After the catalogue has caught up.
