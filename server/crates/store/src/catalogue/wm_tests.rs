@@ -288,7 +288,7 @@ fn fact_fields_are_read_through_one_rule() {
         ("store/src/serve/ids.rs", "the tag hash and the persistent ids read the raw tags, so no group or id moves by the rule (T-WM-2)"),
         ("store/src/serve/library.rs", "song()'s `raw_` album artist: the tag hash's (T-WM-2)"),
         ("base/src/app/renumber_base.rs", "Renumber's plan: a write, quiet until 0.19's writeback"),
-        ("base/src/app/settings.rs", "the naming inference counts files with a TITLE, a presence and no fact"),
+        ("core/src/naming.rs", "the naming inference counts files with a TITLE, a presence and no fact (PL1's `layout_of`, moved from settings.rs)"),
         ("app/src/fixtures.rs", "the end-to-end fixtures write tags"),
         ("store/src/catalogue/wm_tests.rs", "this scan"),
     ];

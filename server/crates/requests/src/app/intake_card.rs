@@ -171,8 +171,9 @@ fn folded(s: &str) -> String {
 
 /// The checks that read only the files (one record; its folder's name as its tags say). Blocking.
 fn file_checks(tracks: &[Track], tags: &[crate::catalogue::tags::FileTags]) -> Vec<Check> {
+    // The facts' cleaned values (C-WM-6, T-WM-2: the raw tags stay for the tag hash and the persistent ids alone).
     let field = |name: &str| -> BTreeSet<String> {
-        tags.iter().filter_map(|t| t.items.iter().find(|(_, n, _)| *n == Some(name)).map(|(_, _, v)| v.trim().to_string())).filter(|v| !v.is_empty()).collect()
+        tags.iter().filter_map(|t| t.items.iter().find(|(_, n, _)| *n == Some(name)).and_then(|(_, _, v)| crate::catalogue::fact_value(name, v))).filter(|v| !v.is_empty()).collect()
     };
     let folders: BTreeSet<String> = tracks.iter().filter_map(|t| t.path.parent().map(|p| p.display().to_string())).collect();
     let years: BTreeSet<String> = field("date").into_iter().filter_map(|d| d.get(..4).map(str::to_string)).collect();

@@ -360,7 +360,9 @@ async fn main() -> Result<()> {
     }
     // Its part `wm` (WM.22), before the fold (T-WM-5): a record named by a site's stamp named again by the tag rule, 0.17's
     // expectations seeded as placements, a record made by a stamp merged into the one its placement names; the raw tags kept.
-    if let Some((report, merges)) = served.catalogue().step_018_wm(&[], &|| Ok(())).context("cannot finish 0.18's step (wm)")? {
+    // Its seeds: Soulseek's items 0.17 left Placed, each with its placing folder (T-WM-9), read from `soulseek.json`.
+    let seeds = served.data_dir.as_deref().map(|d| app::soulseek::placed_seeds(d, served.catalogue())).unwrap_or_default();
+    if let Some((report, merges)) = served.catalogue().step_018_wm(&seeds, &|| Ok(())).context("cannot finish 0.18's step (wm)")? {
         tracing::info!(target: "migration", "0.18's wm: {}", serde_json::to_string(&report.counts).unwrap_or_default());
         for (from, into) in merges {
             tracing::info!(target: "migration", "0.18's wm: al-{from} into al-{into}");

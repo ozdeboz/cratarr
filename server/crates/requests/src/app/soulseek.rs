@@ -540,23 +540,6 @@ pub fn ladder(r: &Record) -> Vec<String> {
 
 // ---- Judging folders
 
-/// A file's title from its name: without the extension, the track number in front, or "Artist - " (each way tried).
-fn titles_of(name: &str) -> Vec<String> {
-    let base = crate::slskd::base_name(name);
-    let base = base.rsplit_once('.').map_or(base, |(b, _)| b);
-    let no_number = base.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | ' ' | ')')).trim();
-    let mut out = vec![base.trim().to_string(), no_number.to_string()];
-    for s in [base, no_number] {
-        if let Some((_, after)) = s.split_once(" - ") {
-            out.push(after.trim().to_string());
-        }
-        if let Some((_, after)) = s.rsplit_once(" - ") {
-            out.push(after.trim().to_string());
-        }
-    }
-    out.dedup();
-    out
-}
 
 /// Whether a folder's name is one disc's of a release (X3): "CD1", "CD 2", "Disc 1", "Disk 2 - …".
 fn is_disc_folder(name: &str) -> bool {
@@ -618,7 +601,8 @@ pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Ve
             }
             // Each file's length in whole milliseconds, by a checked multiply (T4): none where it can't be held.
             let ms: Vec<Option<i64>> = files.iter().map(|f| f.length.and_then(ms_of_secs)).collect();
-            let titles: Vec<Vec<String>> = files.iter().map(|f| titles_of(&f.filename)).collect();
+            // A file's titles from its name, by the one reader (WM.25, T-WM-7): Soulseek gives no tags, so its name's, each cleaned.
+            let titles: Vec<Vec<String>> = files.iter().map(|f| cratarr_rules::hygiene::file_titles(None, crate::slskd::base_name(&f.filename))).collect();
             let places: Vec<(Option<u32>, Option<u32>)> = files.iter().map(|f| place_of(&f.filename)).collect();
             let list: Vec<Side> = tracks.iter().map(|t| Side { disc: Some(t.disc), number: Some(t.position), key: &t.title, length_ms: t.length_ms }).collect();
             let sides: Vec<Side> = files.iter().zip(&places).zip(&ms).map(|((f, (disc, number)), ms)| Side { disc: *disc, number: *number, key: &f.filename, length_ms: *ms }).collect();
@@ -1243,9 +1227,16 @@ pub fn wake() {
 /// `soulseek.json` before DC2 moves it onto rows. Never one invented: an item with no folder, or one the catalogue does not hold, is
 /// none. Blocking.
 pub fn placed_seeds(data_dir: &Path, cat: &crate::catalogue::Catalogue) -> Vec<(i64, String, i64)> {
-    // RED STUB: the base's, none read (`main` passed none).
-    let _ = (data_dir, cat);
-    Vec::new()
+    let Ok(text) = std::fs::read(data_dir.join("soulseek.json")) else { return Vec::new() };
+    let Ok(kept) = serde_json::from_slice::<Kept>(&text) else { return Vec::new() };
+    kept.items
+        .iter()
+        .filter(|i| i.state == State::Placed && i.record.record > 0)
+        .filter_map(|i| {
+            let (folder, dir) = cat.place_of_path(Path::new(i.placed.as_deref()?))?;
+            Some((folder, dir, i.record.record))
+        })
+        .collect()
 }
 
 /// Whether Soulseek fetches here: slskd set up and switched on (Settings › Server), as single-track intake's.

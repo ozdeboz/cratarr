@@ -1079,28 +1079,6 @@ where
 
 // ---- 4. Add to album
 
-/// The album-wide tags a new track takes from its neighbour.
-const ALBUM_KEYS: [lofty::tag::ItemKey; 15] = {
-    use lofty::tag::ItemKey::*;
-    [
-        AlbumTitle,
-        AlbumArtist,
-        RecordingDate,
-        Year,
-        ReleaseDate,
-        OriginalReleaseDate,
-        Genre,
-        Label,
-        CatalogNumber,
-        Barcode,
-        TrackTotal,
-        DiscTotal,
-        MusicBrainzReleaseId,
-        MusicBrainzReleaseGroupId,
-        MusicBrainzReleaseArtistId,
-    ]
-};
-
 /// A new track's file name, as its neighbour's is made: the neighbour's with its number and title swapped for the new
 /// one's (its number's width kept); "NN Title" where the neighbour's name has no title in it.
 fn name_like(neighbour: &str, number: u32, title: &str, ext: &str) -> String {
@@ -1234,11 +1212,12 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let handed = replaced.and_then(|r| s.catalogue().place_of_path(&r.path)).and_then(|(f, rel)| s.catalogue().track_of(f, &rel));
     let old = replaced.map(|r| rel_of(&root, &r.path)).transpose()?;
     let now = super::moment::now_secs();
-    let trashed = swap_in(&root, &source, &dest, old.as_deref(), &neighbour.path, now, |part| tag(part, &neighbour.path, t))?;
-    // The album's cover inside it too (the owner's rule: inside every file and next to them).
-    if let Err(e) = crate::covers_inside::complete(&album_dir) {
-        tracing::warn!("track fetch: the cover not put inside {}: {e:#}", dest.display());
-    }
+    // Its placement said to the catalogue before it appears under its name (WM.23, COU.18 (d), T-COU-17): its record, the track it
+    // replaces where it has one, and its place on the record's list; it joins by it, whatever its tags say. Placed untouched: no tag
+    // written, no cover put inside (writing is quiet in 0.18; covers live in the database, C-WM-7).
+    let record = crate::serve::ids::record_number(&wanted.album).context("No such album in Cratarr's own library")?;
+    s.catalogue().place_file(folder, &rel_of(&root, &dest)?, record, handed, (t.disc, t.position))?;
+    let trashed = swap_in(&root, &source, &dest, old.as_deref(), &neighbour.path, now, |_| Ok(()))?;
     let id = now.to_string() + &new_id()[..4];
     if let (Some(track), Some(r)) = (handed, replaced)
         && let Err(e) = s.catalogue().hand_over(&dest, &r.path, track)
@@ -1296,51 +1275,6 @@ fn quality_at(saved: Option<&crate::settings::Saved>, root: &Path) -> crate::set
 
 fn rel_of(root: &Path, p: &Path) -> Result<String> {
     Ok(p.strip_prefix(root).context("not inside its library")?.to_string_lossy().replace('\\', "/"))
-}
-
-/// The new track's tags: the album's from its neighbour, its own from MusicBrainz; whatever the uploader's file had
-/// taken away first (its pictures too: the album's cover goes in after).
-fn tag(track: &Path, neighbour: &Path, t: &ReleaseTrack) -> Result<()> {
-    use lofty::prelude::*;
-    use lofty::tag::{ItemKey, ItemValue, TagItem};
-    let theirs: Vec<TagItem> = lofty::read_from_path(neighbour)
-        .ok()
-        .and_then(|f| f.primary_tag().cloned())
-        .map(|tag| tag.items().filter(|i| ALBUM_KEYS.contains(&i.key())).cloned().collect())
-        .unwrap_or_default();
-    let width = super::fixes_base::values(neighbour, &["tracknumber"])?.into_iter().next().flatten().filter(|n| n.starts_with('0')).map_or(1, |n| n.len());
-    let own: Vec<(ItemKey, String)> = [
-        (ItemKey::TrackTitle, Some(t.title.clone())),
-        (ItemKey::TrackArtist, Some(t.artist.clone())),
-        (ItemKey::TrackNumber, Some(format!("{:0width$}", t.position))),
-        (ItemKey::DiscNumber, Some(t.disc.to_string())),
-        (ItemKey::MusicBrainzRecordingId, Some(t.recording.clone()).filter(|r| !r.is_empty())),
-        (ItemKey::MusicBrainzTrackId, Some(t.track_id.clone()).filter(|r| !r.is_empty())),
-        (ItemKey::MusicBrainzArtistId, t.artist_id.clone()),
-    ]
-    .into_iter()
-    .filter_map(|(k, v)| Some((k, v?)))
-    .collect();
-    let (title, recording) = (t.title.clone(), t.recording.clone());
-    crate::retag::rewrite(
-        track,
-        |tag| {
-            tag.clear();
-            for i in theirs {
-                tag.insert(i);
-            }
-            for (k, v) in own {
-                tag.insert(TagItem::new(k, ItemValue::Text(v)));
-            }
-        },
-        |copy| {
-            let got = super::fixes_base::values(copy, &["title", "musicbrainz_trackid"])?;
-            if got[0].as_deref() != Some(title.as_str()) || (!recording.is_empty() && got[1].as_deref() != Some(recording.as_str())) {
-                bail!("its tags did not read back as written");
-            }
-            Ok(())
-        },
-    )
 }
 
 /// An added track's Undo from what its add kept (`file`): the new track to the trash, the one it replaced back.
@@ -1770,18 +1704,9 @@ mod tests {
         let t = track_of(delight(), "r7", false).unwrap();
         assert_eq!((t.disc, t.position, t.title.as_str()), (1, 7, "Bloom"));
         assert!(track_of(delight(), "r9", false).is_err(), "not on the release");
-        // The file says 06; taken into the album beside 05, it is named and tagged 07.
-        let d = dir("trackfile-number");
-        let file = d.join("06 Bloom.flac");
-        old_flac(&file, "trackfile-number");
-        let neighbour = d.join("05 Euphoria.flac");
-        old_flac(&neighbour, "trackfile-neighbour");
-        tags(&neighbour, &[(ItemKey::TrackTitle, "Euphoria"), (ItemKey::TrackNumber, "05")]);
+        // The file says 06; taken into the album beside 05, it is named 07, its name padded as its neighbours'. Changed by the plan
+        // (WM.23, C-WM-7): it is no longer tagged 07; placed untouched, it is track 7 by its placement.
         assert_eq!(name_like("05 Euphoria.flac", t.position, &t.title, "flac"), "07 Bloom.flac");
-        tag(&file, &neighbour, &t).unwrap();
-        let got = super::super::fixes_base::values(&file, &["tracknumber", "title", "album", "musicbrainz_trackid"]).unwrap();
-        assert_eq!(got, [Some("7".to_string()), Some("Bloom".into()), Some("Delight".into()), Some("r7".into())], "the tag a plain number, as Cratarr tags; the name padded as its neighbours");
-        std::fs::remove_dir_all(&d).ok();
     }
 
     /// X3: AcoustID knowing nothing of a file (no print, or a print it holds no recording for) is judged by titles and lengths, as
