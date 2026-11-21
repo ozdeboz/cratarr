@@ -10,6 +10,8 @@
   import { loadHealth } from './healthReport.svelte';
   import { me } from './me.svelte';
   import { TRACKLIST } from './recordNotHad';
+  import { on } from './events.svelte';
+  import { namesRecord, type Changed } from './recordCache';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import Group from './settings/Group.svelte';
@@ -31,6 +33,9 @@
     );
     return () => (gone = true);
   });
+  // The record's read (`record:read`: begun by its open, a Confirm or a pasted link, the PUT's answer's `task`) reaches the page by
+  // `changed` for the record (LOOKUPS Found 10, RV12): the references are read again as it lands.
+  $effect(() => on<Changed>('changed', (c) => namesRecord(c, album) && again++));
   // The record's own lengths, beside the sources' where any gives them.
   const timed = $derived(refs?.sources.filter((x) => x.lengths?.some((ms) => ms > 0)) ?? []);
   let rows = $state<PlaylistRow[] | null>(null);

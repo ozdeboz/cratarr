@@ -24,6 +24,20 @@ export type Card = { group: EntryGroup; items: Item[] };
 const ofAction = (a: ActionView): Item => ({ name: a.name, title: a.title, icon: a.icon, group: a.group, action: a });
 const ofLink = (l: LinkView): Item => ({ name: l.name, title: l.title, icon: l.icon, group: l.group, link: l });
 
+/** The record's own page's opener (RS1: the `page` place counts its opener's libraries), derived from the panel's stack (the
+ *  coordinator, 2026-11-21): what the panel views below the record names it first (an artist, a crate, a label, a playlist), else
+ *  the page it shows over; none where neither names a place, so the server's Library fallback stays (Home's shelves are no
+ *  crate). The prefixes are the panel's subjects' own (panel.svelte.ts, crates.svelte.ts, labelPage.ts). */
+export function openerOf(below: string | null, page: string, searching: boolean): PlaceWord | undefined {
+  if (below?.startsWith('artist:') || below?.startsWith('artist-tracks:')) return 'artist';
+  if (below?.startsWith('crate:')) return 'crate';
+  if (below?.startsWith('label:')) return 'label';
+  if (below?.startsWith('server-playlist:') || (below && /^pl-/.test(below))) return 'playlist';
+  if (searching) return 'search';
+  const byPage: Partial<Record<string, PlaceWord>> = { library: 'library', discover: 'discover', crates: 'crate', playlists: 'playlist', health: 'problem' };
+  return byPage[page];
+}
+
 /** The yes an action asks at a step (RS25, decision 0034): the server's words for it, in order, each asked before anything is
  *  sent (a main library's Delete asks twice); none left, it is sent. The page works out no step of its own. */
 export const askAt = (a: Pick<ActionView, 'confirm'>, step: number): string | null => a.confirm?.[step] ?? null;

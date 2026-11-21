@@ -1875,7 +1875,9 @@ export type Reference = {
   guessed?: true;
   confirmed?: true;
 };
-export type References = { album: string; title: string; artist: string; sources: Reference[]; counting: ReferenceSource | null; by_hand: boolean };
+/** A record's references; after a Confirm or a pasted link, `task` names the record's read it began (`record:read`, keyed by the
+ *  record), whose findings reach the page by `changed` for the record. */
+export type References = { album: string; title: string; artist: string; sources: Reference[]; counting: ReferenceSource | null; by_hand: boolean; task?: { kind: string; key: string } };
 export const getReferences = (album: string) => request<References>(`/api/albums/cratarr/${encodeURIComponent(album)}/references`);
 /** Use this (`counting`), Confirm (`confirm`: a guessed one is this record), Paste a link (`link`: its source then
  *  counts), Checked by hand (`by_hand`; the first time also the record's type and year, as set): the references then. */
