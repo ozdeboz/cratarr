@@ -56,9 +56,11 @@ impl Server {
         let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new(), acting: std::sync::Mutex::new(None) };
         let answered = |r: reqwest::Response| r.status().is_success() || r.status() == reqwest::StatusCode::UNAUTHORIZED;
         s.until("the server answers", Duration::from_secs(60), || async { s.http.get(format!("{}/api/albums", s.base)).send().await.is_ok_and(answered) }).await;
+        // A server that asks for a sign-in from its first start (its accounts from the environment) has no one the harness may act
+        // as: its tests ask no Want, and set a floor themselves where they would.
         if fresh {
             let (status, floor) = s.anyone().send(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
-            assert_eq!(status, 200, "the harness's floor: {floor}");
+            assert!(status == 200 || status == 401, "the harness's floor: {status} {floor}");
         }
         s
     }
