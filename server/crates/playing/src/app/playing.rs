@@ -1080,11 +1080,13 @@ impl PlayingService {
 
     /// What Cratarr's album `album` answers where the served library cannot read it (C54): a record not had, its own page from the
     /// catalogue, its list asked for where none is kept, or why it has none (`page_at`, its sources read by
-    /// `references::read_reference`); one merged into a record had, that one's view. The page's path alone: opening it marks the
-    /// record opened. None: no record of the catalogue's, or one had that the library does not serve now (answered as before).
+    /// `references::read_reference_kept`: a Bandcamp page's tags kept as it is read, GEN.60); one merged into a record had, that
+    /// one's view. The page's path alone: opening it marks the record opened. None: no record of the catalogue's, or one had that
+    /// the library does not serve now (answered as before).
     pub async fn record_view(&self, album: &str) -> Result<Option<AlbumView>, ToggleError> {
         let Some(record) = crate::serve::ids::record_number(album) else { return Ok(None) };
-        let page = match page_at(&self.lib.catalogue(), record, super::moment::now_secs(), super::references::read_reference).await {
+        let read = super::references::read_reference_kept(crate::serve::instance());
+        let page = match page_at(&self.lib.catalogue(), record, super::moment::now_secs(), read).await {
             Ok(page) => page,
             Err(e) => {
                 tracing::warn!("record {album}: {e:#}");

@@ -4,19 +4,23 @@
 //! record's rows.
 //!
 //! - **Layers.** By hand wins for its kind (0089's fields, with Reset); then the files' tags; then AudioMuse (styles,
-//!   and moods: mood is AudioMuse's alone); then the services (MusicBrainz, Discogs, Last.fm, the household's tags),
-//!   weighted, a word below the floor left out.
-//! - **Record and track.** A word of the files or AudioMuse is the record's where half its tracks (half those heard)
-//!   have it; else the tracks that have it own it. A track reads its record's words and its own; its mood is its own
-//!   measure where it was heard.
-//! - **Kind by the word.** A genre where it is a broad genre or any file's genre; a style where a curated source
-//!   (MusicBrainz's genre list, Discogs) names it, or a file's STYLE; else a tag. The files' and the services' mood
-//!   words are read again so (never a mood): "religious", Discogs' style, a style.
+//!   and moods: mood is AudioMuse's alone); then the services (MusicBrainz, Discogs, Last.fm, Bandcamp, the household's
+//!   tags), weighted, a word below the floor left out.
+//! - **Record and track.** A word of the files is the record's where half its tracks have it, AudioMuse's where its
+//!   average score over the heard tracks reaches [`RISE`] (a mood: half those heard); else the tracks that have it own it.
+//!   A track reads its record's words and its own; its mood is its own measure where it was heard.
+//! - **Kind by the word (GEN, decision 0097 amended 2026-11-20).** Every word from every source is sorted alike, never by
+//!   the field or the service it came from: an ID3v1 number named first, the genre aliases next; a word of the 26
+//!   (`shared/genres.json`) is a genre, named as the list names it; one a caller (Discogs' genres and styles, MusicBrainz's
+//!   genres, a file's GENRE) names is a style; any other a tag. Digits alone are no word, and so is a word only a file's
+//!   STYLE uses that no caller knows (GEN-DESIGN §8). Mood is AudioMuse's and the hand's alone. A service's stored word is
+//!   split by that service's rule as it is read (GEN.4).
 //! - **One spelling.** A word's key folds case, spaces and hyphens (`super::key`); a kind's aliases name the word it
-//!   is; its shown spelling is the alias's, else the most written.
+//!   is; its shown spelling is the 26's name, the alias's, else the most written.
 
 use std::collections::{HashMap, HashSet};
 
+use cratarr_rules::genres::{self, Genres};
 use serde::Serialize;
 
 /// The kinds, in the order every answer gives them.
@@ -98,16 +102,53 @@ impl Source {
         })
     }
 
-    /// How far a service's word is trusted (0.9.7's): the household's as the files'.
+    /// How far a service's word is trusted (0.9.7's): the household's as the files'; Bandcamp's as Last.fm's, both free tags
+    /// (OQ-GEN-23: no rank of its own).
     fn trust(self, raw_kind: &str) -> f32 {
         match (self, raw_kind) {
-            (Source::Hand | Source::Files | Source::Audiomuse | Source::Household | Source::Bandcamp, _) => 1.0,
+            (Source::Hand | Source::Files | Source::Audiomuse | Source::Household, _) => 1.0,
             (Source::Musicbrainz, "tag") => 0.5,
             (Source::Musicbrainz, _) => 0.9,
             (Source::Discogs, _) => 0.8,
-            (Source::Lastfm, _) => 0.5,
+            (Source::Lastfm | Source::Bandcamp, _) => 0.5,
         }
     }
+
+    /// How the source writes several words in one value (GEN-DESIGN §4's second layer): each service's shipped rule; what
+    /// people type (the hand, the household's tags) one word. A file's fields come split by its library's rules as read.
+    fn rule(self) -> &'static [&'static str] {
+        match self {
+            Source::Discogs => genres::rules::DISCOGS,
+            Source::Musicbrainz => genres::rules::MUSICBRAINZ,
+            Source::Lastfm => genres::rules::LASTFM,
+            Source::Bandcamp => genres::rules::BANDCAMP,
+            Source::Audiomuse => genres::rules::AUDIOMUSE,
+            Source::Hand | Source::Household | Source::Files => genres::rules::TYPED,
+        }
+    }
+
+    /// Whether the source, calling a word `raw_kind`, names it a genre or a style (GEN-DESIGN §3: a caller): Discogs, its genres
+    /// and styles; MusicBrainz, its genres. A file's GENRE is the third caller ([`TrackIn::genre`]).
+    fn calls(self, raw_kind: &str) -> bool {
+        matches!((self, raw_kind), (Source::Discogs, "genre" | "style") | (Source::Musicbrainz, "genre"))
+    }
+}
+
+/// A service's stored word as its words (GEN.4): the one split by the service's own rule, the owner's exceptions first.
+fn said_words(s: &Said) -> Vec<String> {
+    genres::split(&s.word, &genres::rules::separators(s.source.rule()), &[])
+}
+
+/// A typed word as its words (GEN.1 (d), OQ-GEN-24): the owner's exceptions, and no split.
+fn typed_words(w: &str) -> Vec<String> {
+    genres::split(w, &genres::rules::separators(genres::rules::TYPED), &[])
+}
+
+/// Where a word was read, for its sort: a file's STYLE alone can hold a non-word (GEN-DESIGN §8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    Style,
+    Other,
 }
 
 /// A service's word below this merged weight is left out (0.9.7's floor).
@@ -149,12 +190,19 @@ pub struct RecordIn {
     pub hand: HashMap<Kind, Vec<String>>,
 }
 
-/// What the whole library says, for sorting a word into its kind and naming it: every file's genres and the broad
-/// genres, the words a curated source names, and each kind's aliases (a key to the word it is).
-#[derive(Debug, Clone, Default)]
+//// What the whole library says, for sorting a word into its kind and naming it (GEN-DESIGN §1–§3, §8): the 26 and their words,
+/// the words a caller names a genre or a style, the words any source but a file's STYLE uses, and each kind's aliases (a key to
+/// the word it is).
+#[derive(Debug, Clone)]
 pub struct Library {
-    genres: HashSet<String>,
-    curated: HashSet<String>,
+    /// The 26 and their words (`shared/genres.json`).
+    genres: &'static Genres,
+    /// Every word a caller names (Discogs' genres and styles, MusicBrainz's genres, a file's GENRE), by its key as named: the
+    /// library's style vocabulary, the genres among it aside. Worked out from the stored words: no fixed list (§3).
+    called: HashSet<String>,
+    /// Every word a source other than a file's STYLE uses, by its key as named: a STYLE word none of them uses, and no caller
+    /// knows, is no word (§8, §13 C1).
+    used: HashSet<String>,
     aliases: HashMap<Kind, HashMap<String, String>>,
     /// Each word's one spelling across the library: the most written (rule 4, one spelling everywhere).
     spellings: HashMap<String, String>,
@@ -164,11 +212,17 @@ pub struct Library {
     rise: f32,
 }
 
+impl Default for Library {
+    fn default() -> Self {
+        Self { genres: genres::shipped(), called: HashSet::new(), used: HashSet::new(), aliases: HashMap::new(), spellings: HashMap::new(), off: HashMap::new(), rise: RISE }
+    }
+}
+
 /// AudioMuse's threshold (GEN.27–GEN.29): a word AudioMuse hears rises to the record where its average score over the record's
 /// heard tracks reaches it. Until the rehearsal on production's copy sets it (GEN.29), the scenarios' 0.25.
 pub const RISE: f32 = 0.25;
 
-/// A record's words typed into its Edit (GEN.25), each row as sent (none: not sent), and as the record shows them now.
+/// A record's or a track's hand lists as an Edit makes them (GEN.25): each `None` where that row is left as it is.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Routed {
     pub genres: Option<Vec<String>>,
@@ -176,22 +230,46 @@ pub struct Routed {
 }
 
 /// The hand's genre and style rows as an Edit sends them (`genres`, `styles`; none: not sent), against the rows shown at that
-/// moment (`shown_genres`, `shown_styles`): the lists to keep by hand, each `None` where that row is left as it is.
+/// moment (`shown_genres`, `shown_styles`): the lists to keep by hand (GEN.25; GEN-DESIGN §13, C6, OQ-GEN-16, C12, R9).
+/// - Each typed word is the owner's exceptions' words ("RnB/Swing": R&B and New Jack Swing), never split.
+/// - Routed by the word: a word of the 26 is the genre row's, any other the style row's, whichever row it was typed into; a
+///   word routed out of the row it was typed into edits its own row as that row is shown, never a list of that word alone.
+/// - Only an edited row becomes a hand list: one that gains or loses a word of its own kind. A row sent as shown is none.
 pub fn route(shown_genres: &[String], shown_styles: &[String], genres: Option<&[String]>, styles: Option<&[String]>) -> Routed {
-    let _ = (shown_genres, shown_styles);
-    Routed { genres: genres.map(<[String]>::to_vec), styles: styles.map(<[String]>::to_vec) }
+    let list = genres::shipped();
+    let is_genre = |w: &String| list.genre_of(w).is_some();
+    let typed = |sent: Option<&[String]>| -> Option<Vec<String>> { sent.map(|s| s.iter().flat_map(|w| typed_words(w)).collect()) };
+    let (genres, styles) = (typed(genres), typed(styles));
+    // Each row: its own words as sent (else as shown), and the words of its kind typed into the other row.
+    let into_genres: Vec<String> = styles.iter().flatten().filter(|&w| is_genre(w)).cloned().collect();
+    let into_styles: Vec<String> = genres.iter().flatten().filter(|&w| !is_genre(w)).cloned().collect();
+    let row = |shown: &[String], sent: &Option<Vec<String>>, own: &dyn Fn(&String) -> bool, routed: Vec<String>| -> Option<Vec<String>> {
+        let kept: Vec<String> = match sent {
+            Some(s) => s.iter().filter(|&w| own(w)).cloned().collect(),
+            None => shown.to_vec(),
+        };
+        let edited = !routed.is_empty() || !same(&kept, shown);
+        edited.then(|| once(kept.into_iter().chain(routed)))
+    };
+    let not_genre = |w: &String| !is_genre(w);
+    Routed { genres: row(shown_genres, &genres, &is_genre, into_genres), styles: row(shown_styles, &styles, &not_genre, into_styles) }
+}
+
+/// Whether two lists hold the same words, by their keys, whatever their order.
+fn same(a: &[String], b: &[String]) -> bool {
+    let keys = |l: &[String]| l.iter().map(|w| super::key(w)).collect::<HashSet<_>>();
+    keys(a) == keys(b)
+}
+
+/// Each word once, by its key, in order.
+fn once(words: impl Iterator<Item = String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    words.filter(|w| seen.insert(super::key(w))).collect()
 }
 
 impl Library {
     /// From every record's inputs and each kind's aliases (the word, and the spellings that are it).
     pub fn of(records: &[RecordIn], aliases: &HashMap<Kind, Vec<(String, Vec<String>)>>) -> Self {
-        let mut genres: HashSet<String> = super::GENRES.iter().map(|g| super::key(g)).collect();
-        let mut curated = HashSet::new();
-        for r in records {
-            genres.extend(r.tracks.iter().flat_map(|t| t.genre.iter().map(|g| super::key(g))));
-            curated.extend(r.said.iter().filter(|s| matches!(s.source, Source::Musicbrainz | Source::Discogs) && matches!(s.raw_kind.as_str(), "genre" | "style")).map(|s| super::key(&s.word)));
-            curated.extend(r.tracks.iter().flat_map(|t| t.style.iter().map(|s| super::key(s))));
-        }
         let aliases = aliases
             .iter()
             .map(|(kind, list)| {
@@ -199,19 +277,43 @@ impl Library {
                 (*kind, by)
             })
             .collect();
-        // Each word's spellings across the library, the most written shown everywhere.
-        let mut written: HashMap<String, HashMap<&str, usize>> = HashMap::new();
+        let mut lib = Self { aliases, ..Self::default() };
+        // Who calls each word what, and who uses it, every word named first (an ID3v1 number, a genre alias).
+        let (mut called, mut used) = (HashSet::new(), HashSet::new());
         for r in records {
-            let tracks = r.tracks.iter().flat_map(|t| t.genre.iter().chain(&t.style).chain(&t.mood).chain(&t.tag).chain(t.heard_styles.iter().map(|(w, _)| w)).chain(&t.heard_moods));
-            for w in tracks.chain(r.said.iter().map(|s| &s.word)) {
-                *written.entry(super::key(w)).or_default().entry(w.trim()).or_default() += 1;
+            for t in &r.tracks {
+                for w in &t.genre {
+                    called.insert(lib.named_key(w));
+                }
+                let heard = t.heard_styles.iter().map(|(w, _)| w);
+                let hand = t.hand.values().flatten();
+                for w in t.genre.iter().chain(&t.mood).chain(&t.tag).chain(heard).chain(&t.heard_moods).chain(hand) {
+                    used.insert(lib.named_key(w));
+                }
+            }
+            for s in &r.said {
+                for w in said_words(s) {
+                    let k = lib.named_key(&w);
+                    if s.source.calls(&s.raw_kind) {
+                        called.insert(k.clone());
+                    }
+                    used.insert(k);
+                }
+            }
+            for w in r.hand.values().flatten() {
+                used.insert(lib.named_key(w));
             }
         }
-        let spellings = written.into_iter().filter_map(|(k, s)| s.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0))).map(|(w, _)| (k, w.to_string()))).collect();
-        // A genre alias's word is a genre wherever it comes from.
-        let mut lib = Self { genres, curated, aliases, spellings, off: HashMap::new(), rise: RISE };
-        let named: Vec<String> = lib.aliases.get(&Kind::Genre).map(|a| a.values().map(|w| super::key(w)).collect()).unwrap_or_default();
-        lib.genres.extend(named);
+        (lib.called, lib.used) = (called, used);
+        // Each word's spellings across the library, the most written shown everywhere.
+        let mut written: HashMap<String, HashMap<String, usize>> = HashMap::new();
+        for r in records {
+            let tracks = r.tracks.iter().flat_map(|t| t.genre.iter().chain(&t.style).chain(&t.mood).chain(&t.tag).chain(t.heard_styles.iter().map(|(w, _)| w)).chain(&t.heard_moods)).cloned();
+            for w in tracks.chain(r.said.iter().flat_map(said_words)) {
+                *written.entry(super::key(&w)).or_default().entry(w.trim().to_string()).or_default() += 1;
+            }
+        }
+        lib.spellings = written.into_iter().filter_map(|(k, s)| s.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).map(|(w, _)| (k, w))).collect();
         lib
     }
 
@@ -235,33 +337,70 @@ impl Library {
         self.off.get(&kind).is_some_and(|o| o.contains(&source))
     }
 
-    /// A word's kind by the word (never a mood: mood is AudioMuse's).
-    fn sort(&self, key: &str) -> Kind {
-        if self.genres.contains(key) {
-            Kind::Genre
-        } else if self.curated.contains(key) {
-            Kind::Style
-        } else {
-            Kind::Tag
+    /// A word as it is named before its sort (GEN-DESIGN §13 C10, OQ-GEN-9): an ID3v1 genre number by its name ("26": Ambient),
+    /// then a genre alias's word ("Electronica": Electronic; "dnb": Drum & Bass).
+    fn named_first(&self, word: &str) -> String {
+        let word = crate::catalogue::normalise::id3v1_genre(word).map_or_else(|| word.trim().to_string(), str::to_string);
+        match self.aliases.get(&Kind::Genre).and_then(|a| a.get(&super::key(&word))) {
+            Some(to) => to.clone(),
+            None => word,
         }
     }
 
-    /// A word's key in its kind: an alias's word's.
+    /// [`Library::named_first`]'s key.
+    fn named_key(&self, word: &str) -> String {
+        super::key(&self.named_first(word))
+    }
+
+    /// A word's kind by the word (GEN-DESIGN §1–§3, §8), and the word as named: a genre where it is one of the 26 or one of
+    /// their words; no word where it is digits alone, or read from a file's STYLE (`field`) with no caller knowing it and no
+    /// other source using it; a style where a caller names it; else a tag. Never a mood: mood is AudioMuse's.
+    fn sort(&self, word: &str, field: Field) -> Option<(Kind, String)> {
+        let named = self.named_first(word);
+        let k = super::key(&named);
+        if k.is_empty() {
+            return None;
+        }
+        if let Some(genre) = self.genres.genre_of_key(&k) {
+            return Some((Kind::Genre, genre.to_string()));
+        }
+        if k.chars().all(|c| c.is_ascii_digit() || c == ' ') {
+            return None;
+        }
+        if self.called.contains(&k) {
+            return Some((Kind::Style, named));
+        }
+        if field == Field::Style && !self.used.contains(&k) {
+            return None;
+        }
+        Some((Kind::Tag, named))
+    }
+
+    /// A word's key in its kind: a genre's by the 26 (one of their words: the genre), else an alias's word's.
     fn key(&self, kind: Kind, word: &str) -> String {
         let k = super::key(word);
-        match self.aliases.get(&kind).and_then(|a| a.get(&k)) {
+        let k = match self.aliases.get(&kind).and_then(|a| a.get(&k)) {
             Some(to) => super::key(to),
+            None => k,
+        };
+        match self.genres.genre_of_key(&k).filter(|_| kind == Kind::Genre) {
+            Some(genre) => super::key(genre),
             None => k,
         }
     }
 
-    /// The spelling an alias names, if one does.
+    /// The spelling a genre's name or an alias names, if one does.
     fn named(&self, kind: Kind, key: &str) -> Option<&str> {
+        if kind == Kind::Genre
+            && let Some(genre) = self.genres.genre_of_key(key)
+        {
+            return Some(genre);
+        }
         self.aliases.get(&kind)?.get(key).map(String::as_str)
     }
 }
 
-/// A word as answered: its one spelling and who says it, strongest first.
+// A word as answered: its one spelling and who says it, strongest first.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Word {
     pub word: String,
@@ -298,13 +437,15 @@ impl Words {
     }
 }
 
-/// A word on its way: its spellings as written, its weight, its sources, and whether it is kept whatever its weight.
+/// A word on its way: its spellings as written, its weight, its sources, whether it is kept whatever its weight, and
+/// AudioMuse's score of it on a track (GEN.26).
 #[derive(Debug, Default)]
 struct Heard {
     spellings: HashMap<String, usize>,
     weight: f32,
     sources: Vec<Source>,
     firm: bool,
+    score: f32,
 }
 
 impl Heard {
@@ -339,6 +480,14 @@ impl Gathered {
             self.order.push(at.clone());
         }
         self.by.entry(at).or_default().add(word, source, weight, firm);
+    }
+
+    /// A word AudioMuse heard on a track, with its score: firm, its score kept for the record's average (GEN.26–GEN.28).
+    fn heard(&mut self, lib: &Library, kind: Kind, word: &str, score: f32) {
+        self.add(lib, kind, word, Source::Audiomuse, 1.0, true);
+        if let Some(h) = self.by.get_mut(&(kind, lib.key(kind, word))) {
+            h.score = h.score.max(score);
+        }
     }
 
     /// A kind's words kept: the firm ones, then the services' strongest above the floor, up to the kind's most.
@@ -378,26 +527,22 @@ fn shown(lib: &Library, kind: Kind, key: &str, spellings: &HashMap<String, usize
     spellings.iter().max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0))).map_or_else(|| key.to_string(), |(w, _)| w.clone())
 }
 
-/// A track's words of the files and AudioMuse, by kind and key, with their sources: what it says itself. Its files'
-/// MOOD words are read again as genre, style or tag.
+/// A track's words of the files and AudioMuse, by kind and key, with their sources: what it says itself. Each word of its
+/// files' four fields and of AudioMuse's styles sorted by the word (GEN.10), never by its field; a non-word left out.
 fn own_words(lib: &Library, t: &TrackIn) -> Gathered {
     let mut g = Gathered::default();
-    for w in &t.genre {
-        g.add(lib, Kind::Genre, w, Source::Files, 1.0, true);
-    }
-    for w in &t.style {
-        g.add(lib, Kind::Style, w, Source::Files, 1.0, true);
-    }
-    for w in &t.tag {
-        g.add(lib, Kind::Tag, w, Source::Files, 1.0, true);
-    }
-    for w in &t.mood {
-        let kind = lib.sort(&super::key(w));
-        g.add(lib, kind, w, Source::Files, 1.0, true);
+    for (field, words) in [(Field::Other, &t.genre), (Field::Style, &t.style), (Field::Other, &t.tag), (Field::Other, &t.mood)] {
+        for w in words {
+            if let Some((kind, named)) = lib.sort(w, field) {
+                g.add(lib, kind, &named, Source::Files, 1.0, true);
+            }
+        }
     }
     if t.heard {
-        for (w, _) in &t.heard_styles {
-            g.add(lib, Kind::Style, w, Source::Audiomuse, 1.0, true);
+        for (w, score) in &t.heard_styles {
+            if let Some((kind, named)) = lib.sort(w, Field::Other) {
+                g.heard(lib, kind, &named, *score);
+            }
         }
         for w in &t.heard_moods {
             g.add(lib, Kind::Mood, w, Source::Audiomuse, 1.0, true);
@@ -421,12 +566,13 @@ fn by_hand(lib: &Library, kind: Kind, list: &[String]) -> KindWords {
 
 /// A record's words from its inputs (decision 0097): the store's one merge.
 pub fn record(lib: &Library, r: &RecordIn) -> Words {
-    let _rise = lib.rise;
     let own: Vec<Gathered> = r.tracks.iter().map(|t| own_words(lib, t)).collect();
     let tracks = r.tracks.len();
     let heard = r.tracks.iter().filter(|t| t.heard).count();
-    // The files' and AudioMuse's words that are the record's: on half its tracks (AudioMuse's: half those heard).
-    let mut on: HashMap<(Kind, String), (usize, usize)> = HashMap::new();
+    // The files' and AudioMuse's words that are the record's: the files' on half its tracks; AudioMuse's where its average score
+    // over the heard tracks reaches the threshold (GEN.27, GEN.28: a heard track without it counts 0, an unheard one not at all),
+    // a mood on half those heard.
+    let mut on: HashMap<(Kind, String), (usize, usize, f32)> = HashMap::new();
     for g in &own {
         for (at, h) in &g.by {
             let e = on.entry(at.clone()).or_default();
@@ -435,16 +581,21 @@ pub fn record(lib: &Library, r: &RecordIn) -> Words {
             }
             if h.sources.contains(&Source::Audiomuse) {
                 e.1 += 1;
+                e.2 += h.score;
             }
         }
     }
     let half = |n: usize, of: usize| of > 0 && n * 2 >= of;
+    let rises = |kind: Kind, n: usize, scores: f32| match kind {
+        Kind::Mood => half(n, heard),
+        _ => heard > 0 && scores / heard as f32 >= lib.rise,
+    };
     let mut gathered = Gathered::default();
     for g in &own {
         for at in &g.order {
-            let (files, heard_by) = on[at];
+            let (files, heard_by, scores) = on[at];
             let h = &g.by[at];
-            for (source, by) in [(Source::Files, half(files, tracks)), (Source::Audiomuse, half(heard_by, heard))] {
+            for (source, by) in [(Source::Files, half(files, tracks)), (Source::Audiomuse, rises(at.0, heard_by, scores))] {
                 if by && h.sources.contains(&source) {
                     for spelling in h.spellings.keys() {
                         gathered.add(lib, at.0, spelling, source, 1.0, true);
@@ -453,10 +604,14 @@ pub fn record(lib: &Library, r: &RecordIn) -> Words {
             }
         }
     }
+    // The services' words, each split by its service's rule as it is read (GEN.4), then sorted by the word: never a mood.
     for s in &r.said {
-        // Mood is AudioMuse's: a service's mood word is read again by the word, as every word of theirs is.
-        let kind = lib.sort(&super::key(&s.word));
-        gathered.add(lib, kind, &s.word, s.source, s.weight.clamp(0.0, 1.0) * s.source.trust(&s.raw_kind), false);
+        let weight = s.weight.clamp(0.0, 1.0) * s.source.trust(&s.raw_kind);
+        for w in said_words(s) {
+            if let Some((kind, named)) = lib.sort(&w, Field::Other) {
+                gathered.add(lib, kind, &named, s.source, weight, false);
+            }
+        }
     }
     let mut kinds = Vec::new();
     let mut kept: HashMap<Kind, Vec<(String, Word)>> = HashMap::new();

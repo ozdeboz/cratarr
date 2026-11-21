@@ -2053,8 +2053,9 @@ impl Catalogue {
                     let d = crate::app::audiomuse::danceability(&AudioMuseRow { moods: clap, ..AudioMuseRow::default() });
                     energy = e.map(|e| (e * 100.0).round());
                     danceability = d.map(|d| (d * 100.0).round());
-                    styles = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect();
-                    heard = styles.iter().map(|n| (n.clone(), 0.0)).collect();
+                    // Its top styles with their scores (GEN.26): a record's AudioMuse word rises by its average score.
+                    heard = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, s)| (n, s as f32)).collect();
+                    styles = heard.iter().map(|(n, _)| n.clone()).collect();
                 }
                 // The files' STYLE and MOOD words apart from AudioMuse's, and AudioMuse's with their scores: the words' store
                 // sorts and weighs them (decision 0097).

@@ -1226,7 +1226,16 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
         for album in &albums {
             anyhow::ensure!(s.library.has_album(album)?, "That record is not in the library.");
         }
-        s.userdata.set_overrides(&albums, &facts, crate::app::moment::now_secs())?;
+        // A word typed into the genre or the style row edits its own row as each record shows it (GEN.25).
+        let routing = facts.iter().any(|(f, v)| matches!(f.as_str(), "genres" | "styles") && v.is_some());
+        let stored = if routing { Some(crate::app::words::stored(&s)?) } else { None };
+        for album in &albums {
+            let facts = match &stored {
+                Some(st) => crate::app::words::record_by_hand(st, album, &facts),
+                None => facts.clone(),
+            };
+            s.userdata.set_overrides(std::slice::from_ref(album), &facts, crate::app::moment::now_secs())?;
+        }
         s.refresh()?;
         let mut out = serde_json::Map::new();
         for album in &albums {
@@ -1528,7 +1537,7 @@ async fn analysis_import(
 async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Query<NamedCopy>) -> Response {
     let app = ctx.app.clone();
     if source == crate::bandcamp::SOURCE {
-        return bandcamp_details(&id).await;
+        return bandcamp_details(&ctx, &id).await;
     }
     // Its tempo as the library serves it (the BPM tag, else the analysis'), of the file shown below. That file is the copy that
     // streams: the one a queue's Play from names, as the stream takes it (the owner, testing 0.16.0: the main copy was shown).
@@ -1588,8 +1597,9 @@ async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>, Que
 }
 
 /// A Bandcamp preview's details (decision 0071): no file of Cratarr's, so what its album's page says of it, the stream
-/// as Bandcamp serves it (MP3, 128 kb/s), its page in place of a path (the owner, 2026-10-25: Info failed on it).
-async fn bandcamp_details(id: &str) -> Response {
+/// as Bandcamp serves it (MP3, 128 kb/s), its page in place of a path (the owner, 2026-10-25: Info failed on it). A record's own
+/// page read so keeps its tags (GEN.60).
+async fn bandcamp_details(ctx: &Ctx, id: &str) -> Response {
     let found = match crate::bandcamp::read_id(id) {
         Some((url, n)) => crate::bandcamp::Bandcamp::get().album(&url).await.ok().map(|a| (a, n)),
         None => None,
@@ -1597,6 +1607,7 @@ async fn bandcamp_details(id: &str) -> Response {
     let Some((a, n)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track's page on Bandcamp cannot be read." }))).into_response();
     };
+    crate::app::words::keep_bandcamp_read(ctx.served.clone(), &a.url, &a.tags).await;
     let t = a.tracks.iter().find(|t| t.n == n);
     let mut tags = vec![
         json!({ "name": "Title", "value": t.map(|t| t.title.clone()).unwrap_or_default() }),
@@ -1718,6 +1729,8 @@ async fn moved_to(app: &Arc<App>, old: &str) -> Option<String> {
 async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::AlbumView, ToggleError> {
     let (url, _) = crate::bandcamp::read_id(album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
     let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
+    // A record's own page, read: its tags kept as its Bandcamp words (GEN.60); any other page keeps nothing.
+    crate::app::words::keep_bandcamp_read(ctx.served.clone(), &a.url, &a.tags).await;
     // What Discover knows of it, where it suggested it (the owner, 2026-10-25: "as much as our own panel").
     let known = match ctx.served.clone().and_then(|s| ctx.account().map(|a| (s, a))) {
         Some((s, account)) => {
@@ -7551,6 +7564,14 @@ async fn track_words_set(ctx: Ctx, Path((source, id)): Path<(String, String)>, J
     }
     let s = ctx.serve()?;
     let out = crate::run::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        // A word typed into the genre or the style row edits its own row as the track shows it (GEN.25).
+        let set = if set.iter().any(|(k, l)| matches!(k.as_str(), "genre" | "style") && l.is_some()) {
+            let stored = crate::app::words::stored(&s)?;
+            let album = s.library.song_album_map()?.get(&id).cloned();
+            crate::app::words::track_by_hand(&stored, album.as_deref(), &id, set)
+        } else {
+            set
+        };
         for (kind, list) in &set {
             s.userdata.set_track_words(&id, kind, list.as_deref())?;
         }

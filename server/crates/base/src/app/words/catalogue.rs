@@ -23,12 +23,13 @@ use crate::app::base_host::BaseHost;
 /// Every kind the sheet lists, in its order.
 pub const ALL: [&str; 6] = ["type", "year", "genre", "style", "mood", "tag"];
 
-/// The sources that can say a kind, strongest first.
+/// The sources that can say a kind, strongest first; Bandcamp's tags in each kind but mood (GEN.59, OQ-GEN-25), switchable
+/// like Last.fm's.
 fn sources_of(kind: Kind) -> &'static [Source] {
     use Source::*;
     match kind {
-        Kind::Genre | Kind::Tag => &[Hand, Files, Household, Musicbrainz, Discogs, Lastfm],
-        Kind::Style => &[Hand, Files, Audiomuse, Household, Musicbrainz, Discogs, Lastfm],
+        Kind::Genre | Kind::Tag => &[Hand, Files, Household, Musicbrainz, Discogs, Lastfm, Bandcamp],
+        Kind::Style => &[Hand, Files, Audiomuse, Household, Musicbrainz, Discogs, Lastfm, Bandcamp],
         Kind::Mood => &[Hand, Audiomuse],
     }
 }

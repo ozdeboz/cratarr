@@ -2677,7 +2677,7 @@ export const trackPlayed = (source: string, id: string) => quietly<{ counted: bo
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
 /** Decision 0097's words: a kind, a source (strongest first in a word's `sources`). */
 export type WordKind = 'genre' | 'style' | 'mood' | 'tag';
-export type WordSource = 'hand' | 'files' | 'audiomuse' | 'household' | 'musicbrainz' | 'discogs' | 'lastfm';
+export type WordSource = 'hand' | 'files' | 'audiomuse' | 'household' | 'musicbrainz' | 'discogs' | 'lastfm' | 'bandcamp';
 /** A kind's words, strongest first; `hand`: set by hand (exactly the hand's list). */
 export type KindWords = { kind: WordKind; hand: boolean; words: { word: string; sources: WordSource[] }[] };
 /** A record's words (the album view's `words`, the server's one store): its kinds that have any, in the order genre,
