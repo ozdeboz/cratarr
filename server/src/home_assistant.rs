@@ -329,14 +329,17 @@ async fn home_assistant_still_reads_every_field_it_uses() {
     let (status, nineties) = ha(&w, key, Method::POST, "/api/playlists", Some(json!({ "name": "High 90s" }))).await;
     assert!(status.is_success(), "{nineties}");
     let by_name = |found| serde_json::to_value(crate::app::ByName::of(found, vec![freddie.clone()])).unwrap();
-    let dinner = by_name(crate::serve::who::acting_as(me.clone(), w.app.playlists.spoken("dinner")).await.unwrap());
-    holds("GET /api/playlists/by-name", &dinner, &[("playlist", Is::StrOrNull), ("name", Is::StrOrNull), ("spoken", Is::StrOrNull), ("tracks", Is::Arr)]);
+    // Said by its name: still its first spoken name, as its spoken names are kept and shown (by name: "dinner" first).
+    let said = by_name(crate::serve::who::acting_as(me.clone(), w.app.playlists.spoken("evening")).await.unwrap());
+    holds("GET /api/playlists/by-name", &said, &[("playlist", Is::StrOrNull), ("name", Is::StrOrNull), ("spoken", Is::StrOrNull), ("tracks", Is::Arr)]);
     assert!(evening.starts_with("pl-"), "{evening}");
     assert_eq!(
-        (dinner["playlist"].as_str(), dinner["name"].as_str(), dinner["spoken"].as_str()),
-        (Some(evening.as_str()), Some("Evening"), Some("evening music")),
-        "its id, its name, its first spoken name, whatever words matched: {dinner}"
+        (said["playlist"].as_str(), said["name"].as_str(), said["spoken"].as_str()),
+        (Some(evening.as_str()), Some("Evening"), Some("dinner")),
+        "its id, its name, its first spoken name, whatever words matched: {said}"
     );
+    let by_spoken = by_name(crate::serve::who::acting_as(me.clone(), w.app.playlists.spoken("dinner")).await.unwrap());
+    assert_eq!((by_spoken["playlist"].as_str(), by_spoken["spoken"].as_str()), (Some(evening.as_str()), Some("dinner")), "{by_spoken}");
     let nineties = by_name(crate::serve::who::acting_as(me, w.app.playlists.spoken("high 90s")).await.unwrap());
     assert_eq!((nineties["name"].as_str(), nineties["spoken"].as_str()), (Some("High 90s"), Some("High 90s")), "no spoken name: its name: {nineties}");
 

@@ -50,7 +50,10 @@ pub struct Found {
 impl ByName {
     /// The answer for what was found (none: nothing fits), with its tracks.
     pub fn of(found: Option<Found>, tracks: Vec<String>) -> Self {
-        Self { playlist: found.map(|f| f.id), name: None, spoken: None, tracks }
+        match found {
+            Some(f) => Self { playlist: Some(f.id), name: Some(f.name), spoken: Some(f.spoken), tracks },
+            None => Self { playlist: None, name: None, spoken: None, tracks },
+        }
     }
 }
 

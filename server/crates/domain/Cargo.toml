@@ -17,3 +17,8 @@ serde.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+
+# The one path's own test kind (`change::ChangeKind::TestPicture`, AP1), for the tests of the crates above: only their
+# dev-dependencies turn it on (SPLIT-PLAN 5.4).
+[features]
+test-support = []

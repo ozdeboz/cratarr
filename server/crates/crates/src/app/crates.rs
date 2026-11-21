@@ -3,6 +3,9 @@
 //! stores, the journal and its Undo, the favourites heard and the rows (SP3-U: split from it; the crates use the
 //! playlists, never the reverse).
 
+// An artist Out everywhere, on the one command path (GF).
+pub mod out;
+
 use std::sync::Arc;
 
 use anyhow::Result;

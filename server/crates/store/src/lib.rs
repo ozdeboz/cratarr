@@ -8,6 +8,7 @@ pub mod app;
 pub mod bandcamp_ids;
 pub mod catalogue;
 pub mod crates;
+pub mod entries;
 pub mod incoming;
 pub mod insights;
 pub mod intake;

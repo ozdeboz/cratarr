@@ -12,7 +12,7 @@ doctest = false
 
 [features]
 # Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
-test-support = ["cratarr-served/test-support", "cratarr-runner/test-support", "dep:ts-rs"]
+test-support = ["cratarr-served/test-support", "cratarr-runner/test-support", "cratarr-domain/test-support", "dep:ts-rs"]
 
 [dependencies]
 cratarr-served.workspace = true
@@ -41,6 +41,8 @@ ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 cratarr-served = { workspace = true, features = ["test-support"] }
+# The one path's own test kind (`commands::testing`, AP1).
+cratarr-domain = { workspace = true, features = ["test-support"] }
 cratarr-runner = { workspace = true, features = ["test-support"] }
 # Radio's modes are among the page's types the tests write, and live in the rules.
 cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
