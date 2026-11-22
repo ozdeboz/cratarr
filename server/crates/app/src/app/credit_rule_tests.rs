@@ -102,7 +102,9 @@ fn a_credit_splits_by_its_first_copys_library_rules() {
     }
     cat.walk_all();
     cat.identify().unwrap();
-    serve.refresh().unwrap();
+    // The pass's end tells the library, as the catalogue's pass does.
+    cat.changed_outside_pass();
+    assert!(serve.refresh().unwrap(), "built again");
     assert_eq!(credited(&cat, record), ["Kruder", "Dorfmeister"], "MORE's copy decides: two by MORE's rules");
     // MUSIC's rules changed: its own records are credited again at the next build; MORE's is as it was.
     let rules = FolderRules::new(Rules::default(), BTreeMap::from([(0, both.clone()), (1, both)]));
