@@ -286,6 +286,9 @@ pub fn is_public(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// What `Public` says of a name with no address out in the world: read back from a connection's error (`address::fetched`).
+const NOT_PUBLIC: &str = "is not a public address";
+
 /// Names resolved as the system resolves them, every address `is_public` refuses left out (O1): judged on the address connected
 /// to, so a public name pointing home, or rebound there, is refused.
 struct Public;
@@ -293,16 +296,102 @@ struct Public;
 impl reqwest::dns::Resolve for Public {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         Box::pin(async move {
-            let found: Vec<std::net::SocketAddr> = match tokio::net::lookup_host((name.as_str(), 0)).await {
-                Ok(found) => found.collect(),
+            let found: Vec<std::net::SocketAddr> = match looked_up(name.as_str()).await {
+                Ok(found) => found,
                 Err(e) => return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
             };
             let public: Vec<std::net::SocketAddr> = found.into_iter().filter(|a| is_public(a.ip())).collect();
             if public.is_empty() {
-                return Err(format!("{} is not a public address", name.as_str()).into());
+                return Err(format!("{} {NOT_PUBLIC}", name.as_str()).into());
             }
+            // Tests: a name of the test's world, once judged, is dialled at the test's fake on this machine.
+            #[cfg(any(test, feature = "test-support"))]
+            let public = world::dialled(name.as_str(), public);
             Ok(Box::new(public.into_iter()) as reqwest::dns::Addrs)
         })
+    }
+}
+
+/// A name's addresses as the system resolves them (tests: as the test's world says, never by DNS, while one is set).
+async fn looked_up(name: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(found) = world::resolves(name) {
+        return found;
+    }
+    Ok(tokio::net::lookup_host((name, 0)).await?.collect())
+}
+
+/// Tests (SCENARIOS-COUPLING COU.21): a world of the test's own for an address an administrator gives. While it is set, every name
+/// `Public` resolves is answered from its table, never by DNS (a name not in it is refused), and judged as ever; a name judged public
+/// is then dialled at the test's fake on this machine, and each hop of an address goes to that fake as plain http (`wire`), its name
+/// kept for the fake to read. The judge (`is_public`), the resolver (`Public`) and the hop rule are production's: only the lookup and
+/// the wire are the test's. One world at a time in a process (`set` waits for the last to go).
+#[cfg(any(test, feature = "test-support"))]
+pub mod world {
+    use std::collections::HashMap;
+    use std::net::{IpAddr, SocketAddr};
+    use std::sync::{Mutex, MutexGuard};
+
+    struct Set {
+        names: HashMap<String, Vec<IpAddr>>,
+        port: u16,
+    }
+
+    static SET: Mutex<Option<Set>> = Mutex::new(None);
+    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn set() -> MutexGuard<'static, Option<Set>> {
+        SET.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The world of one test, until dropped.
+    pub struct World {
+        _one: tokio::sync::MutexGuard<'static, ()>,
+    }
+
+    impl World {
+        /// Set: each name resolving to its addresses, the test's fake listening on `port` on this machine.
+        pub async fn set(names: &[(&str, &[&str])], port: u16) -> World {
+            let one = ONE.lock().await;
+            let names = names.iter().map(|(n, ips)| (n.to_ascii_lowercase(), ips.iter().map(|ip| ip.parse().expect("an address")).collect())).collect();
+            *set() = Some(Set { names, port });
+            World { _one: one }
+        }
+    }
+
+    impl Drop for World {
+        fn drop(&mut self) {
+            *set() = None;
+        }
+    }
+
+    /// A name's addresses in the world, while one is set: its own, or refused where it has none.
+    pub(super) fn resolves(name: &str) -> Option<std::io::Result<Vec<SocketAddr>>> {
+        let s = set();
+        let s = s.as_ref()?;
+        Some(match s.names.get(&name.to_ascii_lowercase()) {
+            Some(ips) => Ok(ips.iter().map(|ip| SocketAddr::new(*ip, 0)).collect()),
+            None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} is no name of the test's world"))),
+        })
+    }
+
+    /// A name's judged addresses as the wire dials them: the fake on this machine for a name of the world.
+    pub(super) fn dialled(name: &str, judged: Vec<SocketAddr>) -> Vec<SocketAddr> {
+        if set().as_ref().is_some_and(|s| s.names.contains_key(&name.to_ascii_lowercase())) { vec![SocketAddr::from(([127, 0, 0, 1], 0))] } else { judged }
+    }
+
+    /// An address's hop as the wire carries it: in a world, plain http to the fake's port, its name kept (the fake reads its Host).
+    pub fn wire(url: reqwest::Url) -> reqwest::Url {
+        let Some(port) = set().as_ref().map(|s| s.port) else { return url };
+        let mut to = url;
+        let _ = to.set_scheme("http");
+        let _ = to.set_port(Some(port));
+        to
+    }
+
+    /// Whether a world is set.
+    pub fn is_set() -> bool {
+        set().is_some()
     }
 }
 
@@ -319,9 +408,21 @@ pub async fn read_image(resp: reqwest::Response, cap: usize) -> anyhow::Result<V
     Ok(bytes)
 }
 
-/// An answer's body read in pieces and stopped at `cap` bytes (O1): a longer one is refused, never held whole.
+/// An answer longer than its cap, cut there (`read_capped`): its error, known by its type.
+#[derive(Debug)]
+pub struct Cut(usize);
+
+impl std::fmt::Display for Cut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the answer was longer than {} KB: cut there", self.0 / 1024)
+    }
+}
+
+impl std::error::Error for Cut {}
+
+/// An answer's body read in pieces and stopped at `cap` bytes (O1): a longer one is refused (`Cut`), never held whole.
 pub async fn read_capped(mut resp: reqwest::Response, cap: usize) -> anyhow::Result<Vec<u8>> {
-    let over = || anyhow::anyhow!("the answer was longer than {} KB: cut there", cap / 1024);
+    let over = || anyhow::Error::new(Cut(cap));
     if resp.content_length().is_some_and(|n| n > cap as u64) {
         return Err(over());
     }
@@ -333,6 +434,120 @@ pub async fn read_capped(mut resp: reqwest::Response, cap: usize) -> anyhow::Res
         out.extend_from_slice(&piece);
     }
     Ok(out)
+}
+
+/// An address an administrator gives (SCENARIOS-COUPLING COU.21; the owner, 2026-11-22: "Any image address, in 0.18"): Change cover's
+/// "From an address", any https host by name out in the world. Its own reach, beside the purposes' (it widens none of their hosts):
+/// the address and each redirect checked as the first was (https, a name, never a number), at most `HOPS` redirects, followed here by
+/// hand; every connection made through `Public`, so what a name resolves to is judged at the connection, at each hop, and a name
+/// that resolves home, or rebinds there, is refused there too. No proxy from the environment (Y11).
+pub mod address {
+    use std::time::Duration;
+
+    use super::Sent as _;
+
+    /// The redirects an address may take: a few.
+    pub const HOPS: usize = 3;
+
+    /// Why an address was not fetched, in the words the person reads.
+    #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+    pub enum Refused {
+        #[error("That is not an address")]
+        NoAddress,
+        #[error("Only https addresses")]
+        NotHttps,
+        #[error("Cratarr fetches only from public addresses")]
+        NotPublic,
+        #[error("That address isn't an image")]
+        NotAnImage,
+        #[error("That image is too large")]
+        TooLarge,
+        #[error("That address redirects too many times")]
+        TooManyHops,
+        #[error("That address answered {0}")]
+        Answered(u16),
+        #[error("That address did not answer in time")]
+        Slow,
+        #[error("That address could not be reached")]
+        Unreached,
+    }
+
+    /// An address as given, checked before anything is asked: https, its host a name, never a number in any of its forms (an
+    /// IPv4 address however written is one by the time it is parsed).
+    pub fn checked(address: &str) -> Result<reqwest::Url, Refused> {
+        let url = reqwest::Url::parse(address.trim()).map_err(|_| Refused::NoAddress)?;
+        if url.scheme() != "https" {
+            return Err(Refused::NotHttps);
+        }
+        let host = url.host_str().ok_or(Refused::NoAddress)?;
+        if host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>().is_ok() {
+            return Err(Refused::NotPublic);
+        }
+        Ok(url)
+    }
+
+    /// Its client: https only, no proxy, no redirect followed of its own (`fetched` follows them), every name resolved through
+    /// `Public`; Cratarr's User-Agent.
+    fn client() -> reqwest::Result<reqwest::Client> {
+        // Tests: the world's wire is plain http to its fake (`world::wire`); nothing else differs.
+        #[cfg(any(test, feature = "test-support"))]
+        let https = !super::world::is_set();
+        #[cfg(not(any(test, feature = "test-support")))]
+        let https = true;
+        reqwest::Client::builder()
+            .https_only(https)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(std::sync::Arc::new(super::Public))
+            .user_agent(super::USER_AGENT)
+            .timeout(Duration::from_secs(60))
+            .build()
+    }
+
+    /// The image at an address an administrator gave, its type an image's, read in pieces and cut at `cap`: each hop checked as
+    /// the address was, at most `HOPS` redirects, each connection judged by `Public` once its name resolves.
+    pub async fn fetched(address: &str, cap: usize) -> Result<Vec<u8>, Refused> {
+        let mut url = checked(address)?;
+        let client = client().map_err(|_| Refused::Unreached)?;
+        for hop in 0..=HOPS {
+            #[cfg(any(test, feature = "test-support"))]
+            let wire = super::world::wire(url.clone());
+            #[cfg(not(any(test, feature = "test-support")))]
+            let wire = url.clone();
+            let r = client.get(wire).sent().await.map_err(|e| unanswered(&e))?;
+            if r.status().is_redirection() {
+                if hop == HOPS {
+                    return Err(Refused::TooManyHops);
+                }
+                let to = r.headers().get(reqwest::header::LOCATION).and_then(|l| l.to_str().ok()).ok_or(Refused::Answered(r.status().as_u16()))?;
+                url = checked(url.join(to).map_err(|_| Refused::NoAddress)?.as_str())?;
+                continue;
+            }
+            if !r.status().is_success() {
+                return Err(Refused::Answered(r.status().as_u16()));
+            }
+            if !r.headers().get(reqwest::header::CONTENT_TYPE).and_then(|t| t.to_str().ok()).is_some_and(|t| t.starts_with("image/")) {
+                return Err(Refused::NotAnImage);
+            }
+            let bytes = super::read_capped(r, cap).await.map_err(|e| if e.is::<super::Cut>() { Refused::TooLarge } else { Refused::Unreached })?;
+            if bytes.is_empty() {
+                return Err(Refused::NotAnImage);
+            }
+            return Ok(bytes);
+        }
+        Err(Refused::TooManyHops)
+    }
+
+    /// A connection that failed, said: refused at home by `Public`, too slow, or not reached.
+    fn unanswered(e: &reqwest::Error) -> Refused {
+        if format!("{e:?}").contains(super::NOT_PUBLIC) {
+            Refused::NotPublic
+        } else if e.is_timeout() {
+            Refused::Slow
+        } else {
+            Refused::Unreached
+        }
+    }
 }
 
 /// A request sent, its answer noted for its connection (by its host).

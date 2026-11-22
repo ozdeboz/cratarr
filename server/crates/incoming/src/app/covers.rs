@@ -271,7 +271,8 @@ async fn discogs(
     }
 }
 
-/// Only images from these hosts are fetched: the candidates' own.
+/// The candidates' own hosts: their pictures fetched on the candidates' reach (`fetch`). Change cover takes any other address as an
+/// administrator's own (`choose`, `reach::address`).
 fn allowed(url: &str) -> bool {
     let Ok(u) = reqwest::Url::parse(url) else { return false };
     let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -462,7 +463,7 @@ pub fn undo_kept(keep: &Path) -> Result<()> {
 pub struct PickCover {
     pub serve: std::sync::Arc<crate::serve::Serve>,
     pub record: i64,
-    /// The picture (its bytes) and its source (`upload`, `coverartarchive`, `discogs`); none: Reset.
+    /// The picture (its bytes) and its source (`upload`, `address`, `coverartarchive`, `discogs`); none: Reset.
     pub picture: Option<(Vec<u8>, String)>,
 }
 
@@ -475,12 +476,50 @@ impl PickCover {
         Ok(Self { serve, record, picture: Some((bytes, source.to_string())) })
     }
 
+    /// An administrator's own address (COU.21): any https image by name, public only (`reach::address`), fetched; kept as from an
+    /// address.
+    pub async fn addressed(serve: std::sync::Arc<crate::serve::Serve>, record: i64, url: &str) -> Result<Self> {
+        let bytes = super::reach::address::fetched(url, MOST_BYTES).await?;
+        kind_of(&bytes)?;
+        Ok(Self { serve, record, picture: Some((bytes, "address".to_string())) })
+    }
+
     /// An administrator's own picture (Upload cover).
     pub fn uploaded(serve: std::sync::Arc<crate::serve::Serve>, record: i64, data: Vec<u8>) -> Result<Self> {
         uploaded(&data)?;
         kind_of(&data)?;
         Ok(Self { serve, record, picture: Some((data, "upload".to_string())) })
     }
+}
+
+/// Change cover's choice as its run (SCENARIOS-COUPLING COU.21; lookups are jobs): the picture at `url` fetched inside the run, never
+/// in the handler, then kept on the one path as `PickCover` (COU.11); the path's answer (its stamp, its Undo) the run's result, a
+/// refusal its error, in its own words. A candidate's picture comes from the candidates' hosts as before (`allowed`, `fetch`); any
+/// other address is an administrator's own (`reach::address`): any https host by name, public only, judged at each connection.
+/// Refused at once, no run begun and nothing asked: anyone but an administrator, an address not https or by number.
+pub fn choose(
+    path: std::sync::Arc<super::commands::Commands>,
+    serve: std::sync::Arc<crate::serve::Serve>,
+    v: cratarr_domain::can::Viewer,
+    key: Option<String>,
+    record: i64,
+    url: &str,
+) -> Result<crate::runner::Task, String> {
+    if let cratarr_domain::can::Decision::Deny(why) = administers(&v) {
+        return Err(why.words().to_string());
+    }
+    let url = url.trim().to_string();
+    let candidate = allowed(&url);
+    if !candidate {
+        super::reach::address::checked(&url).map_err(|e| e.to_string())?;
+    }
+    let (kind, account) = (format!("cover:{}", crate::serve::ids::record(record)), v.account.clone());
+    crate::runner::spawn(&kind, &account, false, move |h| async move {
+        h.step("Fetching the picture", 0, Some(1));
+        let pick = if candidate { PickCover::chosen(serve, record, &url).await? } else { PickCover::addressed(serve, record, &url).await? };
+        h.step("Fetching the picture", 1, Some(1));
+        path.run(&v, key.as_deref(), &pick).await.map_err(|e| anyhow::anyhow!("{e}"))
+    })
 }
 
 /// What a cover's Change keeps: the record, the chosen cover before it by its source and when (its bytes stay in the store, set
