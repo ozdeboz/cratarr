@@ -619,10 +619,7 @@ impl IncomingService {
         let at = self.locate_listed(source_id, album).await?;
         let (what, title) = self.replaced_from_named(&at.source, at.dir.folder, main.0, &at.album.title);
         let run = crate::app::file_runs::track(&self.journal, what, title);
-        // The one lock over the library's files (0092): a Replace never writes beside a file run.
-        let turn = crate::app::file_runs::turn(&self.journal).await;
         let done = self.replacing_from_copy(&at, main.clone(), year, Some(sheet)).await;
-        drop(turn);
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(&at, main.0)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
@@ -652,6 +649,9 @@ impl IncomingService {
     pub(super) async fn replacing_from_copy(&self, at: &Located, main: (i64, String), year: Option<&str>, sheet: Option<&ReplaceSheet>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(&at.album.id, main.0)?;
         let _alone = self.alone(&at.album.id, main.0, &at.album.title, "being replaced")?;
+        // The one lock over the library's files (0092), taken after the one-at-a-time guard, so a second tap at once is told at once
+        // (RY01.13) and none writes beside a file run.
+        let _turn = crate::app::file_runs::turn(&self.journal).await;
         let now = epoch_now();
         let (event, planned, music) = self.event_from_copy(at, main, year, now).await?;
         if sheet.is_some_and(|s| *s != planned) {
