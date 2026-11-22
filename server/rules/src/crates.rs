@@ -1051,6 +1051,16 @@ pub fn various(name: &str) -> bool {
     matches!(name.trim().to_lowercase().as_str(), "various artists" | "various" | "va" | "verschiedene interpreten")
 }
 
+/// A placeholder part of a credit ("Carlos Niño & Friends"'s "Friends"; a title's "(feat. Friends)"): no one, never an artist, a
+/// chip, a filter value, an Out entry or a featured credit (SCENARIOS-DC3 F54, OQ-DC3-5 (a): a short fixed list, beside
+/// `various()`; SCENARIOS-CRED CRED.24 (p16), T-CRED-30). For a credit's parts only: a whole credit that is a band's name stays its
+/// artist (T-DC3-38), which is the caller's to keep.
+pub fn placeholder(name: &str) -> bool {
+    // Red first (CRED.24 (p16); F54.1 (n), (n3)): no list yet.
+    let _ = name;
+    false
+}
+
 /// What the axes test about the library as a whole: which playlists hold a line, which lines are favourites.
 pub struct World<'a> {
     pub membership: &'a HashMap<String, Vec<String>>,
@@ -2600,6 +2610,18 @@ pub fn bpm_of(raw: &str) -> Option<f64> {
 mod tests {
     use super::*;
 
+    /// F54.1 (n) and (n3), OQ-DC3-5 (a), and CRED.24 (p16): a placeholder is a short fixed list, case and spaces aside: "Friends"
+    /// is on it (Going Home's "Carlos Niño & Friends"; a title's "(feat. Friends)"), "Others" and "Guests" too; a name is not
+    /// ("Nicola Conte", "Rosalia De Souza", "Carlos Niño"), nor Various Artists (`various()`'s). Red first: no list.
+    #[test]
+    fn a_placeholder_is_a_short_fixed_list() {
+        for p in ["Friends", " friends ", "FRIENDS", "Others", "Guests"] {
+            assert!(placeholder(p), "{p:?} is a placeholder");
+        }
+        for name in ["Nicola Conte", "Rosalia De Souza", "Carlos Niño", "Carlos Niño & Friends", "Various Artists", "Friendship", ""] {
+            assert!(!placeholder(name), "{name:?} is no placeholder");
+        }
+    }
 
     #[test]
     fn most_alike_goes_by_the_whole_percent_and_the_taste_only_among_those_as_alike() {
