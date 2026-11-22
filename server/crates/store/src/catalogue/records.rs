@@ -5941,6 +5941,28 @@ mod tests {
         assert!(credited(120).is_empty(), "{report}");
     }
 
+    /// SCENARIOS-DC3 F54.4 (4) (its R6 half; (3), the crates' Artist filter and Out, is 3a-3's): names pair with ids only through the
+    /// list tags and F54's rule (`credit_parts`, the one splitter), never by cutting a credit on a bare "&". "Simon & Garfunkel" with two
+    /// ids pairs nothing (one name, two ids); "Melanie Charles & The Journey" with one id pairs whole (F54.1 (q)); a list tag naming
+    /// each pairs each. Never "Simon" or "Garfunkel" named by the cut. Red first: `credited_apart` cuts at " & ".
+    #[test]
+    fn no_credit_is_cut_on_a_bare_ampersand() {
+        let cat = crate::catalogue::tests::tracks(3);
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        crate::catalogue::tests::file_of_track(&cat, "A/01.flac", 1);
+        cat.tag_for_tests(0, "A/01.flac", &[("albumartist", "Simon & Garfunkel"), ("musicbrainz_albumartistid", &format!("{}; {}", mbid(311), mbid(312)))]);
+        crate::catalogue::tests::file_of_track(&cat, "B/01.flac", 2);
+        cat.tag_for_tests(0, "B/01.flac", &[("albumartist", "Melanie Charles & The Journey"), ("musicbrainz_albumartistid", &mbid(212))]);
+        crate::catalogue::tests::file_of_track(&cat, "C/01.flac", 3);
+        let ids = format!("{}; {}", mbid(201), mbid(204));
+        cat.tag_for_tests(0, "C/01.flac", &[("albumartist", "Glass Harbour & Tape Club"), ("albumartists", "Glass Harbour"), ("albumartists", "Tape Club"), ("musicbrainz_albumartistid", &ids)]);
+        let named = files_artists(&cat.db()).unwrap();
+        assert_eq!(named.get(&mbid(311)), None, "never \"Simon\" by a cut: {named:?}");
+        assert_eq!(named.get(&mbid(312)), None, "never \"Garfunkel\" by a cut: {named:?}");
+        assert_eq!(named.get(&mbid(212)).map(String::as_str), Some("Melanie Charles & The Journey"), "one name, one id: whole");
+        assert_eq!((named.get(&mbid(201)).map(String::as_str), named.get(&mbid(204)).map(String::as_str)), (Some("Glass Harbour"), Some("Tape Club")), "the list names each");
+    }
+
     /// R6 (N13): a discography whose artist's name is held by an artist with another MusicBrainz id is two artists of one name:
     /// listed, no records made, and the id the artist held stays theirs alone.
     #[test]

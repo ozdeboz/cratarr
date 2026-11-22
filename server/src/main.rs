@@ -61,6 +61,9 @@ mod lookups_dc2;
 // SCENARIOS-CRED (DC3c): the one credits store, through the router.
 #[cfg(test)]
 mod credits_dc3c;
+// DC3a 3a-1: the record's one credit rule, through the router.
+#[cfg(test)]
+mod credits_dc3a;
 // SCENARIOS-LOOKUPS LK.0 and LK.0b: every route's outside asks counted (run by name, alone in its process).
 #[cfg(test)]
 mod lookups_scan;

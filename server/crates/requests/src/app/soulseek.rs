@@ -116,6 +116,10 @@ pub struct Record {
     /// The approved Request it fetches (decision 0099's amendment, the owner 2026-11-03: Soulseek fetches only Cratarr's
     /// approved Requests; Lidarr its own Wanted, through its own downloaders).
     pub request: i64,
+    /// The record's credited artists, each by its one name (SCENARIOS-DC3 F54.4 (5)): the ladder's rungs after the whole credit. Empty
+    /// for an item kept before 0.18: its line alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<String>,
 }
 
 /// One of the list's tracks, as a folder's files are judged by: the list's own shape (C51b), a recording only where
@@ -1065,7 +1069,7 @@ fn held_in(items: &[Item], now: i64, held: impl Fn(&Item) -> bool) -> Vec<(Strin
 /// Tests elsewhere: an item of `record` on the list as `id`, its folders found and waiting for a tick, so no worker takes it up.
 #[cfg(any(test, feature = "test-support"))]
 pub fn list_for_tests(id: &str, record: i64) {
-    let r = Record { record, artist: "Glass Harbour".into(), album: "Undertow".into(), year: None, request: 0 };
+    let r = Record { record, artist: "Glass Harbour".into(), album: "Undertow".into(), year: None, request: 0, artists: Vec::new() };
     let i = Item {
         id: id.into(),
         record: r,
@@ -1642,7 +1646,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
         k.next += 1;
         k.items.push(Item {
             id: format!("ss-{}", k.next),
-            record: Record { record: o.record, artist: o.artist.clone(), album: o.title.clone(), year: o.year, request: r.id },
+            record: Record { record: o.record, artist: o.artist.clone(), album: o.title.clone(), year: o.year, request: r.id, artists: Vec::new() },
             state: State::Waiting,
             tracks: Vec::new(),
             untimed: Vec::new(),
@@ -3155,7 +3159,7 @@ pub mod tests {
     mod upgrade;
 
     fn record(artist: &str, album: &str, year: Option<i32>) -> Record {
-        Record { record: 1, artist: artist.into(), album: album.into(), year, request: 1 }
+        Record { record: 1, artist: artist.into(), album: album.into(), year, request: 1, artists: Vec::new() }
     }
 
     fn track(n: u32, title: &str, secs: i64) -> Track {
@@ -3182,6 +3186,26 @@ pub mod tests {
         assert_eq!(main_artist("Grouch / Grouch In Dub"), "Grouch");
         assert_eq!(main_artist("AC/DC"), "AC/DC");
         assert_eq!(main_artist("İlhan Mimaroğlu & Freddie Hubbard"), "İlhan Mimaroğlu");
+    }
+
+    /// SCENARIOS-DC3 F54.4 (5) (T-DC3-32, M2): the ladder gains a rung per credited artist of the record, by its one name, after the
+    /// whole credit: Deep Harbour, credited Commodo and Alfa Mist, searches "Commodo …" and "Alfa Mist …". `main_artist` stays a rung,
+    /// never a credit (its pins above unchanged); a record of one artist reads as before. Never a credited artist's rung before the
+    /// whole credit's. Red first: no rung for Alfa Mist (the ladder reads the record's line alone).
+    #[test]
+    fn the_ladder_tries_each_credited_artist() {
+        let deep = Record { artists: vec!["Commodo".into(), "Alfa Mist".into()], ..record("Commodo & Alfa Mist", "Deep Harbour", None) };
+        let rungs = ladder(&deep);
+        assert_eq!(rungs[0], "Commodo Alfa Mist Deep Harbour", "the whole credit first");
+        for one in ["Commodo Deep Harbour", "Alfa Mist Deep Harbour"] {
+            let at = rungs.iter().position(|r| r == one).unwrap_or_else(|| panic!("a rung for {one:?}: {rungs:?}"));
+            assert!(at > 0, "after the whole credit");
+        }
+        assert_eq!(rungs.iter().filter(|r| r.starts_with('*')).count(), 1, "one wildcard, last: {rungs:?}");
+        assert!(rungs.last().is_some_and(|r| r.starts_with('*')), "the wildcard last: {rungs:?}");
+        // One artist: as before.
+        let one = Record { artists: vec!["Boards of Canada".into()], ..record("Boards of Canada", "Geogaddi", None) };
+        assert_eq!(ladder(&one), ["Boards of Canada Geogaddi", "*oards of Canada Geogaddi"]);
     }
 
     #[test]
@@ -3861,7 +3885,7 @@ pub mod tests {
         };
         let i = Item {
             id: id.into(),
-            record: Record { record: 11, artist: "Glass Harbour".into(), album: "Tide Tables".into(), year: Some(2012), request: 11 },
+            record: Record { record: 11, artist: "Glass Harbour".into(), album: "Tide Tables".into(), year: Some(2012), request: 11, artists: Vec::new() },
             state,
             tracks: vec![track(1, "Slack Water", 250), track(2, "Neap", 240), track(3, "Spring Tide", 260)],
             untimed: Vec::new(),
@@ -5833,7 +5857,7 @@ pub mod tests {
         };
         Item {
             id: id.into(),
-            record: Record { record: 9_700, artist: "Glass Harbour".into(), album: "Night Ferry".into(), year: None, request: 1 },
+            record: Record { record: 9_700, artist: "Glass Harbour".into(), album: "Night Ferry".into(), year: None, request: 1, artists: Vec::new() },
             state: State::Found,
             tracks: Vec::new(),
             untimed: Vec::new(),
@@ -7327,7 +7351,7 @@ pub mod tests {
     pub fn tn_item(id: &str, record: i64, album: &str, state: State) -> Item {
         Item {
             id: id.into(),
-            record: Record { record, artist: "Glass Harbour".into(), album: album.into(), year: None, request: record },
+            record: Record { record, artist: "Glass Harbour".into(), album: album.into(), year: None, request: record, artists: Vec::new() },
             state,
             tracks: tide_list(),
             untimed: Vec::new(),

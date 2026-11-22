@@ -541,6 +541,52 @@ mod tests {
         assert_eq!(mixers(&said(&cat, record)), [("files@1".to_string(), "Tom Lerat".to_string())], "(d) IN's copy decides once MUSIC's is gone");
     }
 
+    /// CRED.19 (the read's half, through F54's `credit_parts`): a role value splits only where the files or a source name each
+    /// person. Track 1's COMPOSER "Kerys Lae & Yann Tiersen", no source naming the composers: one name-only credit (a); track 2's
+    /// "Kerys Lae / Yann Tiersen" (the library's spaced slash): two (c); track 3's "Kerys Lae & Yann Tiersen" with MusicBrainz's work
+    /// composers Kerys Lae and Yann Tiersen by id, their names joined the files' value: two, by MusicBrainz's ids (b); track 4's
+    /// PERFORMER "Carlos Niño & Friends (percussion)": one performer, percussion, "Friends" no person (d). Never a credit cut on a bare
+    /// "&"; never a split list of CRED's own. Red first: role values are kept as written, so (c) is one name and (b) stays one beside
+    /// MusicBrainz's two.
+    #[test]
+    fn role_credits_split_by_f54_alone_in_the_read() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let record = {
+            let db = cat.db();
+            db.execute("INSERT INTO records (born, title, artist) VALUES (1, 'ALL', 'Yann Tiersen')", []).unwrap();
+            let record = db.last_insert_rowid();
+            let roles = [("composer", "Kerys Lae & Yann Tiersen"), ("composer", "Kerys Lae / Yann Tiersen"), ("composer", "Kerys Lae & Yann Tiersen"), ("performer", "Carlos Niño & Friends (percussion)")];
+            for (t, (role, value)) in roles.iter().enumerate() {
+                let t = t as u32 + 1;
+                db.execute("INSERT INTO tracks (born, record, disc, number) VALUES (1, ?1, 1, ?2)", params![record, t]).unwrap();
+                let track = db.last_insert_rowid();
+                let rel = format!("all/{t:02}.flac");
+                db.execute("INSERT INTO files (folder, rel, size, mtime, track, duration_ms, state) VALUES (0, ?1, 1, 1, ?2, 200000, 1)", params![rel, track]).unwrap();
+                for (i, (name, value)) in [("title", format!("Track {t}")), ("tracknumber", t.to_string()), (*role, value.to_string())].iter().enumerate() {
+                    db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, ?2, ?3, ?3, ?4)", params![rel, i as i64, name, value]).unwrap();
+                }
+            }
+            record
+        };
+        let composer = |id: &str, name: &str| CreditRow { track: vec![(1, 3)], person: Some(id.into()), name: name.into(), word: "composer".into(), ..Default::default() };
+        cat.keep_credits(record, "musicbrainz", "release:all", Some(&[composer("mb-kl", "Kerys Lae"), composer("mb-yt", "Yann Tiersen")]), false, 1).unwrap();
+        let c = cat.credits_read(record, &library).unwrap();
+        let roles = cratarr_domain::credits::credits_of(&c.said, &c.here, &c.all);
+        let people = |role: &str| -> Vec<(String, Option<Vec<u32>>, bool)> {
+            roles.iter().filter(|r| r.role == role).flat_map(|r| r.people.iter()).map(|p| (p.name.clone(), p.tracks.clone(), p.person.is_some())).collect()
+        };
+        let composers = people("composer");
+        assert!(composers.contains(&("Kerys Lae & Yann Tiersen".to_string(), Some(vec![1]), false)), "(a) one name-only credit on track 1 alone: {composers:?}");
+        assert!(!composers.iter().any(|(n, _, _)| n.contains('/')), "(c) never the slash value whole: {composers:?}");
+        for name in ["Kerys Lae", "Yann Tiersen"] {
+            let one: Vec<&(String, Option<Vec<u32>>, bool)> = composers.iter().filter(|(n, _, _)| n == name).collect();
+            assert_eq!(one.len(), 1, "{name}: one credit: {composers:?}");
+            assert_eq!((one[0].1.clone(), one[0].2), (Some(vec![2, 3]), true), "(b), (c) {name}: tracks 2 and 3, by MusicBrainz's id: {composers:?}");
+        }
+        let performers = people("performer");
+        assert_eq!(performers.iter().map(|(n, _, _)| n.as_str()).collect::<Vec<_>>(), ["Carlos Niño & Friends"], "(d) one performer, never \"Friends\"");
+    }
+
     /// CRED.22 (kind 8), the limits a record's read holds: a box set of 3 discs and 60 tracks, MusicBrainz naming 140 players on each
     /// recording, a Discogs credit on "1 to 60" placed through its kept list, a COMPOSER of 193 characters. The answer's credits come
     /// grouped, each person once per role and detail, on every track with no tracks named ("1 to 60" reads as all of them), the long

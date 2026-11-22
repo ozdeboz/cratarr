@@ -59,6 +59,8 @@ mod playing_tests_top;
 mod radio_proof;
 #[cfg(test)]
 mod tag_rules_tests;
+#[cfg(test)]
+mod credit_rule_tests;
 pub mod tracks;
 
 use std::sync::Arc;
