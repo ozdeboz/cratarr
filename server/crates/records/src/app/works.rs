@@ -302,6 +302,13 @@ pub fn release_of(v: &Value) -> Release {
     Release { stored, works }
 }
 
+/// Every credit a release's answer gives (CRED.5; T-CRED-12, the works pass's one question), as the credits store keeps them.
+pub fn release_credits(v: &Value) -> Vec<crate::catalogue::credits::CreditRow> {
+    // Red first (SCENARIOS-CRED CRED.5): the parse keeps no credit yet.
+    let _ = v;
+    Vec::new()
+}
+
 /// An artist's "is person" relations (MusicBrainz: a person performs as a performance name), from the artist's
 /// (`artist`, its MusicBrainz id) lookup: (the performance name, the person, the person's name). From the performance
 /// name the relation points backward to the person (Aphex Twin is person Richard D. James); from the person, forward
@@ -561,6 +568,74 @@ pub async fn discogs_pass() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An artist as a relationship or a credit names them.
+    fn who(id: &str, name: &str) -> Value {
+        serde_json::json!({ "id": id, "name": name, "sort-name": name })
+    }
+
+    /// ALL's shape, cut down to four tracks (SCENARIOS-CRED's fixture): the release credited to Yann Tiersen, track 4 "Yann Tiersen
+    /// feat. Kerys Lae"; the release's producer and mix (Gwen Arzel), mastering (Nils Fréjus) and an orchestrator (a type the roles
+    /// table names no row for); piano on every recording, the violin with "guest" on 2 (Maëlle Dour, credited "M. Dour"), the vocal
+    /// on 4; every recording a work Yann Tiersen composed.
+    fn all_four() -> Value {
+        let rel = |kind: &str, id: &str, name: &str, attributes: &[&str]| serde_json::json!({ "type": kind, "target-type": "artist", "attributes": attributes, "artist": who(id, name) });
+        let tracks: Vec<Value> = (1..=4u32)
+            .map(|t| {
+                let credit = if t == 4 {
+                    serde_json::json!([{ "name": "Yann Tiersen", "joinphrase": " feat. ", "artist": who("yt", "Yann Tiersen") }, { "name": "Kerys Lae", "joinphrase": "", "artist": who("kl", "Kerys Lae") }])
+                } else {
+                    serde_json::json!([{ "name": "Yann Tiersen", "joinphrase": "", "artist": who("yt", "Yann Tiersen") }])
+                };
+                let mut relations = vec![rel("instrument", "yt", "Yann Tiersen", &["piano"])];
+                if t == 2 {
+                    let mut violin = rel("instrument", "md", "Maëlle Dour", &["guest", "violin"]);
+                    violin["target-credit"] = "M. Dour".into();
+                    relations.push(violin);
+                }
+                if t == 4 {
+                    relations.push(rel("vocal", "kl", "Kerys Lae", &[]));
+                }
+                relations.push(serde_json::json!({ "type": "performance", "target-type": "work", "work": { "id": format!("w{t}"), "title": format!("Track {t}"),
+                    "relations": [rel("composer", "yt", "Yann Tiersen", &[])] } }));
+                serde_json::json!({ "position": t, "title": format!("Track {t}"), "artist-credit": credit, "recording": { "id": format!("r{t}"), "relations": relations } })
+            })
+            .collect();
+        serde_json::json!({
+            "artist-credit": [{ "name": "Yann Tiersen", "joinphrase": "", "artist": who("yt", "Yann Tiersen") }],
+            "relations": [rel("producer", "ga", "Gwen Arzel", &[]), rel("mix", "ga", "Gwen Arzel", &[]), rel("mastering", "nf", "Nils Fréjus", &[]), rel("orchestrator", "ga", "Gwen Arzel", &[])],
+            "media": [{ "position": 1, "tracks": tracks }]
+        })
+    }
+
+    /// CRED.5 (a), the parse (T-CRED-12): the works pass's one answer keeps every credit by MusicBrainz id: each track's artist credit,
+    /// every artist of it with its phrase (track 4: Yann Tiersen "feat.", Kerys Lae featuring); the release's relationships on every
+    /// track (producer, mix, mastering, and the orchestrator under MusicBrainz's own word); each recording's on its track (the piano,
+    /// the violin with its "guest" attribute and its credited-as name, the vocal); each work's composer on the tracks performing it.
+    /// Never a relationship type dropped, a credited person's id dropped, a track's credit cut to its first artist. Red first: the
+    /// works pass keeps only the performing relationships as four roles, with no instrument and no track, and drops the phrases
+    /// (rec/works.rs:125-132, :185-199).
+    #[test]
+    fn musicbrainz_credits_keep_every_role_by_id() {
+        let rows = release_credits(&all_four());
+        let has = |word: &str, person: &str, track: &[(u32, u32)]| rows.iter().any(|r| r.word == word && r.person.as_deref() == Some(person) && r.track == track);
+        assert!(has("artist", "yt", &[]), "the release's credit, on every track: {rows:?}");
+        for word in ["producer", "mix", "mastering", "orchestrator"] {
+            assert!(rows.iter().any(|r| r.word == word && r.track.is_empty() && r.person.is_some()), "the release's {word}, on every track: {rows:?}");
+        }
+        for t in 1..=4 {
+            assert!(has("instrument", "yt", &[(1, t)]), "track {t}'s piano: {rows:?}");
+            assert!(has("composer", "yt", &[(1, t)]), "track {t}'s work's composer: {rows:?}");
+            assert!(has("artist", "yt", &[(1, t)]), "track {t}'s artist credit: {rows:?}");
+        }
+        let violin = rows.iter().find(|r| r.person.as_deref() == Some("md")).expect("the violin");
+        assert_eq!((violin.word.as_str(), violin.attributes.clone(), violin.track.clone()), ("instrument", vec!["guest".to_string(), "violin".to_string()], vec![(1, 2)]));
+        assert_eq!((violin.name.as_str(), violin.credited_as.as_deref()), ("Maëlle Dour", Some("M. Dour")), "the person by their name, the credited-as kept as MusicBrainz's words");
+        assert!(has("vocal", "kl", &[(1, 4)]), "{rows:?}");
+        let four: Vec<(&str, Option<&str>, Option<&str>)> =
+            rows.iter().filter(|r| r.track == [(1, 4)] && matches!(r.word.as_str(), "artist" | "featuring")).map(|r| (r.word.as_str(), r.person.as_deref(), r.phrase.as_deref())).collect();
+        assert_eq!(four, [("artist", Some("yt"), Some("feat.")), ("featuring", Some("kl"), None)], "track 4's credit, every artist by id, its phrase");
+    }
 
     /// A release of Brahms' piano works played by Claudio Arrau, as MusicBrainz answers the works' question (cut down:
     /// two discs, three tracks, one without a work).
