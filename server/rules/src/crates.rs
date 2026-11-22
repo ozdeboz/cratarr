@@ -4080,9 +4080,10 @@ mod tests {
         let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
         let (membership, off) = (HashMap::new(), HashSet::from([1]));
         let view = View { files: &files, switched_off: &off, world: nobodys(&membership), by: &Weights::EQUAL, alike: || &alike };
-        let like = like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 2).conditions;
-        assert_eq!(view.select(&like, false), ["seed.flac", "far.flac"], "the near one's library is off, so the two are these");
-        assert_eq!(view.select(&like, true), ["seed.flac", "near.flac"], "with every library the near one takes a place");
+        // SL1: the seed itself is left out (no record built), so one place shows which library's near one counts.
+        let like = like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 1).conditions;
+        assert_eq!(view.select(&like, false), ["far.flac"], "the near one's library is off, so the one is this");
+        assert_eq!(view.select(&like, true), ["near.flac"], "with every library the near one takes the place");
     }
 
     #[test]
