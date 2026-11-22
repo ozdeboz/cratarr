@@ -472,6 +472,15 @@ pub async fn pass() -> Result<usize> {
     artists_pass().await
 }
 
+/// The works pass's next releases (`releases_pass`): up to `batch` of `all` (the library's releases, a had record's held ones
+/// after them) not asked yet, then those asked whose facts are due `again` (kept before their works' parents or their credits).
+fn due_releases(all: &[String], asked: &std::collections::HashSet<String>, again: &std::collections::HashSet<String>, batch: usize) -> Vec<String> {
+    let mut due: Vec<String> = all.iter().filter(|r| !asked.contains(*r)).take(batch).cloned().collect();
+    let room = batch - due.len();
+    due.extend(all.iter().filter(|r| asked.contains(*r) && again.contains(*r)).take(room).cloned());
+    due
+}
+
 /// Up to `BATCH` releases of the library's albums not asked about yet (or due again), then those kept before their
 /// works' parents were read (0.12, decision 0086: asked again first, at the same pace, so they fill in within hours
 /// rather than at their next asking), each kept as it comes.
@@ -493,10 +502,7 @@ async fn releases_pass() -> Result<usize> {
                 }
             }
         }
-        let mut due: Vec<String> = all.iter().filter(|r| !asked.contains(*r)).take(BATCH).cloned().collect();
-        let room = BATCH - due.len();
-        due.extend(all.iter().filter(|r| asked.contains(*r) && again.contains(*r)).take(room).cloned());
-        Ok(due)
+        Ok(due_releases(&all, &asked, &again, BATCH))
     })
     .await??;
     if due.is_empty() {
@@ -767,6 +773,19 @@ mod tests {
         assert_eq!(asked, [format!("/ws/2/release/rel-all?inc={INC}&fmt=json")], "one question, the works pass's");
         assert_eq!(v.credits, release_credits(&all_four()), "every credit, as the works pass keeps them");
         assert!(v.credits.iter().any(|r| r.word == "producer" && r.person.is_some()), "{:?}", v.credits);
+    }
+
+    /// CRED.5 (d), T-CRED-24, OQ-CRED-2 (a): the works pass's next releases. A had record's held release its files don't name
+    /// (`mb:rel-wi`, a hand's pick) is asked as the library's are, at the same pace; a release asked by 0.17 whose credits were never
+    /// kept is due again, after those never asked. Red first: held releases weren't read, and 0.17's were never asked again.
+    #[test]
+    fn the_works_pass_asks_held_releases_and_017s_again() {
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<std::collections::HashSet<String>>();
+        let all: Vec<String> = ["rel-all", "rel-017", "rel-wi"].map(String::from).to_vec();
+        let asked = set(&["rel-all", "rel-017"]);
+        assert_eq!(due_releases(&all, &asked, &set(&["rel-017"]), 10), ["rel-wi", "rel-017"], "the held release first, 0.17's again");
+        assert_eq!(due_releases(&all, &asked, &set(&[]), 10), ["rel-wi"], "one asked with its credits kept is not due");
+        assert_eq!(due_releases(&all, &asked, &set(&["rel-017"]), 1), ["rel-wi"], "at the same pace: the batch");
     }
 
     /// A release of Brahms' piano works played by Claudio Arrau, as MusicBrainz answers the works' question (cut down:

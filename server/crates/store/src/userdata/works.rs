@@ -320,6 +320,17 @@ mod tests {
         assert_eq!(u.mb_releases_asked(50, 200).unwrap(), ["r1".to_string()].into(), "the one not found is due first");
     }
 
+    /// CRED.17, OQ-CRED-2 (a): a release 0.17 read, whose credits it never kept (no `with_credits` in its facts), is due again; one read
+    /// since with its credits kept is not; one not found is no release to ask again. Red first: there was no such list.
+    #[test]
+    fn a_release_read_before_its_credits_were_kept_is_asked_again() {
+        let u = UserData::open(None).unwrap();
+        u.set_mb_release("r-017", Some("{\"genres\":[\"classical\"],\"with_parents\":true}"), &[], 100).unwrap();
+        u.set_mb_release("r-018", Some("{\"with_parents\":true,\"with_credits\":true}"), &[], 100).unwrap();
+        u.set_mb_release("r-gone", None, &[], 100).unwrap();
+        assert_eq!(u.mb_releases_without_credits().unwrap(), ["r-017".to_string()].into());
+    }
+
     #[test]
     fn a_movement_s_work_is_kept_and_a_release_kept_before_is_asked_again() {
         let u = UserData::open(None).unwrap();
