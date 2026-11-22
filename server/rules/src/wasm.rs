@@ -561,6 +561,24 @@ mod index_exports {
         let entries: Vec<(&str, Option<&str>)> = c.entries.iter().map(|e| (e.name.as_str(), e.phrase.as_deref())).collect();
         answer(crate::names::credit_text(&entries).as_bytes())
     }
+
+    /// A track's title as shown beside its credit (`names::title_shown`, CRED.28), from `{"title": …, "featured": [names]}` as
+    /// JSON: the bracket naming a guest the credit features goes, every other part stays; null where it cannot be read.
+    ///
+    /// # Safety
+    /// `ptr` holds `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn title_shown(ptr: *const u8, len: usize) -> *mut u8 {
+        #[derive(serde::Deserialize)]
+        struct Asked {
+            title: String,
+            #[serde(default)]
+            featured: Vec<String>,
+        }
+        let Ok(a) = serde_json::from_slice::<Asked>(unsafe { input(ptr, len) }) else { return core::ptr::null_mut() };
+        let featured: Vec<&str> = a.featured.iter().map(String::as_str).collect();
+        answer(crate::names::title_shown(&a.title, &featured).as_bytes())
+    }
 }
 
 // A crate's records kept apart (0.13, one spread: the page's own copy goes): numbers in and out, the page giving each

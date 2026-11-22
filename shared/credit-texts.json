@@ -1,0 +1,173 @@
+{
+  "about": "A credit's printed phrases (SCENARIOS-CRED CRED.27), written by the rules crate's tests: the phrase between two entries is the hand's, then the files' (the same artists, a real phrase, never a separator), then the first confirming source's, else credit_text's own join; the text credit_text prints.",
+  "rows": [
+    {
+      "row": "q1",
+      "says": "Night Signals 5: the files' \"&\" (a real phrase, the same artists), MusicBrainz's \"x\", Discogs' \"&\"",
+      "names": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "hand": null,
+      "files": "&",
+      "files_name_the_same": true,
+      "sources": [
+        "x",
+        "&"
+      ],
+      "roles": [
+        "main",
+        "main"
+      ],
+      "text": "Rowan Fell & Oda Brenn"
+    },
+    {
+      "row": "q2",
+      "says": "Night Signals 3: the files' \"/\" (a separator: none), MusicBrainz's \"&\"",
+      "names": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "hand": null,
+      "files": "/",
+      "files_name_the_same": true,
+      "sources": [
+        "&"
+      ],
+      "roles": [
+        "main",
+        "main"
+      ],
+      "text": "Rowan Fell & Oda Brenn"
+    },
+    {
+      "row": "q3",
+      "says": "Night Signals 6: the files' \";\" (none), MusicBrainz's \"&\"",
+      "names": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "hand": null,
+      "files": ";",
+      "files_name_the_same": true,
+      "sources": [
+        "&"
+      ],
+      "roles": [
+        "main",
+        "main"
+      ],
+      "text": "Rowan Fell & Oda Brenn"
+    },
+    {
+      "row": "q4",
+      "says": "Night Signals 4: the files' \"ft.\", MusicBrainz's \"feat.\"",
+      "names": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "hand": null,
+      "files": "ft.",
+      "files_name_the_same": true,
+      "sources": [
+        "feat."
+      ],
+      "roles": [
+        "main",
+        "featuring"
+      ],
+      "text": "Rowan Fell ft. Oda Brenn"
+    },
+    {
+      "row": "q5",
+      "says": "Deep Harbour 1: the files' \"/\" only",
+      "names": [
+        "Commodo",
+        "Alfa Mist"
+      ],
+      "hand": null,
+      "files": "/",
+      "files_name_the_same": true,
+      "sources": [],
+      "roles": [
+        "main",
+        "main"
+      ],
+      "text": "Commodo & Alfa Mist"
+    },
+    {
+      "row": "q6",
+      "says": "the files name fewer artists than the credit (\"Rowan Fell\" for two): no files' phrase; a confirming source's",
+      "names": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "hand": null,
+      "files": "x",
+      "files_name_the_same": false,
+      "sources": [
+        "with"
+      ],
+      "roles": [
+        "main",
+        "main"
+      ],
+      "text": "Rowan Fell with Oda Brenn"
+    },
+    {
+      "row": "q6b",
+      "says": "as (q6) with no source's phrase: credit_text's own",
+      "names": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "hand": null,
+      "files": "x",
+      "files_name_the_same": false,
+      "sources": [],
+      "roles": [
+        "main",
+        "main"
+      ],
+      "text": "Rowan Fell & Oda Brenn"
+    },
+    {
+      "row": "q7",
+      "says": "MATCH.11's split of \"Commodo & Alfa Mist\" by hand: the printed \"&\" it keeps",
+      "names": [
+        "Commodo",
+        "Alfa Mist"
+      ],
+      "hand": "&",
+      "files": "/",
+      "files_name_the_same": true,
+      "sources": [
+        "x"
+      ],
+      "roles": [
+        "main",
+        "main"
+      ],
+      "text": "Commodo & Alfa Mist"
+    },
+    {
+      "row": "q8",
+      "says": "Harbour's record: the files' album line's \"feat.\", MusicBrainz's \" feat. \"",
+      "names": [
+        "Rowan Fell",
+        "Tamsin Kell"
+      ],
+      "hand": null,
+      "files": "feat.",
+      "files_name_the_same": true,
+      "sources": [
+        "feat."
+      ],
+      "roles": [
+        "main",
+        "featuring"
+      ],
+      "text": "Rowan Fell feat. Tamsin Kell"
+    }
+  ]
+}

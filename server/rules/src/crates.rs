@@ -1056,9 +1056,7 @@ pub fn various(name: &str) -> bool {
 /// `various()`; SCENARIOS-CRED CRED.24 (p16), T-CRED-30). For a credit's parts only: a whole credit that is a band's name stays its
 /// artist (T-DC3-38), which is the caller's to keep.
 pub fn placeholder(name: &str) -> bool {
-    // Red first (CRED.24 (p16); F54.1 (n), (n3)): no list yet.
-    let _ = name;
-    false
+    matches!(name.trim().to_lowercase().as_str(), "friends" | "others" | "guests")
 }
 
 /// What the axes test about the library as a whole: which playlists hold a line, which lines are favourites.

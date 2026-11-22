@@ -117,13 +117,25 @@ fn fold(c: char) -> char {
 /// phrase printed after it ("Rowan Fell feat. Oda Brenn", "Commodo x Alfa Mist"); an entry with none, its own join, ", " within a
 /// run and " & " before the run's last. A separator ("/", ";") is never printed. An empty name is no artist.
 pub fn credit_text(entries: &[(&str, Option<&str>)]) -> String {
-    // Red first (CRED.27): one phrase for the whole credit, as before.
-    let names: Vec<&str> = entries.iter().map(|(n, _)| n.trim()).filter(|n| !n.is_empty()).collect();
-    match names.as_slice() {
-        [] => String::new(),
-        [one] => (*one).to_string(),
-        [rest @ .., last] => format!("{} & {last}", rest.join(", ")),
+    let entries: Vec<(&str, Option<&str>)> =
+        entries.iter().map(|(n, p)| (n.trim(), p.map(str::trim).filter(|p| !is_separator(p)))).filter(|(n, _)| !n.is_empty()).collect();
+    let mut out = String::new();
+    for (i, (name, phrase)) in entries.iter().enumerate() {
+        out.push_str(name);
+        if i + 1 == entries.len() {
+            break;
+        }
+        match phrase {
+            Some(p) => {
+                out.push(' ');
+                out.push_str(p);
+                out.push(' ');
+            }
+            // Its own join: " & " before the last of a run of entries with no phrase, ", " within it.
+            None => out.push_str(if i + 2 == entries.len() || entries[i + 1].1.is_some() { " & " } else { ", " }),
+        }
     }
+    out
 }
 
 /// Whether a joining text is a list separator, never a phrase (CRED.24): "/" and ";", and nothing at all.
@@ -135,9 +147,8 @@ pub fn is_separator(join: &str) -> bool {
 /// printed phrase); then the files', where they name the same artists as the worked-out credit and it is a real phrase, never a
 /// separator; then the first confirming source's (in the order they answered: T-NAMES-13); else none (`credit_text`'s own join).
 pub fn phrase_of<'a>(hand: Option<&'a str>, files: Option<&'a str>, files_name_the_same: bool, sources: &[&'a str]) -> Option<&'a str> {
-    // Red first (CRED.27): no phrase is chosen.
-    let _ = (hand, files, files_name_the_same, sources);
-    None
+    let real = |p: &&str| !is_separator(p);
+    hand.filter(real).or(files.filter(|_| files_name_the_same).filter(real)).or_else(|| sources.iter().copied().find(real))
 }
 
 /// A track's title as a row shows it beside its credit (CRED.28; the owner, ~14:38, "Trim the title on screen"): its "(feat. X)"
@@ -145,9 +156,29 @@ pub fn phrase_of<'a>(hand: Option<&'a str>, files: Option<&'a str>, files_name_t
 /// aside), and that part alone; every other part kept ("[Live]", "(Remix)"); a guest the credit doesn't name, kept. The stored
 /// title is never touched: OpenSubsonic, search and the files keep it whole.
 pub fn title_shown(title: &str, featured: &[&str]) -> String {
-    // Red first (CRED.28): the title shows whole.
-    let _ = featured;
-    title.to_string()
+    let lower = title.to_lowercase();
+    let mut cut: Vec<(usize, usize)> = Vec::new();
+    for (open, close) in [('(', ')'), ('[', ']')] {
+        let mut from = 0;
+        while let Some(i) = lower[from..].find(open).map(|i| i + from) {
+            let Some(j) = lower[i..].find(close).map(|j| j + i) else { break };
+            let inner = lower[i + 1..j].trim_start();
+            let guest = ["featuring ", "feat. ", "ft. "].iter().find_map(|m| inner.strip_prefix(m)).map(str::trim);
+            if guest.is_some_and(|g| featured.iter().any(|f| name_key(f.trim()) == name_key(g))) {
+                cut.push((i, j + close.len_utf8()));
+            }
+            from = j + close.len_utf8();
+        }
+    }
+    cut.sort();
+    let mut out = String::new();
+    let mut at = 0;
+    for (i, j) in cut {
+        out.push_str(&title[at..i]);
+        at = j;
+    }
+    out.push_str(&title[at..]);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A track's title as every surface names it (OBJ5, OB2: one name for a track): its name, else its file's name without its
@@ -211,13 +242,23 @@ mod tests {
         assert_eq!((cases[4].title.as_str(), cases[4].line.as_str()), ("03 Morning", "Answered"), "an empty name is none; no credit, the record alone");
         assert_eq!(cases[5].line, "Kite Theory", "no record: the credit alone");
         #[derive(serde::Serialize)]
+        struct Shown {
+            title: &'static str,
+            featured: Vec<&'static str>,
+            shown: String,
+        }
+        #[derive(serde::Serialize)]
         struct Table {
             about: &'static str,
             cases: Vec<Case>,
+            /// CRED.28's rows: a title as shown beside a credit featuring these names (`title_shown`).
+            titles: Vec<Shown>,
         }
+        let titles = TITLE_ROWS.iter().map(|(title, featured, _)| Shown { title, featured: featured.to_vec(), shown: title_shown(title, featured) }).collect();
         let table = Table {
-            about: "A track's words (SCENARIOS-DC1 OBJ5), written by the rules crate's tests: its title (its name, else its file's) and its second line (its credit by credit_text, then ' · ' and its record's title line), one rule for the page, the app and the device.",
+            about: "A track's words (SCENARIOS-DC1 OBJ5), written by the rules crate's tests: its title (its name, else its file's) and its second line (its credit by credit_text, then ' · ' and its record's title line), one rule for the page, the app and the device. `titles`: a title as shown beside a credit naming its featured guests (SCENARIOS-CRED CRED.28, title_shown): only the bracket naming a guest the credit features goes.",
             cases,
+            titles,
         };
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shared/track-names.json");
         let json = serde_json::to_string_pretty(&table).unwrap() + "\n";
@@ -315,15 +356,26 @@ mod tests {
     /// that guest. Red first: titles show whole everywhere.
     #[test]
     fn a_title_shows_trimmed_where_its_credit_names_the_guest() {
-        assert_eq!(title_shown("Harbour (feat. Tamsin Kell)", &["Tamsin Kell"]), "Harbour");
-        assert_eq!(title_shown("Sloth (feat. Oda Brenn) [Live]", &["Oda Brenn"]), "Sloth [Live]");
-        assert_eq!(title_shown("Song (feat. Friends)", &[]), "Song (feat. Friends)");
-        assert_eq!(title_shown("Tide (feat. Oda Brenn)", &[]), "Tide (feat. Oda Brenn)");
-        assert_eq!(title_shown("Tide (feat. Oda Brenn)", &["Tamsin Kell"]), "Tide (feat. Oda Brenn)", "a guest the credit doesn't name");
-        assert_eq!(title_shown("Night (Remix) [feat. Oda Brenn]", &["oda brenn"]), "Night (Remix)", "square brackets too; every other part kept");
-        assert_eq!(title_shown("Harbour (Featuring Tamsin Kell)", &["Tamsin Kell"]), "Harbour");
-        assert_eq!(title_shown("Embrace (feat. Kerys Lae & Loïc Brenn)", &["Kerys Lae & Loïc Brenn"]), "Embrace", "a featured part one name, whole");
+        for (title, featured, shown) in TITLE_ROWS {
+            assert_eq!(title_shown(title, featured), *shown, "{title:?} beside {featured:?}");
+        }
     }
+
+    /// CRED.28's rows (title, the credit's featured names, as shown), written to shared/track-names.json's `titles` by OBJ5's test.
+    const TITLE_ROWS: &[(&str, &[&str], &str)] = &[
+        ("Harbour (feat. Tamsin Kell)", &["Tamsin Kell"], "Harbour"),
+        ("Sloth (feat. Oda Brenn) [Live]", &["Oda Brenn"], "Sloth [Live]"),
+        // "Friends" is F54's placeholder: no featured credit, so the title stays whole.
+        ("Song (feat. Friends)", &[], "Song (feat. Friends)"),
+        ("Tide (feat. Oda Brenn)", &[], "Tide (feat. Oda Brenn)"),
+        // A guest the credit doesn't name.
+        ("Tide (feat. Oda Brenn)", &["Tamsin Kell"], "Tide (feat. Oda Brenn)"),
+        // Square brackets too; every other part kept.
+        ("Night (Remix) [feat. Oda Brenn]", &["oda brenn"], "Night (Remix)"),
+        ("Harbour (Featuring Tamsin Kell)", &["Tamsin Kell"], "Harbour"),
+        // A featured part one name, whole.
+        ("Embrace (feat. Kerys Lae & Loïc Brenn)", &["Kerys Lae & Loïc Brenn"], "Embrace"),
+    ];
 
     #[test]
     fn loosely_accents_brackets_feat_and_the_count_for_nothing() {

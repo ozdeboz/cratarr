@@ -1,5 +1,5 @@
 {
-  "about": "A track's words (SCENARIOS-DC1 OBJ5), written by the rules crate's tests: its title (its name, else its file's) and its second line (its credit by credit_text, then ' · ' and its record's title line), one rule for the page, the app and the device.",
+  "about": "A track's words (SCENARIOS-DC1 OBJ5), written by the rules crate's tests: its title (its name, else its file's) and its second line (its credit by credit_text, then ' · ' and its record's title line), one rule for the page, the app and the device. `titles`: a title as shown beside a credit naming its featured guests (SCENARIOS-CRED CRED.28, title_shown): only the bracket naming a guest the credit features goes.",
   "cases": [
     {
       "name": "Pier",
@@ -61,6 +61,60 @@
       "record": "",
       "title": "Interlude",
       "line": "Kite Theory"
+    }
+  ],
+  "titles": [
+    {
+      "title": "Harbour (feat. Tamsin Kell)",
+      "featured": [
+        "Tamsin Kell"
+      ],
+      "shown": "Harbour"
+    },
+    {
+      "title": "Sloth (feat. Oda Brenn) [Live]",
+      "featured": [
+        "Oda Brenn"
+      ],
+      "shown": "Sloth [Live]"
+    },
+    {
+      "title": "Song (feat. Friends)",
+      "featured": [],
+      "shown": "Song (feat. Friends)"
+    },
+    {
+      "title": "Tide (feat. Oda Brenn)",
+      "featured": [],
+      "shown": "Tide (feat. Oda Brenn)"
+    },
+    {
+      "title": "Tide (feat. Oda Brenn)",
+      "featured": [
+        "Tamsin Kell"
+      ],
+      "shown": "Tide (feat. Oda Brenn)"
+    },
+    {
+      "title": "Night (Remix) [feat. Oda Brenn]",
+      "featured": [
+        "oda brenn"
+      ],
+      "shown": "Night (Remix)"
+    },
+    {
+      "title": "Harbour (Featuring Tamsin Kell)",
+      "featured": [
+        "Tamsin Kell"
+      ],
+      "shown": "Harbour"
+    },
+    {
+      "title": "Embrace (feat. Kerys Lae & Loïc Brenn)",
+      "featured": [
+        "Kerys Lae & Loïc Brenn"
+      ],
+      "shown": "Embrace"
     }
   ]
 }
