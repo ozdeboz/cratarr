@@ -382,6 +382,11 @@ async fn main() -> Result<()> {
     if let Some(report) = served.catalogue().step_018_covers(&picks, &unknown, &|| Ok(())).context("cannot finish 0.18's step (covers)")? {
         tracing::info!(target: "migration", "0.18's covers: {}", serde_json::to_string(&report).unwrap_or_default());
     }
+    // Its part `credits` (SCENARIOS-CRED CRED.17), last, as credits resolve to artist ids (NAMES.16's part and UPG.1's, DC3a's, go
+    // before it): what 0.17 kept fills the credits store; nothing asked, no file read (reader 10 re-reads the role tags after).
+    if let Some(report) = app::references::step_018_credits(&served).context("cannot finish 0.18's step (credits)")? {
+        tracing::info!(target: "migration", "0.18's credits: {}", serde_json::to_string(&report).unwrap_or_default());
+    }
     served.set_playlists(app.crates.clone());
     // Who is still in the directory's group, every hour (decision 0051).
     serve::accounts::watch_directory(served.clone());

@@ -49,16 +49,8 @@ pub async fn of_finding(app: &dyn IncomingHost, key: &str) -> Result<Vec<Fix>> {
     if !to_match.is_empty() {
         fixes.extend(super::matching::fixes(&served, key, to_match, None).await?);
     }
-    // Missing genres and years: their albums asked of Discogs in the background, a round at a time (0.9.8); what it
-    // says shows the next time the fixes are read.
-    if matches!(key, "library:genre" | "library:year") {
-        let (s, k, have) = (served.clone(), key.to_string(), fixes.iter().map(|f| f.album.clone()).collect::<std::collections::HashSet<_>>());
-        let lacking = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
-            Ok(s.library.lacking()?.into_iter().filter(|l| if k == "library:genre" { l.genre } else { l.year }).map(|l| l.id).filter(|a| !have.contains(a)).collect())
-        })
-        .await??;
-        super::discogs_facts::fill(served.clone(), lacking);
-    }
+    // Missing genres and years: Discogs' facts as kept (SCENARIOS-CRED CRED.21; the owner's 04:43 rule: a GET asks no source). The
+    // one scheduled Discogs job reads the records that show none (CRED.11 (g), T-CRED-28), and what it keeps shows here.
     fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.id.cmp(&b.id)));
     Ok(fixes)
 }
@@ -243,13 +235,8 @@ async fn of_album_only(app: &dyn IncomingHost, album: &str, fields: Option<&[&st
         None => s.library.lacks_of(&a),
     })
     .await??;
-    // Discogs' genres, styles and year for it, where it lacks one (0.9.8: asked now, not only by the background pass).
-    if let Some(l) = &lacks
-        && ((genre && l.genre) || (year && l.year))
-        && let Err(e) = super::discogs_facts::album(&served, album).await
-    {
-        tracing::debug!("discogs: {album}: {e:#}");
-    }
+    // Discogs' genres, styles and year for it as kept (CRED.21: no plan's read asks Discogs; the one scheduled Discogs job and the
+    // record's open read it, as jobs).
     let (s, a, place) = (served.clone(), album.to_string(), at.clone());
     let (mut fixes, lacks) = crate::run::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
         let Some(l) = lacks else { return Ok((Vec::new(), None)) };

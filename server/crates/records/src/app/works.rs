@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::musicbrainz::Asked as _;
+use crate::catalogue::credits::CreditRow;
 
 /// Releases or artists asked about in one pass.
 const BATCH: usize = 200;
@@ -32,7 +33,7 @@ const BUSY: Duration = Duration::from_secs(3);
 const DISCOGS_BATCH: usize = 300;
 /// The one question per release (the owner's, with the artists' relations, which the works' composers need, and the
 /// genres and links): each work's composers come with the work-level relations of artists.
-const INC: &str = "recordings+recording-level-rels+work-rels+work-level-rels+artist-credits+artist-rels+url-rels+genres+release-groups+release-group-level-rels";
+pub(crate) const INC: &str = "recordings+recording-level-rels+work-rels+work-level-rels+artist-credits+artist-rels+url-rels+genres+release-groups+release-group-level-rels";
 /// The same without genres and links, should MusicBrainz refuse the long one.
 const INC_PLAIN: &str = "recordings+recording-level-rels+work-rels+work-level-rels+artist-credits+artist-rels";
 /// MusicBrainz's Various Artists.
@@ -94,6 +95,9 @@ pub struct Stored {
     /// Its works' parents were read (0.12, decision 0086): a release kept before is asked again first.
     #[serde(default)]
     pub with_parents: bool,
+    /// Its credits were read and kept (SCENARIOS-CRED CRED.5): a release kept before (0.17's) is asked again first (OQ-CRED-2 (a)).
+    #[serde(default)]
+    pub with_credits: bool,
 }
 
 /// A work: its MusicBrainz id, title and composers, and the work it is a part of where MusicBrainz says (0.12).
@@ -299,14 +303,95 @@ pub fn release_of(v: &Value) -> Release {
     stored.performers = performers;
     stored.performed = performed;
     stored.with_parents = true;
+    stored.with_credits = true;
     Release { stored, works }
 }
 
-/// Every credit a release's answer gives (CRED.5; T-CRED-12, the works pass's one question), as the credits store keeps them.
-pub fn release_credits(v: &Value) -> Vec<crate::catalogue::credits::CreditRow> {
-    // Red first (SCENARIOS-CRED CRED.5): the parse keeps no credit yet.
-    let _ = v;
-    Vec::new()
+/// An artist credit as credit rows at `at` (CRED.24): its ordered list, each artist by MusicBrainz id (in Latin letters where
+/// MusicBrainz names them otherwise), its role (an artist, or featured after a "feat." joinphrase), the phrase after it, and the
+/// name the release credits them as where it differs (T-CRED-17); Various Artists left out.
+fn credit_rows(credit: &Value, at: &[(u32, u32)], into: &mut Vec<CreditRow>) {
+    let kept: Vec<&Value> = credit
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| {
+            let name = c["artist"]["name"].as_str().or_else(|| c["name"].as_str()).unwrap_or_default();
+            !name.trim().is_empty() && c["artist"]["id"].as_str() != Some(VARIOUS) && !crate::crates::various(name)
+        })
+        .collect();
+    let entries: Vec<(String, Option<crate::catalogue::credits::Listed>, String)> = kept
+        .iter()
+        .map(|c| {
+            let name = c["artist"]["name"].as_str().or_else(|| c["name"].as_str()).unwrap_or_default();
+            let person = c["artist"]["id"].as_str().map(|id| crate::catalogue::credits::Listed { source: "musicbrainz".into(), id: id.to_string() });
+            (latin(name, c["name"].as_str(), c["artist"]["sort-name"].as_str()), person, c["joinphrase"].as_str().unwrap_or_default().to_string())
+        })
+        .collect();
+    for (e, c) in crate::catalogue::credits::source_list(&entries).into_iter().zip(kept) {
+        let credited_as = c["name"].as_str().filter(|n| !n.is_empty() && *n != e.name).map(str::to_string);
+        into.push(CreditRow {
+            track: at.to_vec(),
+            person: e.person.map(|p| p.id),
+            name: e.name,
+            credited_as,
+            word: match e.role {
+                crate::catalogue::credits::ListRole::Main => "artist".into(),
+                crate::catalogue::credits::ListRole::Featuring => "featuring".into(),
+            },
+            phrase: e.phrase,
+            ..Default::default()
+        });
+    }
+}
+
+/// The relationships of an artist among `relations` as credit rows at `at` (CRED.5): every type kept, its attributes with it, the
+/// person by MusicBrainz id, the name MusicBrainz credits them as kept as the source's words (T-CRED-17). Work relationships of
+/// other kinds (a performance, parts) and links are no credit.
+fn relation_rows(relations: &Value, at: &[(u32, u32)], into: &mut Vec<CreditRow>) {
+    for r in relations.as_array().into_iter().flatten() {
+        let a = &r["artist"];
+        let (Some(kind), Some(name)) = (r["type"].as_str(), a["name"].as_str()) else { continue };
+        if a["id"].as_str() == Some(VARIOUS) {
+            continue;
+        }
+        let credited = r["target-credit"].as_str().filter(|c| !c.is_empty());
+        into.push(CreditRow {
+            track: at.to_vec(),
+            person: a["id"].as_str().map(str::to_string),
+            name: latin(name, credited, a["sort-name"].as_str()),
+            credited_as: credited.map(str::to_string),
+            word: kind.to_string(),
+            attributes: r["attributes"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+            ..Default::default()
+        });
+    }
+}
+
+/// Every credit a release's answer gives (CRED.5; T-CRED-12, the works pass's one question): the release's artist credit and its
+/// relationships on every track; each track's artist credit (every artist of it by id, with its phrases), its recording's
+/// relationships (an instrument as the detail, its qualifiers kept apart), and the relationships of the works it performs
+/// (composer, lyricist, writer, arranger), on that track by the release's own disc and position. Every relationship type is kept,
+/// the table's and the others (shown by MusicBrainz's own word).
+pub fn release_credits(v: &Value) -> Vec<CreditRow> {
+    let mut out = Vec::new();
+    credit_rows(&v["artist-credit"], &[], &mut out);
+    relation_rows(&v["relations"], &[], &mut out);
+    for (mi, medium) in v["media"].as_array().into_iter().flatten().enumerate() {
+        let disc = medium["position"].as_u64().map_or(mi as u32 + 1, |d| d as u32);
+        for (ti, t) in medium["tracks"].as_array().into_iter().flatten().enumerate() {
+            let position = t["position"].as_u64().map(|p| p as u32).or_else(|| t["number"].as_str().and_then(|n| n.parse().ok())).unwrap_or(ti as u32 + 1);
+            let at = [(disc, position)];
+            let rec = &t["recording"];
+            let credit = if t["artist-credit"].as_array().is_some_and(|a| !a.is_empty()) { &t["artist-credit"] } else { &rec["artist-credit"] };
+            credit_rows(credit, &at, &mut out);
+            relation_rows(&rec["relations"], &at, &mut out);
+            for r in rec["relations"].as_array().into_iter().flatten().filter(|r| r["type"].as_str() == Some("performance")) {
+                relation_rows(&r["work"]["relations"], &at, &mut out);
+            }
+        }
+    }
+    out
 }
 
 /// An artist's "is person" relations (MusicBrainz: a person performs as a performance name), from the artist's
@@ -393,14 +478,24 @@ pub async fn pass() -> Result<usize> {
 async fn releases_pass() -> Result<usize> {
     let Some(served) = crate::serve::instance() else { return Ok(0) };
     let now = super::moment::now_secs();
-    let (lib, ud) = (served.library.clone(), served.userdata.clone());
+    let (lib, ud, cat) = (served.library.clone(), served.userdata.clone(), Some(served.catalogue().clone()));
     let due: Vec<String> = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
         let asked = ud.mb_releases_asked(now - AGAIN_SECS, now - NONE_AGAIN_SECS)?;
-        let without_parents = ud.mb_releases_without_parents()?;
-        let all = lib.album_releases()?;
+        let mut again = ud.mb_releases_without_parents()?;
+        // OQ-CRED-2 (a): the releases 0.17 read, whose credits it never kept, asked again first, as 0.12's without parents were.
+        again.extend(ud.mb_releases_without_credits()?);
+        let mut all = lib.album_releases()?;
+        // T-CRED-24: a had record's held release its files don't name (a match's, a hand's pick, a list's), with the same question.
+        if let Some(cat) = cat {
+            for r in cat.held_releases()? {
+                if !all.contains(&r) {
+                    all.push(r);
+                }
+            }
+        }
         let mut due: Vec<String> = all.iter().filter(|r| !asked.contains(*r)).take(BATCH).cloned().collect();
         let room = BATCH - due.len();
-        due.extend(all.iter().filter(|r| asked.contains(*r) && without_parents.contains(*r)).take(room).cloned());
+        due.extend(all.iter().filter(|r| asked.contains(*r) && again.contains(*r)).take(room).cloned());
         Ok(due)
     })
     .await??;
@@ -410,14 +505,18 @@ async fn releases_pass() -> Result<usize> {
     let http = super::discover::http()?;
     let mut n = 0;
     for r in &due {
-        let found = match release(&http, r).await {
-            Ok(v) => v.map(|v| release_of(&v)),
+        let answer = match release(&http, r).await {
+            Ok(v) => v,
             // MusicBrainz out of reach (or switched off): what was found is kept, the rest asked next time.
             Err(e) => {
                 tracing::info!("works: stopped after {n} of {}: {e:#}", due.len());
                 break;
             }
         };
+        let found = answer.as_ref().map(release_of);
+        // CRED.5 (a): every credit the one answer gives, kept for the record holding the release (FA15's "asked, none" where
+        // MusicBrainz knows it not: its part of each credit goes, CRED.7 (d)).
+        let credits = answer.as_ref().map(release_credits);
         let facts = match &found {
             Some(f) => Some(serde_json::to_string(&f.stored)?),
             None => None,
@@ -427,8 +526,18 @@ async fn releases_pass() -> Result<usize> {
             let parent = w.parent.as_ref().map(|p| (p.mbid.clone(), p.title.clone(), p.number));
             works.push((w.mbid.clone(), w.title.clone(), serde_json::to_string(&w.composers)?, parent));
         }
-        let (ud, key) = (served.userdata.clone(), r.clone());
-        crate::run::spawn_blocking(move || ud.set_mb_release(&key, facts.as_deref(), &works, super::moment::now_secs())).await??;
+        let (s, key) = (served.clone(), r.clone());
+        crate::run::spawn_blocking(move || -> Result<()> {
+            let now = super::moment::now_secs();
+            s.userdata.set_mb_release(&key, facts.as_deref(), &works, now)?;
+            for subject in s.catalogue().subject_of(&crate::catalogue::records::Ref::new("musicbrainz", "release", &key))? {
+                if let Some(record) = crate::serve::ids::record_number(&subject) {
+                    s.catalogue().keep_credits(record, "musicbrainz", &format!("release:{key}"), credits.as_deref(), false, now)?;
+                }
+            }
+            Ok(())
+        })
+        .await??;
         n += 1;
         tokio::time::sleep(PAUSE).await;
     }
@@ -635,6 +744,29 @@ mod tests {
         let four: Vec<(&str, Option<&str>, Option<&str>)> =
             rows.iter().filter(|r| r.track == [(1, 4)] && matches!(r.word.as_str(), "artist" | "featuring")).map(|r| (r.word.as_str(), r.person.as_deref(), r.phrase.as_deref())).collect();
         assert_eq!(four, [("artist", Some("yt"), Some("feat.")), ("featuring", Some("kl"), None)], "track 4's credit, every artist by id, its phrase");
+    }
+
+    /// CRED.5 (b), T-CRED-12, T-CRED-8: `release_by_id`, the reader of every MusicBrainz release read (the open's job, the References
+    /// sheet, `lists_to_read`), asks the works pass's one question, its relationships with it, and its answer carries every credit as
+    /// the works pass keeps them, for its reader to keep. Never a second question for the credits. Red first: it asked
+    /// `recordings+artist-credits+url-rels+release-groups` and carried no credit.
+    #[tokio::test]
+    async fn a_release_read_asks_the_works_question_and_carries_every_credit() {
+        let asked: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+        let heard = asked.clone();
+        let answer = move |uri: axum::http::Uri| {
+            heard.lock().unwrap().push(format!("{}?{}", uri.path(), uri.query().unwrap_or_default()));
+            std::future::ready(axum::Json(all_four()))
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
+        let _fake = crate::app::discover::FakeMusicBrainz::at(at);
+        let v = super::super::track_fetch_records::release_by_id("rel-all").await.unwrap();
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked, [format!("/ws/2/release/rel-all?inc={INC}&fmt=json")], "one question, the works pass's");
+        assert_eq!(v.credits, release_credits(&all_four()), "every credit, as the works pass keeps them");
+        assert!(v.credits.iter().any(|r| r.word == "producer" && r.person.is_some()), "{:?}", v.credits);
     }
 
     /// A release of Brahms' piano works played by Claudio Arrau, as MusicBrainz answers the works' question (cut down:

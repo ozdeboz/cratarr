@@ -13,6 +13,7 @@ mod adding;
 mod adding_tests;
 mod artists;
 pub mod covers;
+pub mod credits;
 pub use artists::Credits;
 mod editions;
 pub mod facts;
@@ -90,6 +91,9 @@ CREATE TABLE IF NOT EXISTS cover_files (
 CREATE TABLE IF NOT EXISTS tags (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, n INTEGER NOT NULL, raw TEXT NOT NULL, name TEXT, value TEXT NOT NULL,
   PRIMARY KEY (folder, rel, n)) WITHOUT ROWID;
+-- T-CRED-26 (reader 10): a read file due to be read again by a better reader, marked apart from its state (no column a change log
+-- reads), so a file whose tags read the same owes nothing; read after the files waiting.
+CREATE TABLE IF NOT EXISTS tags_due (folder INTEGER NOT NULL, rel TEXT NOT NULL, PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS source_ids (
   source TEXT NOT NULL, track_id TEXT NOT NULL, library TEXT NOT NULL, folder INTEGER NOT NULL, rel TEXT NOT NULL,
   seen INTEGER NOT NULL, PRIMARY KEY (source, track_id)) WITHOUT ROWID;
@@ -255,7 +259,7 @@ const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along. A table with
 /// both goes here or says why not (`every_table_by_folder_and_path_goes_with_its_file`), or it stays at a place its file left.
-const FILE_TABLES: [&str; 8] = ["files", "cover_files", "tags", "source_ids", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"];
+const FILE_TABLES: [&str; 9] = ["files", "cover_files", "tags", "tags_due", "source_ids", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"];
 
 /// What a retiring track was, from its file and tags while they are still there (`tracks`' kept columns).
 const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id LIMIT 1),
@@ -1222,6 +1226,7 @@ impl Catalogue {
         move_analysis_shapes(&conn)?;
         index_log::start(&conn).context("starting the library's change log")?;
         conn.execute_batch(facts::SCHEMA).context("creating the facts with no home")?;
+        conn.execute_batch(credits::SCHEMA).context("creating the records' credits")?;
         conn.execute_batch(covers::SCHEMA).context("creating the records' kept covers")?;
         record_log::start(&conn).context("starting what the records owe the change log")?;
         let facts_written = Arc::new(AtomicU64::new(0));
@@ -1269,6 +1274,11 @@ impl Catalogue {
                     "UPDATE files SET state = ?1 WHERE state = ?2 AND (format IN ('FLAC', 'WAV', 'AIFF', 'APE', 'WAVPACK') OR (format = 'MP4' AND bitrate >= 500))",
                     params![PENDING, READ],
                 )?;
+            }
+            // Reader 10 names every role tag and reads ID3v2's TIPL, TMCL and IPLS pairs (CRED.4, T-CRED-25): every read file is due
+            // again, marked apart from its state, so one whose tags read the same owes nothing (T-CRED-26). Served as read until then.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 10) {
+                cat.db().execute("INSERT OR IGNORE INTO tags_due (folder, rel) SELECT folder, rel FROM files WHERE state = ?1", [READ])?;
             }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
@@ -1683,14 +1693,22 @@ impl Catalogue {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Read the tags of up to `n` files waiting for it. Returns how many were handled. Blocking.
+    /// Read the tags of up to `n` files waiting for it, then of those due a better reader's read (T-CRED-26). Returns how many
+    /// were handled. Blocking.
     pub fn read_tags_batch(&self, n: usize) -> Result<usize> {
         let todo: Vec<(i64, String)> = {
             let db = self.db();
             let mut st = db.prepare(&format!("SELECT folder, rel FROM files WHERE state = ?1 AND {PRESENT} LIMIT ?2"))?;
-            st.query_map(params![PENDING, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            let mut todo: Vec<(i64, String)> = st.query_map(params![PENDING, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            if todo.len() < n {
+                let mut due = db.prepare(&format!(
+                    "SELECT d.folder, d.rel FROM tags_due d JOIN files f ON f.folder = d.folder AND f.rel = d.rel WHERE f.state = {READ} AND {PRESENT_F} LIMIT ?1"
+                ))?;
+                todo.extend(due.query_map([(n - todo.len()) as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?);
+            }
+            todo
         };
-        self.read_tags(todo)
+        Ok(self.read_tags(todo)?.0)
     }
 
     /// Files Cratarr wrote itself (0.9.7: Renumber, a cover set or uploaded or undone, a tempo; the owner, 2026-10-26),
@@ -1727,7 +1745,7 @@ impl Catalogue {
             }
             todo.push((folder, rel));
         }
-        let read = self.read_tags(todo)?;
+        let (read, _) = self.read_tags(todo)?;
         if read > 0 {
             self.changed_outside_pass();
         }
@@ -1749,8 +1767,9 @@ impl Catalogue {
         self.reread.notified().await;
     }
 
-    /// The tags of these files read, and kept. How many were handled. Blocking.
-    fn read_tags(&self, todo: Vec<(i64, String)>) -> Result<usize> {
+    /// The tags of these files read, and kept: how many were handled, and of them how many read otherwise than kept. A file whose
+    /// named tags read as they are kept keeps its rows (T-CRED-26: it owes no change-log row), and is due no re-read now. Blocking.
+    fn read_tags(&self, todo: Vec<(i64, String)>) -> Result<(usize, usize)> {
         let folders = self.folders();
         // Read outside the lock: this is the slow part.
         let results: Vec<(i64, String, Result<(tags::FileTags, Option<(tags::Issue, String)>)>)> = todo
@@ -1765,8 +1784,29 @@ impl Catalogue {
             .collect();
         let mut db = self.db();
         let tx = db.transaction()?;
+        let mut changed = 0usize;
         for (folder, rel, r) in &results {
-            tx.execute("DELETE FROM tags WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
+            tx.execute("DELETE FROM tags_due WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
+            // Its named tags as kept, and as read now: the same set owes nothing (T-CRED-26).
+            let kept: Vec<(i64, String, Option<String>, String)> = tx
+                .prepare_cached("SELECT n, raw, name, value FROM tags WHERE folder = ?1 AND rel = ?2 ORDER BY n")?
+                .query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            let now: Vec<(i64, String, Option<String>, String)> = match r {
+                Ok((t, _)) => t
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, name, _))| name.is_some())
+                    .map(|(i, (raw, name, value))| (i as i64, raw.clone(), name.map(str::to_string), value.clone()))
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            let same = kept == now;
+            if !same {
+                changed += 1;
+                tx.execute("DELETE FROM tags WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
+            }
             match r {
                 Ok((t, issue)) => {
                     tx.execute(
@@ -1787,8 +1827,8 @@ impl Catalogue {
                     )?;
                     let mut ins = tx.prepare_cached("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
                     // Only the tags Cratarr knows by name: no query reads the others.
-                    for (i, (raw, name, value)) in t.items.iter().enumerate().filter(|(_, (_, name, _))| name.is_some()) {
-                        ins.execute(params![folder, rel, i as i64, raw, name, value])?;
+                    for (i, raw, name, value) in now.iter().filter(|_| !same) {
+                        ins.execute(params![folder, rel, i, raw, name, value])?;
                     }
                 }
                 Err(e) => {
@@ -1801,7 +1841,7 @@ impl Catalogue {
         }
         tx.commit()?;
         self.work(results.len() as u64);
-        Ok(results.len())
+        Ok((results.len(), changed))
     }
 
     /// Link a server's tracks to files. `stamp` marks them as seen in this pass. Blocking.
@@ -4387,7 +4427,9 @@ impl Catalogue {
             issues,
             folders,
             files: count(&format!("SELECT COUNT(*) FROM files WHERE {PRESENT}"), &[])?,
-            tags_pending: count(&format!("SELECT COUNT(*) FROM files WHERE state = ?1 AND {PRESENT}"), &[&PENDING])?,
+            // The files waiting and those due a better reader's read (T-CRED-26): "Reading tags: n of N".
+            tags_pending: count(&format!("SELECT COUNT(*) FROM files WHERE state = ?1 AND {PRESENT}"), &[&PENDING])?
+                + count(&format!("SELECT COUNT(*) FROM tags_due d JOIN files f ON f.folder = d.folder AND f.rel = d.rel WHERE {PRESENT_F}"), &[])?,
             tags_failed: count(&format!("SELECT COUNT(*) FROM files WHERE state = ?1 AND {PRESENT}"), &[&FAILED])?,
             linked,
             progress: self.progress.lock().unwrap_or_else(|p| p.into_inner()).clone(),
@@ -6094,7 +6136,11 @@ mod tests {
         let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
         let waiting: Vec<String> = cat.db().prepare("SELECT rel FROM files WHERE state = ?1 ORDER BY rel").unwrap().query_map([PENDING], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
         assert_eq!(waiting, ["a.flac", "c.m4a", "f.wav"]);
-        assert_eq!(cat.meta("reader").as_deref(), Some("9"));
+        // Reader 10 (SCENARIOS-CRED CRED.4, T-CRED-26) follows at the same open: its re-read of every other read file waits apart
+        // (`tags_due`), never as PENDING (a pin changed by design: the reader is 10).
+        assert_eq!(cat.meta("reader").as_deref(), Some("10"));
+        let due: Vec<String> = cat.db().prepare("SELECT rel FROM tags_due ORDER BY rel").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(due, ["b.mp3", "d.m4a", "e.opus"], "the files 9 left as read, due 10's re-read");
         assert_eq!(cat.served_rows(0).unwrap().len(), 6, "served as read until then");
         drop(cat);
         std::fs::remove_dir_all(&d).ok();

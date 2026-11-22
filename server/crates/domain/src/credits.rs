@@ -219,9 +219,74 @@ fn performer_value(value: &str) -> (String, Option<String>) {
 /// TIPL or IPLS pair, Cratarr's reader's name for it) is a performer on that instrument. A word no row names is a role of its own
 /// word, never dropped.
 pub fn read_role(source: &str, word: &str, attributes: &[String], value: &str) -> Vec<Reading> {
-    // Red first (SCENARIOS-CRED CRED.1): no table reads a word yet.
-    let _ = (source, word, attributes, value, discogs_parts, bracketed, performer_value, BRACKET_ROLES);
-    Vec::new()
+    let kind = source_kind(source);
+    let name = value.trim().to_string();
+    let one = |role: &str, detail: Option<String>, qualifiers: Vec<String>, name: String| Reading { role: role.to_string(), detail, qualifiers, name };
+    match kind {
+        "files" => {
+            let w = folded(word);
+            if let Some(instrument) = w.strip_prefix("performer:") {
+                return vec![one("performer", Some(instrument.trim().to_string()).filter(|i| !i.is_empty()), Vec::new(), name)];
+            }
+            if w == "performer" {
+                let (name, instrument) = performer_value(value);
+                return vec![one("performer", instrument, Vec::new(), name)];
+            }
+            match role_of(kind, &w) {
+                Some(role) => vec![one(role, None, Vec::new(), name)],
+                // An ID3v2.3 TIPL or IPLS pair naming an instrument (Picard's performer pairs): a performer.
+                None if is_instrument(&w) => vec![one("performer", Some(w), Vec::new(), name)],
+                None => vec![one(word.trim(), None, Vec::new(), name)],
+            }
+        }
+        "musicbrainz" => {
+            let w = folded(word);
+            let qualifiers: Vec<String> = attributes.iter().map(|a| folded(a)).filter(|a| QUALIFIERS.contains(&a.as_str())).collect();
+            let named: Vec<String> = attributes.iter().map(|a| folded(a)).filter(|a| !QUALIFIERS.contains(&a.as_str())).collect();
+            match w.as_str() {
+                "instrument" if !named.is_empty() => named.into_iter().map(|i| one("performer", Some(i), qualifiers.clone(), name.clone())).collect(),
+                "vocal" => {
+                    let detail = named.first().cloned().unwrap_or_else(|| "vocals".to_string());
+                    vec![one("performer", Some(detail), qualifiers, name)]
+                }
+                _ => match role_of(kind, &w) {
+                    Some(role) => vec![one(role, None, qualifiers, name)],
+                    None => vec![one(word.trim(), None, qualifiers, name)],
+                },
+            }
+        }
+        "discogs" => {
+            let mut out = Vec::new();
+            for part in discogs_parts(word) {
+                let (base, bracket) = bracketed(&part);
+                let b = folded(&base);
+                if b == "instruments" {
+                    for i in bracket.iter().flat_map(|x| x.split(',')).map(folded).filter(|i| !i.is_empty()) {
+                        out.push(one("performer", Some(i), Vec::new(), name.clone()));
+                    }
+                } else if let Some(role) = role_of(kind, &b) {
+                    match bracket.as_deref().map(folded) {
+                        Some(x) if BRACKET_ROLES.iter().any(|(w, _)| *w == x) => {
+                            let role = BRACKET_ROLES.iter().find(|(w, _)| *w == x).map_or(role, |(_, r)| *r);
+                            out.push(one(role, None, Vec::new(), name.clone()));
+                        }
+                        Some(x) => out.push(one(role, None, x.split(',').map(folded).filter(|q| !q.is_empty()).collect(), name.clone())),
+                        None => out.push(one(role, None, Vec::new(), name.clone())),
+                    }
+                } else if is_instrument(&b) {
+                    let qualifiers = bracket.iter().flat_map(|x| x.split(',')).map(folded).filter(|q| !q.is_empty()).collect();
+                    out.push(one("performer", Some(b), qualifiers, name.clone()));
+                } else {
+                    out.push(one(part.trim(), None, Vec::new(), name.clone()));
+                }
+            }
+            out
+        }
+        _ => match role_of(kind, word) {
+            Some(role) => vec![one(role, None, Vec::new(), name)],
+            None => vec![one(word.trim(), None, Vec::new(), name)],
+        },
+    }
 }
 
 /// A source's own id for a person: `musicbrainz` or `discogs`, and the id.
@@ -387,9 +452,156 @@ struct Gathered {
 /// The record's credits by role (CRED.2, CRED.18): every source's credits merged by who they name, one credit per role, detail
 /// and person, in the one order. `all` is the record's track numbers: a credit on each of them is the record's, no tracks named.
 pub fn credits_of(said: &[Said], here: &Here, all: &[u32]) -> Vec<RoleView> {
-    // Red first (SCENARIOS-CRED CRED.2, CRED.18): no merge yet.
-    let _ = (said, here, all, source_at, Gathered::default, Here::holder, Here::named);
-    Vec::new()
+    // The same record's evidence first (T-CRED-4): who each name is credited as, by reference, by any source on this record.
+    let mut by_name: BTreeMap<String, BTreeSet<Who>> = BTreeMap::new();
+    for s in said {
+        if let Some(r) = &s.person {
+            let who = match here.holder(r) {
+                Some(a) => Who::Here(a.id.clone()),
+                None => Who::Listed(r.clone()),
+            };
+            by_name.entry(name_key(&s.name)).or_default().insert(who.clone());
+            if let Some(c) = &s.credited_as {
+                by_name.entry(name_key(c)).or_default().insert(who);
+            }
+        }
+    }
+    let who_of = |s: &Said, name: &str| -> Who {
+        if let Some(r) = &s.person {
+            return match here.holder(r) {
+                Some(a) => Who::Here(a.id.clone()),
+                None => Who::Listed(r.clone()),
+            };
+        }
+        if let Some(ws) = by_name.get(&name_key(name))
+            && ws.len() == 1
+        {
+            return ws.iter().next().cloned().unwrap_or_else(|| Who::Name(name_key(name)));
+        }
+        match here.named(name).as_slice() {
+            [one] => Who::Here(one.id.clone()),
+            _ => Who::Name(name_key(name)),
+        }
+    };
+    let all_set: BTreeSet<u32> = all.iter().copied().collect();
+    let mut gathered: BTreeMap<(String, Option<String>, Who), Gathered> = BTreeMap::new();
+    for s in said {
+        for reading in read_role(&s.source, &s.word, &s.attributes, &s.name) {
+            let who = who_of(s, &reading.name);
+            if reading.role == "artist"
+                && let Who::Here(id) = &who
+                && here.record_artists.contains(id)
+            {
+                continue;
+            }
+            let g = gathered.entry((reading.role.clone(), reading.detail.clone(), who)).or_default();
+            match &s.on {
+                On::Every => g.every = true,
+                On::Tracks(t) => g.tracks.extend(t.iter().copied()),
+                On::Unplaced(at) => {
+                    if !g.unplaced.contains(at) {
+                        g.unplaced.push(at.clone());
+                    }
+                }
+            }
+            g.qualifiers.extend(reading.qualifiers.iter().cloned());
+            let at = source_at(&s.source);
+            g.by.insert(at.clone());
+            g.names.entry(at).or_insert_with(|| reading.name.clone());
+        }
+    }
+    let mut first_of_role: BTreeMap<String, u32> = BTreeMap::new();
+    let mut people: Vec<(String, u32, String, Credited)> = Vec::new();
+    for ((role, detail, who), g) in gathered {
+        let every = g.every || (!all_set.is_empty() && g.tracks == all_set);
+        let tracks = (!every && !g.tracks.is_empty()).then(|| g.tracks.iter().copied().collect::<Vec<_>>());
+        let at = (!every && g.tracks.is_empty() && !g.unplaced.is_empty()).then(|| g.unplaced.join(", "));
+        let first = if every || tracks.is_none() { 0 } else { g.tracks.iter().next().copied().unwrap_or(0) };
+        let first_name = g.names.values().next().cloned().unwrap_or_default();
+        let (person, name, number) = match &who {
+            Who::Here(id) => {
+                let a = here.by_ref.iter().map(|(_, a)| a).chain(&here.by_name).find(|a| &a.id == id);
+                (Some(Person::Here { id: id.clone() }), a.map_or(first_name, |a| a.name.clone()), a.and_then(|a| a.number))
+            }
+            Who::Listed(l) => (Some(Person::Listed { listed: l.clone() }), first_name, None),
+            Who::Name(_) => (None, first_name, None),
+        };
+        let credited = Credited {
+            person,
+            name: name.clone(),
+            number,
+            detail,
+            qualifiers: Some(g.qualifiers.into_iter().collect::<Vec<_>>()).filter(|q| !q.is_empty()),
+            tracks,
+            at,
+            by: g.by.into_iter().map(|(_, s)| s).collect(),
+            open: None,
+        };
+        let f = first_of_role.entry(role.clone()).or_insert(first);
+        *f = (*f).min(first);
+        people.push((role, first, name, credited));
+    }
+    // The table's roles in its order; the words no row names after them, in first-track order, then by the word.
+    let mut roles: BTreeMap<(usize, u32, String), Vec<(u32, String, Credited)>> = BTreeMap::new();
+    for (role, first, name, credited) in people {
+        let at = role_at(&role);
+        let place = if at < ROLES.len() { (at, 0, role) } else { (at, first_of_role[&role], role) };
+        roles.entry(place).or_default().push((first, name_key(&name), credited));
+    }
+    roles
+        .into_iter()
+        .map(|((_, _, role), mut people)| {
+            // Within a role: by first track, then shown name (CRED.18); a detail or a position apart, by it; two persons of one name
+            // that nothing ties (OQ-CRED-7 (a)) in the fixed source order of their first source, which ranks nothing.
+            let tie = |c: &Credited| c.by.first().map(|s| source_at(s));
+            people.sort_by(|a, b| (a.0, &a.1, &a.2.detail, &a.2.at, tie(&a.2)).cmp(&(b.0, &b.1, &b.2.detail, &b.2.at, tie(&b.2))));
+            RoleView { word: role_word(&role), role, people: people.into_iter().map(|(_, _, c)| c).collect() }
+        })
+        .collect()
+}
+
+/// What a record's credits are worked out from (the record's facts' part): every source's credits as said, the artists here they
+/// may name, and the record's track numbers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Credits {
+    pub said: Vec<Said>,
+    pub here: Here,
+    pub all: Vec<u32>,
+}
+
+/// The record's credits as this viewer reads them (CRED.3, CRED.12, T-CRED-9): `credits_of`, the same for every account, and each
+/// Listed person's open where the viewer may make their artist: every account a stored credit names them to, but a reading key,
+/// whose key only reads (CN1's H1), so the person is text there. By a MusicBrainz id, as `/api/artists/open` opens on trunk; a
+/// Discogs id's open is DC3a's (M4).
+pub fn credits_for(c: &Credits, viewer: &crate::can::Viewer) -> Vec<RoleView> {
+    let mut roles = credits_of(&c.said, &c.here, &c.all);
+    if viewer.scope != crate::can::Scope::Read {
+        for p in roles.iter_mut().flat_map(|r| r.people.iter_mut()) {
+            if let Some(Person::Listed { listed }) = &p.person
+                && listed.source == "musicbrainz"
+            {
+                p.open = Some(open_artist(&listed.id, &p.name));
+            }
+        }
+    }
+    roles
+}
+
+/// A Listed person's open: `POST /api/artists/open` with their MusicBrainz id and name (T-CRED-9), made there, kept at open (Q33).
+fn open_artist(mbid: &str, name: &str) -> ActionView {
+    use crate::view::{Fields, Group, Method};
+    ActionView {
+        name: "open-artist".into(),
+        title: name.to_string(),
+        icon: "person".into(),
+        group: Group::Go,
+        section: crate::when::Section::Head,
+        method: Method::Post,
+        href: "/api/artists/open".into(),
+        fields: Some(Fields { mbid: Some(mbid.to_string()), name: Some(name.to_string()), ..Default::default() }),
+        confirm: None,
+        away: false,
+    }
 }
 
 /// What an entry of a credit's ordered list is (CRED.24): a main artist, or a featured one (the Featuring role).
@@ -479,9 +691,23 @@ pub fn title_guest(title: &str) -> Option<(String, String)> {
 /// `join`): each entry's name, its id, and the joining text after it. A separator is no phrase; a featuring marker is the phrase of
 /// the artist before it, and the artists after it feature (CRED.24 (p9)–(p13)).
 pub fn source_list(entries: &[(String, Option<Listed>, String)]) -> Vec<Entry> {
-    // Red first (SCENARIOS-CRED CRED.24): no list is kept yet.
-    let _ = entries;
-    Vec::new()
+    let mut out = Vec::new();
+    let mut featuring = false;
+    for (name, person, join) in entries {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let phrase = (!is_separator(join)).then(|| join.trim().to_string());
+        out.push(Entry { name: name.to_string(), person: person.clone(), role: if featuring { ListRole::Featuring } else { ListRole::Main }, phrase });
+        if is_marker(join) {
+            featuring = true;
+        }
+    }
+    if let Some(last) = out.last_mut() {
+        last.phrase = None;
+    }
+    out
 }
 
 /// A file's artist credit as an ordered list (CRED.24 (p1)–(p8), (p14)–(p18)): `line` its ARTIST (or ALBUMARTIST) as written; `parts`
@@ -493,9 +719,80 @@ pub fn source_list(entries: &[(String, Option<Listed>, String)]) -> Vec<Entry> {
 /// doesn't name B already; the title stays as written. `placeholder` is F54's placeholder rule: a featured placeholder ("Friends")
 /// credits no one.
 pub fn files_list(line: &str, parts: &[String], ids: &[String], title: Option<&str>, whole: &[String], placeholder: &dyn Fn(&str) -> bool) -> Vec<Entry> {
-    // Red first (SCENARIOS-CRED CRED.24): no list is kept yet.
-    let _ = (line, parts, ids, title, whole, placeholder, marker_in, title_guest);
-    Vec::new()
+    let kept = |name: &str| whole.iter().any(|w| name_key(w) == name_key(name));
+    // Each part, with a featuring marker inside it split (where the files give no list naming each).
+    let mut names: Vec<(String, ListRole, Option<String>)> = Vec::new();
+    let many = parts.len() > 1;
+    for part in parts.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        match marker_in(part).filter(|_| !kept(part)) {
+            Some((i, end)) => {
+                let (main, featured) = (part[..i].trim(), part[end..].trim());
+                names.push((main.to_string(), ListRole::Main, Some(part[i..end].to_string())));
+                if !featured.is_empty() && !placeholder(featured) {
+                    names.push((featured.to_string(), ListRole::Featuring, None));
+                }
+            }
+            None => names.push((part.to_string(), ListRole::Main, None)),
+        }
+    }
+    // The phrases between the names, as the line prints them, where the files list each name apart.
+    if many {
+        let lower = line.to_lowercase();
+        let mut at = 0usize;
+        let mut found: Vec<Option<(usize, usize)>> = Vec::new();
+        for (name, _, _) in &names {
+            let key = name.to_lowercase();
+            match lower[at..].find(&key) {
+                Some(i) => {
+                    found.push(Some((at + i, at + i + key.len())));
+                    at += i + key.len();
+                }
+                None => found.push(None),
+            }
+        }
+        let mut featuring = false;
+        for k in 0..names.len() {
+            if featuring {
+                names[k].1 = ListRole::Featuring;
+            }
+            if k + 1 < names.len()
+                && let (Some((_, end)), Some((start, _))) = (found[k], found[k + 1])
+                && start >= end
+            {
+                let join = line[end..start].trim();
+                if names[k].2.is_none() && !is_separator(join) {
+                    names[k].2 = Some(join.to_string());
+                }
+                if is_marker(join) {
+                    featuring = true;
+                }
+            }
+            if names[k].2.as_deref().is_some_and(is_marker) {
+                featuring = true;
+            }
+        }
+    }
+    let mut out: Vec<Entry> = names
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, role, phrase))| Entry { person: ids.get(i).map(|id| Listed { source: "musicbrainz".into(), id: id.trim().to_string() }), name, role, phrase })
+        .collect();
+    // A title's guest, where the list doesn't already name them (its marker the phrase of the last main artist before it).
+    if let Some((guest, marker)) = title.and_then(title_guest)
+        && !placeholder(&guest)
+        && !out.iter().any(|e| name_key(&e.name) == name_key(&guest))
+    {
+        if let Some(last) = out.last_mut()
+            && last.phrase.is_none()
+        {
+            last.phrase = Some(marker);
+        }
+        out.push(Entry { name: guest, person: None, role: ListRole::Featuring, phrase: None });
+    }
+    if let Some(last) = out.last_mut() {
+        last.phrase = None;
+    }
+    out
 }
 
 #[cfg(test)]

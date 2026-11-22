@@ -817,8 +817,13 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
     let artists = list("artists", "artist");
     // OBJ5, NAMES.23: the credit by the one formatter over the artists the file names (`credit_text`), never its ARTIST text raw
     // ("Commodo / Alfa Mist" is two artists' credit, "Commodo & Alfa Mist").
-    let named: Vec<&str> = artists.iter().map(String::as_str).collect();
-    let artist_credit = Some(cratarr_rules::names::credit_text(&named, None)).filter(|c| !c.is_empty()).or_else(|| fact(row, "artist"));
+    // CRED.27: as an ordered list, each artist with the phrase the line prints after it ("Rowan Fell feat. Oda Brenn"), a separator
+    // never; the title's guest featured after them (CRED.24 (p2)); F54's placeholder featuring no one.
+    let line = fact(row, "artist").unwrap_or_default();
+    let keep = rules.encoding(folder).artist_keep.clone();
+    let listed = cratarr_domain::credits::files_list(&line, &artists, &[], Some(title.as_str()), &keep, &cratarr_rules::crates::placeholder);
+    let entries: Vec<(&str, Option<&str>)> = listed.iter().map(|e| (e.name.as_str(), e.phrase.as_deref())).collect();
+    let artist_credit = Some(cratarr_rules::names::credit_text(&entries)).filter(|c| !c.is_empty()).or_else(|| fact(row, "artist"));
     // The album artist as the file credits it, else the song's artist.
     let album_artist = fact(row, "albumartist").or_else(|| artist_credit.clone()).unwrap_or_else(|| UNKNOWN_ARTIST.into());
     let mut album_artists = list("albumartists", "albumartist");
@@ -834,7 +839,8 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &FolderRules) -> Song<'a> {
     // What gathers a folder's files and what persistent ids read stay the raw tags' (T-WM-2): no group or id moves by the rule.
     let raw_artists = raw("artists", "artist");
     let raw_named: Vec<&str> = raw_artists.iter().map(String::as_str).collect();
-    let raw_credit = Some(cratarr_rules::names::credit_text(&raw_named, None)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
+    let raw_named: Vec<(&str, Option<&str>)> = raw_named.iter().map(|n| (*n, None)).collect();
+    let raw_credit = Some(cratarr_rules::names::credit_text(&raw_named)).filter(|c| !c.is_empty()).or_else(|| row.first("artist").map(str::to_string));
     let raw_album_artist = row.first("albumartist").map(str::to_string).or(raw_credit).unwrap_or_else(|| UNKNOWN_ARTIST.into());
     // A copy Cratarr placed is gathered by its placing folder, never by its tags (COU.17, T-COU-16); a file it placed into a copy, as
     // placed, by its folder, never by its tags: its folder's album takes it (`one_album_per_folder`), and alone it is its own (COU.1,
@@ -2252,7 +2258,7 @@ fn write_albums(
             });
             // A folder none of whose files speaks and names an album (all placed and as placed): its record's stored title and credit,
             // never a placed file's own tags.
-            let credit = facts.credits.records.get(&s.record).map(|names| cratarr_rules::names::credit_text(&names.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), None));
+            let credit = facts.credits.records.get(&s.record).map(|names| cratarr_rules::names::credit_text(&names.iter().map(|(_, n)| (n.as_str(), None)).collect::<Vec<_>>()));
             let (key_album, key_artist) = match (key_albums.get(&(s.folder, crate::catalogue::dir_of(&r.rel))), facts.credits.titles.get(&s.record), credit.as_deref()) {
                 (Some((a, b)), ..) => (a.as_str(), b.as_str()),
                 (None, Some(title), Some(credit)) if !credit.is_empty() => (title.as_str(), credit),
@@ -2525,7 +2531,7 @@ fn albums_credited_again(tx: &Connection) -> Result<()> {
     let mut fts = tx.prepare_cached("UPDATE albums_fts SET name = ?2, artist = ?3 WHERE rowid = ?1")?;
     for (album, n, title, names) in lines {
         let named: Vec<&str> = names.iter().map(String::as_str).collect();
-        let line = cratarr_rules::names::credit_text(&named, None);
+        let line = cratarr_rules::names::credit_text(&named.iter().map(|n| (*n, None)).collect::<Vec<_>>());
         if set.execute(params![album, line])? > 0 {
             fts.execute(params![n, title, line])?;
         }

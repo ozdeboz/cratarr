@@ -28,10 +28,6 @@ const MOVING_MINUTE: Duration = Duration::from_secs(60);
 /// An album's cover found (or not) is kept this long before it is looked for again.
 const COVER_FOUND_SECS: i64 = 30 * 86_400;
 const COVER_NONE_SECS: i64 = 7 * 86_400;
-/// An album without genres asked about again after this.
-const GENRES_AGAIN_SECS: i64 = 30 * 86_400;
-/// Albums without genres asked about in one pass.
-const GENRES_BATCH: usize = 100;
 
 /// The limit a minute Discogs said last (0: not yet).
 static PER_MINUTE: AtomicU32 = AtomicU32::new(0);
@@ -351,6 +347,7 @@ fn fits((n, length): (usize, Option<u64>), tracks: usize, secs: u64) -> bool {
 
 /// The main release of the first of the album's masters that `fits` it, each asked in turn (`main_release`); none where
 /// none does: the type is then left unknown, never taken from another record.
+#[cfg_attr(not(test), allow(dead_code))] // `types_pass`'s, folded into the one scheduled job (T-CRED-28)
 async fn fitting_release<F, Fut>(masters: Vec<u64>, tracks: usize, secs: u64, mut main_release: F) -> Result<Option<Value>>
 where
     F: FnMut(u64) -> Fut,
@@ -364,14 +361,6 @@ where
         }
     }
     Ok(None)
-}
-
-/// A master's main release as Discogs gives it.
-async fn main_release_of(master_id: u64) -> Result<Option<Value>> {
-    match master(master_id).await?.and_then(|m| m.main_release) {
-        Some(id) => release_raw(id).await,
-        None => Ok(None),
-    }
 }
 
 /// Some of a master's releases (its `main` one left out: the master's images are its), each with what it is
@@ -482,11 +471,12 @@ pub fn start() {
                 }
                 continue;
             }
-            if let Err(e) = genres_pass().await {
-                tracing::info!("discogs: genres not asked now: {e:#}");
-            }
-            if let Err(e) = types_pass().await {
-                tracing::info!("discogs: release types not asked now: {e:#}");
+            // The one scheduled Discogs job (CRED.11 (g), T-CRED-28): `fill`, `genres_pass`, `types_pass` and harvest's Discogs loop,
+            // folded, one due marker per record.
+            if let Some(served) = crate::serve::instance()
+                && let Err(e) = super::discogs_facts::scheduled_pass(served).await
+            {
+                tracing::info!("discogs: the records not read now: {e:#}");
             }
             // Classical's (0.10): only through MusicBrainz's links.
             if let Err(e) = super::works::discogs_pass().await {
@@ -547,93 +537,6 @@ pub(super) fn until_paused<T>(albums: Vec<T>, pass: &'static str) -> impl Iterat
 /// of the main release of the first of their masters whose tracklist fits the album (0.10), kept by album
 /// (`dc:<album id>`). An album with a MusicBrainz release waits until MusicBrainz was asked about it; one Discogs typed
 /// by an older rule is asked again (`UserData::release_types_asked`).
-async fn types_pass() -> Result<()> {
-    let Some(served) = crate::serve::instance() else { return Ok(()) };
-    let now = super::moment::now_secs();
-    let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<(String, String, String, String, usize, u64)> = crate::run::spawn_blocking(move || -> Result<_> {
-        let asked = ud.release_types_asked("dc:", now - GENRES_AGAIN_SECS)?;
-        let mb = ud.release_types_asked("mb:", 0)?;
-        Ok(lib
-            .albums_to_type()?
-            .into_iter()
-            .filter(|a| !asked.contains(&a.0) && (!is_mbid(&a.1) || mb.contains(&a.1)))
-            .take(GENRES_BATCH)
-            .collect())
-    })
-    .await??;
-    if due.is_empty() {
-        return Ok(());
-    }
-    // One pass at a time, a job of Cratarr's own (JR3: asked twice, one): Activity says how far, and its turn's pause (RL2).
-    let Ok(job) = crate::runner::runner().begin_keyed(TYPING, TYPING, None) else { return Ok(()) };
-    let total = due.len() as u64;
-    let http = super::discover::http()?;
-    let mut found = Vec::new();
-    for (n, (album, release, artist, title, tracks, duration_ms)) in until_paused(due, "discogs: release types").enumerate() {
-        job.step("Typing records", n as u64, Some(total));
-        on_turn(&job, &TURN);
-        let rg = match is_mbid(&release) {
-            true => release_group_of(&http, &release).await.unwrap_or_default(),
-            false => None,
-        };
-        let masters = match masters_of(rg.as_deref(), &artist, &title).await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::info!("discogs: {artist} – {title}: {e:#}");
-                continue;
-            }
-        };
-        let words: Vec<String> = fitting_release(masters, tracks, duration_ms / 1000, main_release_of)
-            .await?
-            .map(|v| v["formats"].as_array().into_iter().flatten().flat_map(|f| f["descriptions"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect::<Vec<_>>()).collect())
-            .unwrap_or_default();
-        let (primary, secondary) = crate::serve::library::release_words(words.iter().map(String::as_str));
-        found.push((format!("dc:{album}"), primary, secondary));
-    }
-    let n = found.len();
-    let ud = served.userdata.clone();
-    crate::run::spawn_blocking(move || ud.set_release_types(&found, super::moment::now_secs())).await??;
-    tracing::info!("discogs: release types asked for {n} albums");
-    job.finish(Ok::<_, anyhow::Error>(n));
-    Ok(())
-}
-
-async fn genres_pass() -> Result<()> {
-    let Some(served) = crate::serve::instance() else { return Ok(()) };
-    let now = super::moment::now_secs();
-    let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<(String, String, String, String)> = crate::run::spawn_blocking(move || -> Result<_> {
-        let asked = ud.discogs_genres_asked(now - GENRES_AGAIN_SECS)?;
-        Ok(lib.albums_without_genres()?.into_iter().filter(|a| !asked.contains(&a.0)).take(GENRES_BATCH).collect())
-    })
-    .await??;
-    let http = super::discover::http()?;
-    let mut found: Vec<(String, Vec<String>)> = Vec::new();
-    for (album, release, artist, title) in until_paused(due, "discogs: genres") {
-        let rg = match is_mbid(&release) {
-            true => release_group_of(&http, &release).await.unwrap_or_default(),
-            false => None,
-        };
-        let genres = match master_of(rg.as_deref(), &artist, &title).await {
-            Ok(Some(id)) => master(id).await?.map(|m| m.genres.into_iter().chain(m.styles).collect()).unwrap_or_default(),
-            Ok(None) => Vec::new(),
-            Err(e) => {
-                tracing::info!("discogs: {artist} – {title}: {e:#}");
-                continue;
-            }
-        };
-        found.push((album, genres));
-    }
-    let n = found.len();
-    let ud = served.userdata.clone();
-    crate::run::spawn_blocking(move || ud.set_discogs_genres(&found, super::moment::now_secs())).await??;
-    if n > 0 {
-        tracing::info!("discogs: {n} albums without genres asked");
-    }
-    Ok(())
-}
-
 /// A MusicBrainz release's release group.
 pub async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json")).asked().await?.error_for_status()?.json().await?;
@@ -1144,9 +1047,18 @@ pub struct AlbumFacts {
     pub credits: Vec<Credit>,
     /// Its page on Discogs (the master's, else the release's).
     pub url: Option<String>,
-    /// Its main release's list, as read: kept as Discogs' list of the record (`reference_tracks`), not with these facts.
+    /// Its main release's list, as read: kept as Discogs' list of the record (`reference_tracks`), not with these facts; a guess's
+    /// kept with its facts instead (`guess`), for today's pairing (CRED.21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<crate::catalogue::identity::RefTrack>>,
     #[serde(skip)]
     pub tracks: Vec<crate::catalogue::identity::RefTrack>,
+    /// Found by Discogs' search for its names, and today's pairing confirming it not: a guess (T-CRED-13), its facts counting nowhere.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guess: bool,
+    /// The release's format words ("LP", "Album", "Compilation"), as `types_pass` read them: what its release type is by.
+    #[serde(skip)]
+    pub formats: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1233,18 +1145,124 @@ pub fn plain_text(s: &str) -> String {
     out.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
-/// Every credit a Discogs release gives, as the credits store keeps them (CRED.6).
+/// Each track's position on a Discogs release ("A4") as its list places it (`references::list_of_discogs`: each medium a disc, its
+/// tracks numbered from 1), in the tracklist's order.
+fn positions_of(v: &Value) -> Vec<(String, (u32, u32))> {
+    let mut out: Vec<(String, (u32, u32))> = Vec::new();
+    let (mut medium, mut disc, mut n) = (None::<String>, 0u32, 0u32);
+    for t in v["tracklist"].as_array().into_iter().flatten().filter(|t| t["type_"].as_str().is_none_or(|k| k == "track")) {
+        let position = t["position"].as_str().unwrap_or_default().trim().to_string();
+        let key = super::renumber_base::medium_of(&position);
+        if medium.as_deref() != Some(key.as_str()) {
+            medium = Some(key);
+            disc += 1;
+            n = 0;
+        }
+        n += 1;
+        out.push((position, (disc, n)));
+    }
+    out
+}
+
+/// A credit's tracks as Discogs writes them ("A4, B3", "A1 to A3", "A1-A3") placed on its list (`positions_of`); none where one of
+/// them names no position of the list (placed by guess on none: T-CRED-6).
+fn placed(tracks: &str, positions: &[(String, (u32, u32))]) -> Option<Vec<(u32, u32)>> {
+    let at = |p: &str| positions.iter().position(|(x, _)| x.eq_ignore_ascii_case(p.trim()));
+    let mut out = Vec::new();
+    for part in tracks.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let range = part.split_once(" to ").or_else(|| part.split_once(" - ")).or_else(|| part.split_once('-').filter(|(a, b)| at(a).is_some() && at(b).is_some()));
+        match range {
+            Some((a, b)) => {
+                let (i, j) = (at(a)?, at(b)?);
+                out.extend(positions[i.min(j)..=i.max(j)].iter().map(|(_, p)| *p));
+            }
+            None => out.push(positions[at(part)?].1),
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// An artist credit of Discogs' (a release's or a track's `artists`, each with its `join`) as credit rows at `at` (CRED.24 (p11)):
+/// each artist by Discogs' id, its name as Discogs writes it ("(n)" kept: T-CRED-16), its `anv` as credited-as.
+fn dc_artist_rows(artists: &Value, at: &[(u32, u32)], into: &mut Vec<crate::catalogue::credits::CreditRow>) {
+    let entries: Vec<(String, Option<crate::catalogue::credits::Listed>, String)> = artists
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            let name = a["name"].as_str().filter(|n| !n.trim().is_empty())?.trim().to_string();
+            let id = a["id"].as_u64().map(|id| crate::catalogue::credits::Listed { source: "discogs".into(), id: id.to_string() });
+            Some((name, id, a["join"].as_str().unwrap_or_default().to_string()))
+        })
+        .collect();
+    let anv = |name: &str| artists.as_array().into_iter().flatten().find(|a| a["name"].as_str().map(str::trim) == Some(name)).and_then(|a| a["anv"].as_str()).filter(|a| !a.is_empty()).map(str::to_string);
+    for e in crate::catalogue::credits::source_list(&entries) {
+        into.push(crate::catalogue::credits::CreditRow {
+            track: at.to_vec(),
+            credited_as: anv(&e.name),
+            person: e.person.map(|p| p.id),
+            name: e.name,
+            word: match e.role {
+                crate::catalogue::credits::ListRole::Main => "artist".into(),
+                crate::catalogue::credits::ListRole::Featuring => "featuring".into(),
+            },
+            phrase: e.phrase,
+            ..Default::default()
+        });
+    }
+}
+
+/// Every credit a Discogs release gives (CRED.6): its `artists` (the record's credit) and its extra artists on every track or on
+/// the tracks they name, each track's `artists` and extra artists on that track; each person by Discogs' artist id, the name as
+/// Discogs writes it with its namesake mark (T-CRED-16), the `anv` as the credited-as (T-CRED-17), the role string whole (the roles
+/// table reads it), the tracks placed on Discogs' list where it names its positions, else kept as written.
 pub fn release_credit_rows(v: &Value) -> Vec<crate::catalogue::credits::CreditRow> {
-    // Red first (SCENARIOS-CRED CRED.6): no credit is kept by id yet.
-    let _ = v;
-    Vec::new()
+    use crate::catalogue::credits::CreditRow;
+    let positions = positions_of(v);
+    let mut out = Vec::new();
+    dc_artist_rows(&v["artists"], &[], &mut out);
+    let extra = |c: &Value, at: Vec<(u32, u32)>, said: Option<String>| -> Option<CreditRow> {
+        let name = c["name"].as_str().filter(|n| !n.trim().is_empty())?.trim().to_string();
+        let role = c["role"].as_str().unwrap_or_default().trim().to_string();
+        (!role.is_empty()).then(|| CreditRow {
+            track: at,
+            tracks_said: said,
+            person: c["id"].as_u64().map(|id| id.to_string()),
+            credited_as: c["anv"].as_str().filter(|a| !a.is_empty()).map(str::to_string),
+            name,
+            word: role,
+            ..Default::default()
+        })
+    };
+    for c in v["extraartists"].as_array().into_iter().flatten() {
+        let said = c["tracks"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+        // Positions the list doesn't name are kept as written, on no track (T-CRED-6): the row's track names none, its words stay.
+        let at = said.as_deref().map(|t| placed(t, &positions).unwrap_or_else(|| vec![(0, 0)])).unwrap_or_default();
+        out.extend(extra(c, at, said));
+    }
+    for t in v["tracklist"].as_array().into_iter().flatten().filter(|t| t["type_"].as_str().is_none_or(|k| k == "track")) {
+        let position = t["position"].as_str().unwrap_or_default().trim().to_string();
+        let at: Vec<(u32, u32)> = positions.iter().find(|(p, _)| *p == position).map(|(_, x)| vec![*x]).unwrap_or_else(|| vec![(0, 0)]);
+        dc_artist_rows(&t["artists"], &at, &mut out);
+        for c in t["extraartists"].as_array().into_iter().flatten() {
+            out.extend(extra(c, at.clone(), Some(position.clone()).filter(|p| !p.is_empty())));
+        }
+    }
+    out
 }
 
 fn credits_of(v: &Value) -> Vec<Credit> {
+    // The person by Discogs' id and name as Discogs writes it, its "(n)" kept (T-CRED-16); the `anv` beside it (T-CRED-17).
     let one = |c: &Value, tracks: Option<String>| -> Option<Credit> {
-        let name = c["anv"].as_str().filter(|a| !a.is_empty()).or(c["name"].as_str())?;
+        let name = c["name"].as_str().map(str::trim).filter(|n| !n.is_empty())?;
         let role = c["role"].as_str().unwrap_or_default().trim();
-        (!role.is_empty()).then(|| Credit { name: clean_name(name), role: role.to_string(), tracks: tracks.filter(|t| !t.is_empty()), ..Credit::default() })
+        (!role.is_empty()).then(|| Credit {
+            name: name.to_string(),
+            role: role.to_string(),
+            tracks: tracks.filter(|t| !t.is_empty()),
+            id: c["id"].as_u64(),
+            credited_as: c["anv"].as_str().filter(|a| !a.is_empty()).map(str::to_string),
+        })
     };
     let mut out: Vec<Credit> = v["extraartists"].as_array().into_iter().flatten().filter_map(|c| one(c, c["tracks"].as_str().map(str::to_string))).collect();
     for t in v["tracklist"].as_array().into_iter().flatten() {
@@ -1302,6 +1320,50 @@ pub async fn album_facts(release_group: Option<&str>, artist: &str, title: &str)
         }
     }
     Ok(Some(facts))
+}
+
+/// An album's facts by the Discogs master or release it is read by (CRED.11; T-CRED-13: by MusicBrainz's link or a reference that
+/// counts, never by a name): the master's genres, styles, year and page; the release's (`release`, else the master's main one)
+/// labels, credits (as the page reads them, and as the credits store keeps them: CRED.6) and list. None where Discogs knows
+/// neither.
+pub async fn album_facts_by(master: Option<u64>, release: Option<u64>) -> Result<Option<(AlbumFacts, Vec<crate::catalogue::credits::CreditRow>)>> {
+    let mut facts = AlbumFacts { release, ..AlbumFacts::default() };
+    if let Some(id) = master {
+        match get(&format!("/masters/{id}")).await? {
+            Some(v) => {
+                facts.master = Some(id);
+                facts.release = release.or(v["main_release"].as_u64());
+                facts.year = v["year"].as_u64().filter(|y| *y > 0).map(|y| y as u32);
+                facts.genres = strings(&v["genres"]);
+                facts.styles = strings(&v["styles"]);
+                facts.url = v["uri"].as_str().map(str::to_string);
+            }
+            None if release.is_none() => return Ok(None),
+            None => {}
+        }
+    }
+    let mut credits = Vec::new();
+    match facts.release {
+        Some(id) => {
+            let Some(r) = get(&format!("/releases/{id}")).await? else { return Ok(facts.master.map(|_| (facts, credits))) };
+            facts.labels = labels_of(&r);
+            facts.credits = credits_of(&r);
+            facts.tracks = super::references::list_of_discogs(&r);
+            facts.formats = r["formats"].as_array().into_iter().flatten().flat_map(|f| f["descriptions"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect::<Vec<_>>()).collect();
+            credits = release_credit_rows(&r);
+            if facts.year.is_none() {
+                facts.year = r["year"].as_u64().filter(|y| *y > 0).map(|y| y as u32);
+            }
+            if facts.master.is_none() {
+                facts.genres = strings(&r["genres"]);
+                facts.styles = strings(&r["styles"]);
+                facts.url = r["uri"].as_str().map(str::to_string);
+            }
+        }
+        None if facts.master.is_none() => return Ok(None),
+        None => {}
+    }
+    Ok(Some((facts, credits)))
 }
 
 /// A release group's genres, styles and year (Discover's suggestions): its master's, by MusicBrainz's link alone.

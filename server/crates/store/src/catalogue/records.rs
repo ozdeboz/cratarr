@@ -610,6 +610,7 @@ pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<
     )?;
     tx.execute("DELETE FROM reference_tracks WHERE record = ?1", [from])?;
     super::facts::merge_in(tx, from, into)?;
+    super::credits::merge_in(tx, from, into)?;
     // Its kept cover: the later pick stays, the other a candidate (T-COU-20).
     super::covers::merge_in(tx, from, into)?;
     // What was placed for it, and the edition it was linked to, follow it (WM.9 (b)).
@@ -4551,13 +4552,16 @@ const LISTS_FORGETTABLE: &str = "k.at < ?1 AND COALESCE(n.opened_at, 0) < ?1";
 /// to credit one again.
 const ARTIST_NEW: i64 = 86_400;
 /// The artists the forgetting takes (RT01b), `?1` a day ago: credited on no record, named by no reference by hand nor
-/// confirmed, no id from before 0.16 went to them, given theirs, and their last credit gone (Z10), at `?1` or before. One a track
+/// confirmed, holding no id a stored credit names (T-CRED-10: a credit naming an artist by id keeps it), no id from before 0.16
+/// went to them, given theirs, and their last credit gone (Z10), at `?1` or before. One a track
 /// credits, or the user data or a store names, is the caller's (`forget_quiet_artists`'s `protected`).
 const ARTISTS_FORGETTABLE: &str = "SELECT a.id FROM artists a
      WHERE max(a.born, COALESCE((SELECT b.since FROM artists_bare b WHERE b.artist = a.id), 0)) <= ?1
        AND NOT EXISTS (SELECT 1 FROM record_artists ra WHERE ra.artist = a.id)
        AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.how = 'hand')
        AND NOT EXISTS (SELECT 1 FROM \"references\" c WHERE c.subject = 'ar-' || a.id AND c.confirmed = 1)
+       AND NOT EXISTS (SELECT 1 FROM \"references\" r JOIN credits k ON k.source = r.source AND k.person = r.value AND k.guess = 0
+                        WHERE r.subject = 'ar-' || a.id AND r.kind = 'artist')
        AND a.id NOT IN (SELECT id FROM artist_moved)
      ORDER BY a.id";
 /// An artist's last credit gone at `?2` (Z10), where no record credits them now: their day's grace counts from then.

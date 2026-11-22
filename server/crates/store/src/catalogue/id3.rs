@@ -30,6 +30,10 @@ fn name_of(frame: &str) -> Option<&'static str> {
         "TDRL" => "releasedate",
         "TCON" => "genre",
         "TCOM" => "composer",
+        // The role frames (CRED.1, T-CRED-25): the conductor, the lyricist, the remixer.
+        "TPE3" => "conductor",
+        "TEXT" => "lyricist",
+        "TPE4" => "remixer",
         "TPUB" => "label",
         "TBPM" => "bpm",
         _ => return None,
@@ -47,6 +51,7 @@ fn txxx_name(description: &str) -> Option<&'static str> {
         "musicbrainz release track id" => "musicbrainz_releasetrackid",
         "originalyear" | "original year" => "originaldate",
         "catalognumber" => "catalognumber",
+        "writer" => "writer",
         _ => return None,
     })
 }
@@ -158,7 +163,8 @@ pub fn parse(version: u8, flags: u8, body: &[u8]) -> Tolerant {
         let end = start.saturating_add(size).min(body.len());
         pos = start.saturating_add(size);
         let Ok(id) = std::str::from_utf8(id) else { break };
-        if !id.starts_with('T') {
+        // ID3v2.3's IPLS holds TIPL's pairs (lofty reads it as TIPL, and so does this): read as TIPL (T-CRED-25).
+        if !id.starts_with('T') && id != "IPLS" {
             continue; // pictures, comments, binary frames: not needed
         }
         // Compressed, encrypted or per-frame unsynchronised (v2.4) frames are skipped rather than guessed at.
@@ -169,6 +175,15 @@ pub fn parse(version: u8, flags: u8, body: &[u8]) -> Tolerant {
         }
         match decode(&body[start..end]) {
             Err(why) => out.skipped.push(format!("{id}: {why}")),
+            // A key-value frame: its values in pairs, each with its role or instrument in the raw key (`TIPL:producer`, `TMCL:piano`).
+            Ok(values) if matches!(id, "TIPL" | "TMCL" | "IPLS") => {
+                let frame = if id == "TMCL" { "TMCL" } else { "TIPL" };
+                for pair in values.chunks_exact(2) {
+                    let raw = format!("{frame}:{}", pair[0]);
+                    let name = super::tags::pair_name(&raw);
+                    out.items.push((raw, name, pair[1].clone()));
+                }
+            }
             Ok(values) if id == "TXXX" => {
                 let mut it = values.into_iter();
                 let Some(desc) = it.next() else { continue };

@@ -2,9 +2,10 @@
 //! LV1, LV10, LV11, H1): the change log's one sequence versions every record view.
 //!
 //! - **Triggers owe it**, on the tables a record view reads (records, tracks, files and their tags, references, reference_tracks,
-//!   record_artists, record_labels, facts), in the catalogue's own file, as the library's own log is written (`index_log`): a
-//!   write through any connection owes what it touched in its own transaction, and no writer has to remember (LV1). A trigger
-//!   compares what it is handed, so a pass that leaves a row as it was owes nothing.
+//!   record_artists, record_labels, facts, credits; and an artist's reference, for the records whose credits name it), in the
+//!   catalogue's own file, as the library's own log is written (`index_log`): a write through any connection owes what it touched
+//!   in its own transaction, and no writer has to remember (LV1). A trigger compares what it is handed, so a pass that leaves a
+//!   row as it was owes nothing.
 //! - **Owed, then moved** (LV11): a row stays here until the store the views read has the change (the served library's check after
 //!   the build it made, `Serve::refresh`), then goes into the change log at a new rev. A row owed again after it was read is
 //!   owed anew (`n`), so it is moved again.
@@ -79,6 +80,10 @@ fn triggers() -> String {
     };
     // A file's tags say its track's title and place: whose record, by its file.
     let of_file = |at: &str| owed(&format!("SELECT t.record AS item FROM files f JOIN tracks t ON t.id = f.track WHERE f.folder = {at}.folder AND f.rel = {at}.rel"));
+    // CRED.8 (b): an artist's reference, kept or let go, changes who the records whose credits name that id credit.
+    let of_credited = |at: &str| {
+        owed(&format!("SELECT record AS item FROM credits WHERE source = {at}.source AND person = {at}.value AND {at}.kind = 'artist' AND {at}.subject GLOB 'ar-[0-9]*'"))
+    };
     let mut out = vec![
         trigger("records_insert", "INSERT", "records", &record("NEW", "id")),
         trigger("records_delete", "DELETE", "records", &record("OLD", "id")),
@@ -92,15 +97,22 @@ fn triggers() -> String {
         trigger("tags_insert", "INSERT", "tags", &of_file("NEW")),
         trigger("tags_delete", "DELETE", "tags", &of_file("OLD")),
         on_change("tags_update", "tags", &["name", "value"], &of_file("NEW")),
-        trigger("references_insert", "INSERT", "\"references\"", &of_subject("NEW")),
-        trigger("references_delete", "DELETE", "\"references\"", &of_subject("OLD")),
-        on_change("references_update", "\"references\"", &REFERENCE, &format!("{} {}", of_subject("OLD"), of_subject("NEW"))),
+        trigger("references_insert", "INSERT", "\"references\"", &format!("{} {}", of_subject("NEW"), of_credited("NEW"))),
+        trigger("references_delete", "DELETE", "\"references\"", &format!("{} {}", of_subject("OLD"), of_credited("OLD"))),
+        on_change(
+            "references_update",
+            "\"references\"",
+            &REFERENCE,
+            &format!("{} {} {} {}", of_subject("OLD"), of_subject("NEW"), of_credited("OLD"), of_credited("NEW")),
+        ),
     ];
     for (table, columns) in [
         ("reference_tracks", &["source", "kind", "value", "tracks"][..]),
         ("record_artists", &["artist", "position", "how"][..]),
         ("record_labels", &["label", "catno", "how"][..]),
         ("facts", &["fact", "source", "ref", "value"][..]),
+        // CRED (LV1): a record's credits as the services said them.
+        ("credits", &["source", "ref", "n", "track", "tracks_said", "person", "name", "credited_as", "word", "attributes", "phrase", "guess"][..]),
     ] {
         out.push(trigger(&format!("{table}_insert"), "INSERT", table, &record("NEW", "record")));
         out.push(trigger(&format!("{table}_delete"), "DELETE", table, &record("OLD", "record")));

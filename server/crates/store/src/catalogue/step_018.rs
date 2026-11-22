@@ -24,6 +24,7 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::Catalogue;
+use super::credits::CreditRow;
 use super::records::{Ref, ReferenceRow};
 use crate::serve::ids;
 
@@ -425,6 +426,153 @@ impl Catalogue {
         }
         after()?;
         tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![COVERS, serde_json::to_string(&report)?])?;
+        tx.commit()?;
+        Ok(Some(report))
+    }
+}
+
+/// The part `credits`' mark (SCENARIOS-CRED CRED.17): its report, in `FactsReport`'s shape.
+pub const CREDITS: &str = "018:credits";
+
+/// The catalogue's 0.18 step parts, in the order the server runs them (main.rs): NAMES.16's part and UPG.1's ("artists and labels
+/// by id") go before `credits` when DC3a adds them, since credits resolve to artist ids (CRED.17's Run).
+pub const PARTS: [&str; 5] = [FACTS, WM, FOLD, COVERS, CREDITS];
+
+/// What 0.17 kept of the records' credits, read from the user data by the caller (CRED.17): each MusicBrainz release's tracks that
+/// perform works, with each work's composers (`mb_releases.facts`' tracks, `mb_works`), and its Discogs links (`Stored.discogs`);
+/// each album's Discogs facts' credits, kept by name (`discogs_facts` `album:<id>`), with the master and release they were read by.
+#[derive(Debug, Clone, Default)]
+pub struct CreditsCarry {
+    /// A release's id: its tracks' (disc, position, composers as (MusicBrainz id, name)), and its Discogs links ("master:<id>").
+    pub releases: BTreeMap<String, (Vec<(u32, u32, Vec<(String, String)>)>, Vec<String>)>,
+    /// An album (`al-<n>`): its Discogs credits as 0.17 kept them (name, role, tracks as Discogs writes them), and the master and
+    /// release they were read by.
+    pub discogs: BTreeMap<String, (Vec<(String, String, Option<String>)>, Option<u64>, Option<u64>)>,
+}
+
+/// A Discogs credit's tracks as 0.17 kept them ("A4, B3", "A1 to A3", "1-4") as positions on Discogs' list (each side or disc a disc
+/// of it, its tracks numbered from 1): what the kept list's pairing places. None where a position doesn't read so.
+fn positions_said(tracks: &str) -> Option<Vec<(u32, u32)>> {
+    let one = |p: &str| -> Option<(u32, u32)> {
+        let p = p.trim();
+        if let Some((d, n)) = p.split_once(['-', '.']) {
+            return Some((d.trim().parse().ok()?, n.trim().parse().ok()?));
+        }
+        let letters: String = p.chars().take_while(char::is_ascii_alphabetic).collect();
+        let number: u32 = p[letters.len()..].trim().parse().ok()?;
+        let disc = match letters.chars().next() {
+            Some(c) => (c.to_ascii_uppercase() as u32).checked_sub('A' as u32)? + 1,
+            None => 1,
+        };
+        Some((disc, number))
+    };
+    let mut out = Vec::new();
+    for part in tracks.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.split_once(" to ") {
+            Some((a, b)) => {
+                let ((d1, n1), (d2, n2)) = (one(a)?, one(b)?);
+                if d1 != d2 || n2 < n1 {
+                    return None;
+                }
+                out.extend((n1..=n2).map(|n| (d1, n)));
+            }
+            None => out.push(one(part)?),
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+impl Catalogue {
+    /// The part `credits` (SCENARIOS-CRED CRED.17), once: what 0.17 kept fills the credits store, and nothing is asked. In one
+    /// IMMEDIATE transaction whose last write is its mark; `after` heard after its writes and before its mark (what a test cuts it by).
+    /// - **MusicBrainz's:** each work's composers on the tracks that perform it, by the release's disc and place, for the record holding
+    ///   the release. The performers 0.17 kept (no tracks, no instrument) are left to the works pass's next read (OQ-CRED-2 (a)).
+    /// - **Discogs':** each kept credit, by its name (0.17 kept no id), its role and its tracks, counted only where its master counts
+    ///   (T-CRED-13, T-CRED-14): MusicBrainz's link (the record's release's `Stored.discogs`), or a kept Discogs list today's pairing
+    ///   confirms whole; else kept as an unshown fact of a guess, and counted in the report.
+    /// - **The files':** nothing to carry: their credits are read from their tags, and reader 10's re-read reads the role tags.
+    ///
+    /// No artist is made, no file read. Done before: none. Blocking.
+    pub fn step_018_credits(&self, carry: &CreditsCarry, after: &dyn Fn() -> Result<()>) -> Result<Option<FactsReport>> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.query_row("SELECT 1 FROM meta WHERE key = ?1", [CREDITS], |_| Ok(())).optional()?.is_some() {
+            return Ok(None);
+        }
+        let at = super::now();
+        let mut report = FactsReport::default();
+        let holder = |release: &str| -> Result<Option<i64>> {
+            let subject: Option<String> = tx
+                .query_row(
+                    "SELECT subject FROM \"references\" WHERE source = 'musicbrainz' AND kind = 'release' AND value = ?1 AND subject GLOB 'al-[0-9]*'",
+                    [release],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(subject.as_deref().and_then(ids::record_number))
+        };
+        for (release, (tracks, _)) in &carry.releases {
+            let Some(record) = holder(release)? else { continue };
+            let rows: Vec<CreditRow> = tracks
+                .iter()
+                .flat_map(|(disc, position, composers)| {
+                    composers.iter().map(move |(id, name)| CreditRow { track: vec![(*disc, *position)], person: Some(id.clone()), name: name.clone(), word: "composer".into(), ..Default::default() })
+                })
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            report.count("records given MusicBrainz's composers", 1);
+            report.count("MusicBrainz's composer credits", rows.len() as u64);
+            super::credits::keep_credits_in(&tx, record, "musicbrainz", &format!("release:{release}"), Some(&rows), false, at)?;
+        }
+        for (album, (credits, master, release)) in &carry.discogs {
+            let Some(record) = ids::record_number(album) else { continue };
+            let Some(record) = super::records::merged_end(&tx, record)? else { continue };
+            if credits.is_empty() {
+                continue;
+            }
+            // By MusicBrainz's link: the record's own release's links name the master or release the facts came by.
+            let releases: Vec<String> = tx
+                .prepare_cached("SELECT value FROM \"references\" WHERE subject = ?1 AND source = 'musicbrainz' AND kind = 'release'")?
+                .query_map([ids::record(record)], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let links: Vec<String> = releases.iter().filter_map(|r| carry.releases.get(r).map(|(_, l)| l.clone())).flatten().collect();
+            let by_link = master.is_some_and(|m| links.contains(&format!("master:{m}"))) || release.is_some_and(|r| links.contains(&format!("release:{r}")));
+            // Else by today's pairing: a kept Discogs list that a copy's files pair with whole.
+            let by_pairing = !by_link && {
+                let lists = super::lists::lists_in(&tx, record)?;
+                let copies = super::holding::copy_files_in(&tx, record)?;
+                lists.iter().filter(|l| l.reference.source == "discogs").any(|l| copies.values().any(|files| cratarr_domain::facts::confirms(&l.tracks, files)))
+            };
+            let guess = !(by_link || by_pairing);
+            let rows: Vec<CreditRow> = credits
+                .iter()
+                .map(|(name, role, tracks)| CreditRow {
+                    track: tracks.as_deref().and_then(positions_said).unwrap_or_default(),
+                    tracks_said: tracks.clone(),
+                    name: name.clone(),
+                    word: role.clone(),
+                    ..Default::default()
+                })
+                .map(|mut r| {
+                    // A position 0.17 kept that reads as none stays as written, on no track (T-CRED-6).
+                    if r.track.is_empty() && r.tracks_said.is_some() {
+                        r.track = vec![(0, 0)];
+                    }
+                    r
+                })
+                .collect();
+            let kind = if by_link { "Discogs credits counted by MusicBrainz's link" } else if by_pairing { "Discogs credits counted by the pairing" } else { "Discogs credits kept unshown (a guess's)" };
+            report.count(kind, rows.len() as u64);
+            if guess {
+                report.list("Discogs credits kept unshown: its master found by name, today's pairing confirming it not", ids::record(record));
+            }
+            let of = format!("release:{}", release.or(*master).unwrap_or_default());
+            super::credits::keep_credits_in(&tx, record, "discogs", &of, Some(&rows), guess, at)?;
+        }
+        after()?;
+        tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![CREDITS, serde_json::to_string(&report)?])?;
         tx.commit()?;
         Ok(Some(report))
     }

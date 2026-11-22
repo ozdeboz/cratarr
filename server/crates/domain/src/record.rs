@@ -104,6 +104,8 @@ pub struct RecordFacts {
     pub editions: Vec<EditionOf>,
     /// Every library a copy may go to or lies in.
     pub libraries: Vec<LibraryOf>,
+    /// What its credits are worked out from (SCENARIOS-CRED): every source's credits, the artists here they may name, its tracks.
+    pub credits: crate::credits::Credits,
 }
 
 /// Who sees it and from where: the viewer, the place, the libraries their switch has off, the change log's rev it was read at.
@@ -522,7 +524,7 @@ pub fn links(r: &RecordFacts, seen: &Seen) -> Vec<Link> {
         out.push(link("sounds_like", "", format!("crate-new:like:album:{id}")));
     }
     out.push(link("share", "", format!("album:{SOURCE}/{id}")));
-    let words = format!("{} {}", credit_text(&r.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), None), r.title);
+    let words = format!("{} {}", credit_text(&r.artists.iter().map(|a| (a.name.as_str(), None)).collect::<Vec<_>>()), r.title);
     let q: String = words.bytes().map(|b| if b.is_ascii_alphanumeric() { char::from(b).to_string() } else if b == b' ' { "+".into() } else { format!("%{b:02X}") }).collect();
     out.push(link("web_search", "", format!("https://duckduckgo.com/?q={q}")));
     out.push(link("genius_search", "", format!("https://genius.com/search?q={q}")));
@@ -603,7 +605,7 @@ fn properties(r: &RecordFacts) -> RecordProperties {
         secondary: Some(r.secondaries_now().into_iter().map(|s| crate::view::FactVersion { value: s.word, by: s.by }).collect::<Vec<_>>()).filter(|s| !s.is_empty()),
         title: FactView { value: r.title.clone(), by: fact("title"), versions: Vec::new() },
         artists: FactView { value: r.artists.clone(), by: fact("artist"), versions: Vec::new() },
-        credit: credit_text(&names, None),
+        credit: credit_text(&names.iter().map(|n| (*n, None)).collect::<Vec<_>>()),
         year: FactView {
             value: year.value,
             by: year.by,
@@ -611,6 +613,7 @@ fn properties(r: &RecordFacts) -> RecordProperties {
         },
         labels: FactView::of(r.labels.clone()),
         cover: FactView { value: Some(cratarr_rules::ids::record_picture(&record_id(r.id), r.cover.as_deref())), by: fact("cover"), versions: Vec::new() },
+        credits: Vec::new(),
     }
 }
 
@@ -642,7 +645,7 @@ pub fn entity(r: &RecordFacts, seen: &Seen) -> Entity<RecordProperties> {
         id: record_id(r.id),
         rev: seen.rev,
         epoch: epoch(seen.viewer, seen.place, seen.off),
-        properties: properties(r),
+        properties: RecordProperties { credits: crate::credits::credits_for(&r.credits, seen.viewer), ..properties(r) },
         state: state(r, seen),
         actions,
         sections,
@@ -659,7 +662,7 @@ pub fn row(r: &RecordFacts, seen: &Seen) -> Row {
         rev: seen.rev,
         epoch: epoch(seen.viewer, seen.place, seen.off),
         title: r.title.clone(),
-        credit: credit_text(&names, None),
+        credit: credit_text(&names.iter().map(|n| (*n, None)).collect::<Vec<_>>()),
         kind: r.kind_now().value,
         year: r.year_now().value,
         cover: Some(cratarr_rules::ids::record_picture(&record_id(r.id), r.cover.as_deref())),

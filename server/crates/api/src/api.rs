@@ -233,6 +233,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/records/open", post(open_record))
         // A record as one object (DC1a): its entity for the viewer asking, from the place asked (SCENARIOS-DC1 RV1).
         .route("/api/records/{id}", get(crate::serve::views::record::record))
+        // An album's Discogs facts as kept, for every account (CRED.11 (i), CRED.16; the owner's rule: no GET asks a source).
+        .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
         .route("/api/labels/open", post(open_label))
         .route("/api/artists/open", post(open_artist))
         .route("/api/discover/missing", get(discover_missing))
@@ -336,7 +338,6 @@ pub fn router(app: Arc<App>) -> Router {
             // A record's own Health problems (0.14): its page's and its menu's.
             .route("/api/albums/{source}/{album}/health", get(album_health))
             .route("/api/albums/{source}/{album}/release", get(album_release).post(open_album_release))
-            .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
             // A record marked classical or not (0.10), library-wide.
             .route("/api/albums/{source}/{album}/classical", put(mark_classical))
             .route("/api/artists/discogs", get(artist_discogs))
@@ -5415,7 +5416,10 @@ async fn open_record(ctx: Ctx, Json(body): Json<serde_json::Value>) -> Result<Js
     // a had record's references read for its References (the owner: every lookup a job begun by an open or a schedule).
     match ctx.serve() {
         Ok(served) => {
-            let _ = crate::app::references::begin_read(served, record).await;
+            let _ = crate::app::references::begin_read(served.clone(), record).await;
+            // CRED.11: any account's open of a record begins its Discogs read, a job, once while its facts are fresh (the one due
+            // marker), only while Discogs is on, by MusicBrainz's link or a reference that counts (T-CRED-13); never a GET.
+            let _ = crate::app::discogs_facts::begin_read(served, record).await;
         }
         Err(_) => {
             let _ = crate::app::references::read_at_open(&cat, record, crate::app::moment::now_secs(), crate::app::references_door::read).await;
@@ -6710,7 +6714,10 @@ struct ArtistOpened {
 /// MusicBrainz id is refused. By anyone only as Beyond or a card listed them within the day, by the name it listed (U6: another
 /// name refused); by an administrator, any (Z8).
 async fn open_artist(ctx: Ctx, Json(b): Json<ArtistOpened>) -> Result<Json<serde_json::Value>, ApiError> {
-    let Some(name) = crate::app::beyond::may_open(&b.mbid, &b.name, crate::serve::access::administering(), crate::app::moment::now_secs()) else {
+    // T-CRED-9 (SCENARIOS-CRED CRED.12): a person a stored credit names opens for any signed-in account, made here, kept at open.
+    let (cat, id) = (ctx.app.library.catalogue(), b.mbid.trim().to_ascii_lowercase());
+    let credited = crate::run::spawn_blocking(move || cat.credited("musicbrainz", &id)).await.ok().and_then(Result::ok).unwrap_or(false);
+    let Some(name) = crate::app::beyond::may_open(&b.mbid, &b.name, crate::serve::access::administering() || credited, crate::app::moment::now_secs()) else {
         return Err(ToggleError::Forbidden("Only an artist Beyond found is opened here, by the name it found; an administrator may open any.".into()).into());
     };
     let artist = crate::app::beyond::open_asking(ctx.app.library.catalogue(), &b.mbid, &name)
@@ -7134,17 +7141,21 @@ async fn put_floor(ctx: Ctx, Json(b): Json<serde_json::Value>) -> Result<Json<se
 
 // ---- Discogs' facts (0.9.8)
 
-/// An album's facts on Discogs: its master's genres, styles and year, its credits, its page; its labels as About shows them (F9:
-/// Discogs' main release's, then MusicBrainz's of the files' release of a name Discogs names none of, each `{ name, catno?, id?,
-/// ref? }`, `discogs_facts::answer`); `{}` where neither says anything. Asked now where not kept.
+/// An album's facts on Discogs as kept: its master's genres, styles and year, its credits, its page; its labels as About shows them
+/// (F9: Discogs' main release's, then MusicBrainz's of the files' release of a name Discogs names none of, each `{ name, catno?,
+/// id?, ref? }`, `discogs_facts::answer`); `{}` where neither says anything. Every account's, and it asks no source and keeps
+/// nothing (SCENARIOS-CRED CRED.11 (i), CRED.21; DC3's REL.9; the owner's 04:43 rule): the record's open and the one scheduled
+/// Discogs job read Discogs, as jobs.
 async fn album_discogs(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
     own_album(&source)?;
     let served = ctx.serve()?;
-    let facts = crate::app::discogs_facts::album(&served, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let answer = crate::run::spawn_blocking(move || crate::app::discogs_facts::answer(&served, &album, facts.as_ref()))
-        .await
-        .map_err(|e| ToggleError::Refused(format!("{e}")))?
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let answer = crate::run::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let facts = crate::app::discogs_facts::album_kept(&served, &album)?;
+        crate::app::discogs_facts::answer(&served, &album, facts.as_ref())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(answer))
 }
 

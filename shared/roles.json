@@ -1,0 +1,439 @@
+{
+  "about": "The one roles table (SCENARIOS-CRED CRED.1, T-CRED-1, T-CRED-7), written by cratarr-domain's tests: the roles in the one order with their shown words; each source's word (the files' tag names, MusicBrainz's relationship types, Discogs' role strings, lower case) and the role it is; MusicBrainz's attributes that qualify and are never an instrument; the instruments a performer's detail names. A word no row names is a role of its own word, after these.",
+  "roles": [
+    {
+      "role": "artist",
+      "word": "Artist"
+    },
+    {
+      "role": "featuring",
+      "word": "Featuring"
+    },
+    {
+      "role": "composer",
+      "word": "Composer"
+    },
+    {
+      "role": "lyricist",
+      "word": "Lyricist"
+    },
+    {
+      "role": "writer",
+      "word": "Writer"
+    },
+    {
+      "role": "arranger",
+      "word": "Arranger"
+    },
+    {
+      "role": "conductor",
+      "word": "Conductor"
+    },
+    {
+      "role": "chorus master",
+      "word": "Chorus master"
+    },
+    {
+      "role": "orchestra",
+      "word": "Orchestra"
+    },
+    {
+      "role": "performer",
+      "word": "Performer"
+    },
+    {
+      "role": "producer",
+      "word": "Producer"
+    },
+    {
+      "role": "mixer",
+      "word": "Mixer"
+    },
+    {
+      "role": "engineer",
+      "word": "Engineer"
+    },
+    {
+      "role": "mastering",
+      "word": "Mastering"
+    },
+    {
+      "role": "remixer",
+      "word": "Remixer"
+    },
+    {
+      "role": "dj mix",
+      "word": "DJ mix"
+    },
+    {
+      "role": "programming",
+      "word": "Programming"
+    }
+  ],
+  "words": [
+    {
+      "source": "files",
+      "word": "artist",
+      "role": "artist"
+    },
+    {
+      "source": "files",
+      "word": "artists",
+      "role": "artist"
+    },
+    {
+      "source": "files",
+      "word": "featuring",
+      "role": "featuring"
+    },
+    {
+      "source": "files",
+      "word": "composer",
+      "role": "composer"
+    },
+    {
+      "source": "files",
+      "word": "lyricist",
+      "role": "lyricist"
+    },
+    {
+      "source": "files",
+      "word": "writer",
+      "role": "writer"
+    },
+    {
+      "source": "files",
+      "word": "arranger",
+      "role": "arranger"
+    },
+    {
+      "source": "files",
+      "word": "conductor",
+      "role": "conductor"
+    },
+    {
+      "source": "files",
+      "word": "performer",
+      "role": "performer"
+    },
+    {
+      "source": "files",
+      "word": "producer",
+      "role": "producer"
+    },
+    {
+      "source": "files",
+      "word": "engineer",
+      "role": "engineer"
+    },
+    {
+      "source": "files",
+      "word": "mixer",
+      "role": "mixer"
+    },
+    {
+      "source": "files",
+      "word": "mix",
+      "role": "mixer"
+    },
+    {
+      "source": "files",
+      "word": "djmixer",
+      "role": "dj mix"
+    },
+    {
+      "source": "files",
+      "word": "dj-mix",
+      "role": "dj mix"
+    },
+    {
+      "source": "files",
+      "word": "remixer",
+      "role": "remixer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "artist",
+      "role": "artist"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "featuring",
+      "role": "featuring"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "composer",
+      "role": "composer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "lyricist",
+      "role": "lyricist"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "writer",
+      "role": "writer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "arranger",
+      "role": "arranger"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "conductor",
+      "role": "conductor"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "chorus master",
+      "role": "chorus master"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "performing orchestra",
+      "role": "orchestra"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "instrument",
+      "role": "performer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "vocal",
+      "role": "performer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "performer",
+      "role": "performer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "producer",
+      "role": "producer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "mix",
+      "role": "mixer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "engineer",
+      "role": "engineer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "audio",
+      "role": "engineer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "sound",
+      "role": "engineer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "recording",
+      "role": "engineer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "mastering",
+      "role": "mastering"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "remixer",
+      "role": "remixer"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "mix-dj",
+      "role": "dj mix"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "programming",
+      "role": "programming"
+    },
+    {
+      "source": "discogs",
+      "word": "artist",
+      "role": "artist"
+    },
+    {
+      "source": "discogs",
+      "word": "featuring",
+      "role": "featuring"
+    },
+    {
+      "source": "discogs",
+      "word": "producer",
+      "role": "producer"
+    },
+    {
+      "source": "discogs",
+      "word": "mixed by",
+      "role": "mixer"
+    },
+    {
+      "source": "discogs",
+      "word": "mastered by",
+      "role": "mastering"
+    },
+    {
+      "source": "discogs",
+      "word": "written-by",
+      "role": "writer"
+    },
+    {
+      "source": "discogs",
+      "word": "composed by",
+      "role": "composer"
+    },
+    {
+      "source": "discogs",
+      "word": "lyrics by",
+      "role": "lyricist"
+    },
+    {
+      "source": "discogs",
+      "word": "arranged by",
+      "role": "arranger"
+    },
+    {
+      "source": "discogs",
+      "word": "conductor",
+      "role": "conductor"
+    },
+    {
+      "source": "discogs",
+      "word": "engineer",
+      "role": "engineer"
+    },
+    {
+      "source": "discogs",
+      "word": "recorded by",
+      "role": "engineer"
+    },
+    {
+      "source": "discogs",
+      "word": "remix",
+      "role": "remixer"
+    }
+  ],
+  "qualifiers": [
+    "guest",
+    "additional",
+    "solo",
+    "lead",
+    "assistant",
+    "associate",
+    "co",
+    "executive",
+    "minor"
+  ],
+  "instruments": [
+    "vocals",
+    "lead vocals",
+    "backing vocals",
+    "background vocals",
+    "voice",
+    "choir",
+    "chorus",
+    "rap",
+    "spoken word",
+    "whistling",
+    "piano",
+    "grand piano",
+    "electric piano",
+    "keyboards",
+    "synthesizer",
+    "organ",
+    "harpsichord",
+    "clavinet",
+    "rhodes",
+    "mellotron",
+    "celesta",
+    "accordion",
+    "harmonium",
+    "melodica",
+    "bass",
+    "double bass",
+    "bass guitar",
+    "electric bass",
+    "upright bass",
+    "contrabass",
+    "guitar",
+    "acoustic guitar",
+    "electric guitar",
+    "classical guitar",
+    "12-string guitar",
+    "slide guitar",
+    "lap steel guitar",
+    "pedal steel guitar",
+    "drums",
+    "drum machine",
+    "percussion",
+    "timpani",
+    "congas",
+    "bongos",
+    "tambourine",
+    "shaker",
+    "cymbal",
+    "triangle",
+    "handclaps",
+    "cajón",
+    "djembe",
+    "tabla",
+    "vibraphone",
+    "marimba",
+    "xylophone",
+    "glockenspiel",
+    "bells",
+    "chimes",
+    "gong",
+    "violin",
+    "viola",
+    "cello",
+    "strings",
+    "fiddle",
+    "harp",
+    "flute",
+    "piccolo",
+    "recorder",
+    "clarinet",
+    "bass clarinet",
+    "oboe",
+    "bassoon",
+    "saxophone",
+    "alto saxophone",
+    "tenor saxophone",
+    "baritone saxophone",
+    "soprano saxophone",
+    "trumpet",
+    "cornet",
+    "flugelhorn",
+    "trombone",
+    "horn",
+    "french horn",
+    "tuba",
+    "euphonium",
+    "brass",
+    "woodwind",
+    "harmonica",
+    "banjo",
+    "mandolin",
+    "ukulele",
+    "sitar",
+    "oud",
+    "bouzouki",
+    "theremin",
+    "turntables"
+  ]
+}

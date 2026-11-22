@@ -48,6 +48,10 @@ pub struct ReleaseView {
     /// Its pages elsewhere as MusicBrainz links them (`url-rels`, F14.5): its Bandcamp page among them.
     #[serde(skip)]
     pub links: Vec<String>,
+    /// Every credit its answer gives (CRED.5 (b), T-CRED-8, T-CRED-12: the works pass's one question, its credits kept for any
+    /// opener), as the credits store keeps them.
+    #[serde(skip)]
+    pub credits: Vec<crate::catalogue::credits::CreditRow>,
     /// What matching reads of it besides (CU15's door, `references_door::About`): its first artist credit's id, its first medium's
     /// format, its release group.
     #[serde(skip)]
@@ -95,6 +99,7 @@ pub fn release_of(v: &Value) -> ReleaseView {
         year: v["date"].as_str().and_then(|d| d.get(..4)).and_then(|y| y.parse().ok()),
         tracks,
         links: v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect(),
+        credits: super::works::release_credits(v),
     }
 }
 
@@ -103,7 +108,8 @@ pub fn release_of(v: &Value) -> ReleaseView {
 pub async fn release_by_id(id: &str) -> Result<ReleaseView> {
     let http = super::discover::http()?;
     let v: Value = http
-        .get(format!("{}/release/{id}?inc=recordings+artist-credits+url-rels+release-groups&fmt=json", super::discover::mb_ws()))
+        // T-CRED-12: the works pass's one question, its relationships with it, so its credits are kept; never a second question.
+        .get(format!("{}/release/{id}?inc={}&fmt=json", super::discover::mb_ws(), super::works::INC))
         .asked()
         .await?
         .error_for_status()?

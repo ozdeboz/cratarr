@@ -20,4 +20,8 @@ to?: string,
 /**
  * A Want's record (`al-<n>`).
  */
-record?: string, };
+record?: string, 
+/**
+ * `/api/artists/open`'s: a credited person's MusicBrainz id and name (SCENARIOS-CRED CRED.12, T-CRED-9).
+ */
+mbid?: string, name?: string, };

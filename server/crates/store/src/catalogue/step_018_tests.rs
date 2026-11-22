@@ -180,3 +180,97 @@ fn the_018_fold_joins_one_tracklists_records_once() {
     assert!(mark.contains("al-2899 into al-1790"), "the merge listed for the HA session: {mark}");
     assert_eq!(cat.fold_018(&kinds, &|| panic!("never twice")).unwrap(), None, "the second run does nothing");
 }
+
+/// A record of `n` tracks with a present file each in MUSIC, its titles "T1"…, 200 s each: its files pair with `list_017`'s lists.
+fn tracks_of(cat: &Catalogue, record: i64, n: u32) {
+    let db = cat.db();
+    for t in 1..=n {
+        db.execute("INSERT INTO tracks (born, record, disc, number) VALUES (1, ?1, 1, ?2)", params![record, t]).unwrap();
+        let track = db.last_insert_rowid();
+        let rel = format!("r{record}/{t:02}.flac");
+        db.execute("INSERT INTO files (folder, rel, size, mtime, track, duration_ms, state) VALUES (0, ?1, 1, 1, ?2, 200000, 1)", params![rel, track]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'title', 'title', ?2)", params![rel, format!("T{t}")]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 1, 'tracknumber', 'tracknumber', ?2)", params![rel, t.to_string()]).unwrap();
+    }
+}
+
+/// A Discogs list kept for a record by its release (`reference_tracks`), `n` tracks "T1"…, 200 s each.
+fn discogs_list(cat: &Catalogue, record: i64, release: &str, n: u32) {
+    let tracks: Vec<serde_json::Value> = (1..=n).map(|i| serde_json::json!({ "disc": 1, "position": i, "title": format!("T{i}"), "length_ms": 200_000 })).collect();
+    cat.db()
+        .execute(
+            "INSERT INTO reference_tracks (record, source, kind, value, tracks, at) VALUES (?1, 'discogs', 'release', ?2, ?3, 1)",
+            params![record, release, serde_json::Value::Array(tracks).to_string()],
+        )
+        .unwrap();
+}
+
+/// CRED.17 (kind 7): the step part fills the credits store from what 0.17 kept, once; nothing is asked. A copy of 0.17's data with
+/// ALL (`al-401`, its release R401 linking Discogs master M401, its 12 tracks performing works Yann Tiersen composed; its Discogs
+/// credits kept by name, "Piano", "Vocals" on "A4, B3", "Artwork"), Grey Shore (`al-471`, 9 files, a name-found master whose kept
+/// list pairs whole: "Producer – Ines Valk") and Grey Shore Sessions (`al-472`, 11 files, a name-found master of 4 tracks that
+/// doesn't pair: "Mixed By – Tom Lerat"). The part, cut half way, writes nothing; run again it fills; a third run does nothing.
+/// Then: MusicBrainz's composers on the tracks that perform their works, by id; the performers 0.17 kept placed nowhere; Discogs'
+/// credits by name, ALL's counted by MusicBrainz's link, Grey Shore's by the pairing, Grey Shore Sessions' kept unshown (a guess's),
+/// counted in the report; no artist made. Never a service asked or the files read at the step; never a 0.17 Discogs credit lost;
+/// never a guess's credit shown; never the part half written. Red first: no step part.
+#[test]
+fn the_018_step_fills_the_credits_store_once() {
+    use super::step_018::{CREDITS, CreditsCarry};
+    let cat = Catalogue::open(None, Vec::new()).unwrap();
+    record(&cat, 401, "ALL");
+    tracks_of(&cat, 401, 12);
+    reference(&cat, 401, "musicbrainz", "release", "r401", "files");
+    record(&cat, 471, "Grey Shore");
+    tracks_of(&cat, 471, 9);
+    reference(&cat, 471, "discogs", "master", "471", "search");
+    discogs_list(&cat, 471, "4710", 9);
+    record(&cat, 472, "Grey Shore Sessions");
+    tracks_of(&cat, 472, 11);
+    reference(&cat, 472, "discogs", "master", "472", "search");
+    discogs_list(&cat, 472, "4720", 4);
+    let artists_before: i64 = cat.db().query_row("SELECT count(*) FROM artists", [], |r| r.get(0)).unwrap();
+    let mut carry = CreditsCarry::default();
+    let works: Vec<(u32, u32, Vec<(String, String)>)> = (1..=12).map(|t| (1, t, vec![("yt".to_string(), "Yann Tiersen".to_string())])).collect();
+    carry.releases.insert("r401".into(), (works, vec!["master:401".into()]));
+    carry.discogs.insert(
+        "al-401".into(),
+        (
+            vec![("Yann Tiersen".into(), "Piano".into(), None), ("Kerys Lae".into(), "Vocals".into(), Some("A4, B3".into())), ("Lou Kerjean".into(), "Artwork".into(), None)],
+            Some(401),
+            Some(4010),
+        ),
+    );
+    carry.discogs.insert("al-471".into(), (vec![("Ines Valk".into(), "Producer".into(), None)], Some(471), Some(4710)));
+    carry.discogs.insert("al-472".into(), (vec![("Tom Lerat".into(), "Mixed By".into(), None)], Some(472), Some(4720)));
+    // Cut half way: nothing written, no mark.
+    let cut = cat.step_018_credits(&carry, &|| Err(anyhow::anyhow!("cut off")));
+    assert!(cut.is_err(), "the cut part errs");
+    let rows: i64 = cat.db().query_row("SELECT count(*) FROM credits", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 0, "a part cut off wrote nothing");
+    // Again: filled, once.
+    let report = cat.step_018_credits(&carry, &|| Ok(())).unwrap().expect("the part ran");
+    assert!(cat.step_018_credits(&carry, &|| Ok(())).unwrap().is_none(), "a third run does nothing");
+    assert!(cat.meta(CREDITS).is_some(), "its mark, its last write");
+    let kept = cat.credits_kept(401).unwrap();
+    let composers: Vec<Vec<(u32, u32)>> = kept.iter().filter(|k| k.source == "musicbrainz" && k.row.word == "composer").map(|k| k.row.track.clone()).collect();
+    assert_eq!(composers.len(), 12, "a composer credit on each track performing a work: {kept:?}");
+    assert!(kept.iter().filter(|k| k.source == "musicbrainz").all(|k| k.row.person.as_deref() == Some("yt")), "by MusicBrainz's id");
+    assert!(!kept.iter().any(|k| k.source == "musicbrainz" && k.row.word != "composer"), "the performers 0.17 kept placed nowhere (OQ-CRED-2 (a))");
+    let discogs: Vec<(String, String, Vec<(u32, u32)>, bool)> = kept.iter().filter(|k| k.source == "discogs").map(|k| (k.row.name.clone(), k.row.word.clone(), k.row.track.clone(), k.guess)).collect();
+    assert_eq!(
+        discogs,
+        [
+            ("Yann Tiersen".to_string(), "Piano".to_string(), vec![], false),
+            ("Kerys Lae".to_string(), "Vocals".to_string(), vec![(1, 4), (2, 3)], false),
+            ("Lou Kerjean".to_string(), "Artwork".to_string(), vec![], false),
+        ],
+        "ALL's, counted by MusicBrainz's link, by name, A4 and B3 on Discogs' list"
+    );
+    assert!(cat.credits_kept(471).unwrap().iter().all(|k| !k.guess && k.row.name == "Ines Valk"), "Grey Shore's counted by the pairing");
+    let sessions = cat.credits_kept(472).unwrap();
+    assert!(!sessions.is_empty() && sessions.iter().all(|k| k.guess), "Grey Shore Sessions' kept unshown: {sessions:?}");
+    assert!(report.counts.values().sum::<u64>() > 0 && report.listed.values().flatten().any(|r| r == "al-472"), "the report: {report:?}");
+    let artists_after: i64 = cat.db().query_row("SELECT count(*) FROM artists", [], |r| r.get(0)).unwrap();
+    assert_eq!(artists_after, artists_before, "no artist made");
+}

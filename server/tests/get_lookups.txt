@@ -12,7 +12,7 @@ GET /api/albums/{source}/{album}/card | /api/albums/cratarr/{arrival}/card | 200
 GET /api/albums/{source}/{album}/cover | /api/albums/cratarr/{had}/cover | 200 | - | a had record's cover, its files'
 GET /api/albums/{source}/{album}/cover | /api/albums/cratarr/{not_had}/cover | 404 | waiting DC3 | row 10 (LK.D2)
 GET /api/albums/{source}/{album}/covers | /api/albums/cratarr/{had}/covers | 200 | waiting DC3 | row 27 (LK.D2)
-GET /api/albums/{source}/{album}/discogs | /api/albums/cratarr/{had}/discogs | 200 | waiting DC3 | row 23 (LK.D7)
+GET /api/albums/{source}/{album}/discogs | /api/albums/cratarr/{had}/discogs | 200 | - | row 23: as kept, every account's (DC3c: CRED.11 (i), CRED.21; LK.D7's album half)
 GET /api/albums/{source}/{album}/health | /api/albums/cratarr/{had}/health | 200 | - | reads only what is kept
 GET /api/albums/{source}/{album}/move | /api/albums/cratarr/{had}/move | 400 | - | reads only what is kept
 GET /api/albums/{source}/{album}/rating | /api/albums/cratarr/{had}/rating | 200 | - | reads only what is kept

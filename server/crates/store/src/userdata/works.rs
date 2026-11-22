@@ -89,6 +89,15 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The releases kept before their credits were read (OQ-CRED-2 (a): 0.17's, which kept only the performing roles): asked again
+    /// first, at the works pass's pace.
+    pub fn mb_releases_without_credits(&self) -> Result<HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT release FROM mb_releases WHERE found <> 0 AND coalesce(json_extract(facts, '$.with_credits'), 0) = 0")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Every work's parent as read (0.12), by the work's MusicBrainz id.
     pub fn mb_work_parents(&self) -> Result<HashMap<String, KeptParent>> {
         let db = self.db();
@@ -106,6 +115,13 @@ impl UserData {
         let mut st = db.prepare("SELECT release, facts FROM mb_releases WHERE found <> 0")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What was read of one release MusicBrainz knew (JSON); none where it wasn't read, or MusicBrainz didn't know it.
+    pub fn mb_release(&self, release: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT facts FROM mb_releases WHERE release = ?1 AND found <> 0")?;
+        Ok(st.query_map([release], |r| r.get::<_, String>(0))?.next().transpose()?)
     }
 
     /// Every work read, by its MusicBrainz id.

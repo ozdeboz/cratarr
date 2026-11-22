@@ -929,6 +929,10 @@
         "id": "ar-413",
         "name": "Daniel Berg",
         "number": 2
+      },
+      {
+        "id": "ar-305",
+        "name": "Carlos Niño & Friends"
       }
     ],
     "record_artists": [
@@ -2058,6 +2062,112 @@
               "name": "Oda Brenn",
               "by": [
                 "discogs"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "CRED.19 (a), a guard: ALL's track 9 COMPOSER \"Kerys Lae & Yann Tiersen\", no list tag, no source naming the composers: one name-only credit, crediting neither artist (F54: never split on a bare \"&\"; the split is DC3a's credit_parts)",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Kerys Lae & Yann Tiersen",
+          "word": "composer",
+          "on": {
+            "tracks": [
+              9
+            ]
+          }
+        }
+      ],
+      "credits": [
+        {
+          "role": "composer",
+          "word": "Composer",
+          "people": [
+            {
+              "name": "Kerys Lae & Yann Tiersen",
+              "tracks": [
+                9
+              ],
+              "by": [
+                "files@MUSIC"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "CRED.19 (d), a guard: PERFORMER \"Carlos Niño & Friends (percussion)\": one performer credit, percussion, ar-305, the one artist of that whole name; \"Friends\" never a person",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Carlos Niño & Friends (percussion)",
+          "word": "performer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        }
+      ],
+      "credits": [
+        {
+          "role": "performer",
+          "word": "Performer",
+          "people": [
+            {
+              "person": {
+                "id": "ar-305"
+              },
+              "name": "Carlos Niño & Friends",
+              "detail": "percussion",
+              "by": [
+                "files@MUSIC"
               ]
             }
           ]

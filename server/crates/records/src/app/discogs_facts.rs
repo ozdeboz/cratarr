@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 
@@ -19,8 +18,6 @@ const AGAIN: i64 = 30 * 86_400;
 const NONE_AGAIN: i64 = 7 * 86_400;
 /// Asked again after this long where MusicBrainz's link could not be had (F47): what Discogs' search found stands in till then.
 const LINK_AGAIN: i64 = 15 * 60;
-/// Albums asked in one background round.
-const ROUND: usize = 60;
 
 fn due(kept: Option<&(i64, Option<String>)>, now: i64) -> bool {
     kept.is_none_or(|(at, facts)| now - at >= if facts.is_some() { AGAIN } else { NONE_AGAIN })
@@ -145,53 +142,226 @@ fn label_names(labels: &[super::discogs::Label]) -> Vec<String> {
     out
 }
 
-/// An album's facts: as kept while fresh, else asked now (MusicBrainz's link from its release, else Discogs' search by
-/// its artist and name).
-pub async fn album(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Option<AlbumFacts>> {
-    let (s, a) = (served.clone(), album.to_string());
-    let (subject, kept, names) = crate::run::spawn_blocking(move || -> Result<_> {
-        let subject = album_subject(&a);
-        Ok((subject.clone(), s.userdata.discogs_facts(&subject)?, s.library.album_names(&a)?))
+/// The runner's kind of a record's Discogs read (CRED.11).
+pub const READ_KIND: &str = "record:discogs";
+
+/// A record's Discogs read, begun as a job (SCENARIOS-CRED CRED.11; the owner's rules, 2026-11-21 04:16 and 04:43): by any account's
+/// open of the record, once while its stored facts are fresh (their time, the one due marker: T-CRED-28), only while Discogs is
+/// switched on, with the server's key; never on a GET, and the open never waits on it. None begun where its facts are fresh,
+/// Discogs is off (nothing queued for later), or its read runs already (one read per record at a time). Whether one was begun.
+pub async fn begin_read(served: Arc<crate::serve::Serve>, record: i64) -> bool {
+    if !super::switches::is_on(super::switches::DISCOGS) {
+        return false;
+    }
+    let album = crate::serve::ids::record(record);
+    let (ud, subject) = (served.userdata.clone(), album_subject(&album));
+    let Ok(Ok(kept)) = crate::run::spawn_blocking(move || ud.discogs_facts(&subject)).await else { return false };
+    if !due(kept.as_ref(), super::moment::now_secs()) {
+        return false;
+    }
+    let Ok(handle) = crate::runner::runner().begin_keyed(READ_KIND, &album, None) else { return false };
+    crate::runner::jobs::run(Arc::new(handle), move |_| read_record(served, record)).is_ok()
+}
+
+/// A record's Discogs facts read (`begin_read`'s work; CRED.6, CRED.11, T-CRED-13): its Discogs master and release by MusicBrainz's
+/// link (the files' release's links as the works pass keeps them, else its release group's asked of MusicBrainz now), else a
+/// Discogs reference it holds that counts (a link, a hand's pick, a match today's pairing confirms, or the one a record not had was
+/// opened by); never by Discogs' search for its names. Its facts kept with their time (the due marker), its genres and styles as
+/// Discogs' words, its master and release as its references by that link (`how` naming it, never "search"), its main release's
+/// list as Discogs', and its credits by that release. Nothing to read it by: "asked, none" with its time.
+pub async fn read_record(served: Arc<crate::serve::Serve>, record: i64) -> Result<()> {
+    read_record_as(served, record, None, false).await
+}
+
+/// `read_record`, as the one scheduled job reads: `names`, the record's artist and title, a Discogs search by them where it has no
+/// link nor reference that counts (never a name two artists here share, X8; what it finds a guess until today's pairing confirms it
+/// whole: T-CRED-13, the owner's 02:32 rule); `typing`, its release type kept from the release's formats where MusicBrainz typed it
+/// not (`types_pass`'s, folded).
+pub async fn read_record_as(served: Arc<crate::serve::Serve>, record: i64, names: Option<(String, String)>, typing: bool) -> Result<()> {
+    let album = crate::serve::ids::record(record);
+    let subject = album_subject(&album);
+    let (s, a) = (served.clone(), album.clone());
+    let (kept, release, refs, linked) = crate::run::spawn_blocking(move || -> Result<_> {
+        let kept = s.userdata.discogs_facts(&album_subject(&a))?;
+        let release = s.library.album_names(&a)?.and_then(|(release, _, _)| release).filter(|r| super::discogs::is_mbid(r));
+        let refs = s.catalogue().references_of(&a)?;
+        let linked: Vec<String> = match &release {
+            Some(r) => s.userdata.mb_release(r)?.and_then(|j| serde_json::from_str::<super::works::Stored>(&j).ok()).map(|st| st.discogs).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Ok((kept, release, refs, linked))
     })
     .await??;
     let now = super::moment::now_secs();
     if !due(kept.as_ref(), now) {
-        return Ok(parse(kept));
+        return Ok(());
     }
-    let Some((release, artist, name)) = names else { return Ok(None) };
-    // The files' release's group, and its labels at MusicBrainz (F9): the one question, as before.
-    let (group, musicbrainz) = match release.filter(|r| super::discogs::is_mbid(r)) {
-        Some(r) => match super::discogs::release_group_and_labels(&super::discover::http()?, &r).await {
-            Ok((group, labels)) => (group, Some(labels)),
-            Err(_) => (None, None),
-        },
-        None => (None, None),
+    let id_of = |prefix: &str| linked.iter().find_map(|l| l.strip_prefix(prefix)).and_then(|x| x.parse::<u64>().ok());
+    let (mut master, mut release_id, mut how) = (id_of("master:"), id_of("release:"), "link");
+    let mut musicbrainz = None;
+    // MusicBrainz's link, asked now where the works pass hasn't kept it: the release group's (F9's one question, its labels with it).
+    if master.is_none()
+        && release_id.is_none()
+        && let Some(r) = &release
+        && let Ok((group, labels)) = super::discogs::release_group_and_labels(&super::discover::http()?, r).await
+    {
+        musicbrainz = Some(labels);
+        if let Some(g) = group {
+            master = super::discogs::master_of(Some(&g), "", "").await?;
+        }
+    }
+    // Else a Discogs reference the record holds that counts (T-CRED-13): never a name search's guess.
+    if master.is_none() && release_id.is_none() {
+        for (r, row) in refs.iter().filter(|(r, _)| r.source == "discogs") {
+            if !(matches!(row.how.as_str(), "link" | "hand" | "files") || row.confirmed) {
+                continue;
+            }
+            match r.kind.as_str() {
+                "master" => master = master.or(r.value.parse().ok()),
+                "release" => release_id = release_id.or(r.value.parse().ok()),
+                _ => continue,
+            }
+            how = if row.how == "hand" { "hand" } else { "link" };
+        }
+    }
+    // The scheduled job's last way: Discogs' search for its names, never a name two artists here share (X8), a guess until paired.
+    let mut searched = false;
+    if master.is_none()
+        && release_id.is_none()
+        && let Some((artist, title)) = &names
+    {
+        let (cat, key) = (served.catalogue().clone(), crate::serve::ids::artist_key(artist));
+        let shared = crate::run::spawn_blocking(move || -> Result<bool> { Ok(cat.artists_of_key(&key)? > 1) }).await??;
+        if !shared {
+            master = super::discogs::masters_by_names(artist, title).await?.into_iter().next();
+            searched = master.is_some();
+            how = "search";
+        }
+    }
+    let found = if master.is_some() || release_id.is_some() { super::discogs::album_facts_by(master, release_id).await? } else { None };
+    let (mut facts, credits) = match found {
+        Some((f, c)) => (Some(f), c),
+        None => (None, Vec::new()),
     };
-    let facts = super::discogs::album_facts(group.as_deref(), &artist, &name).await?;
+    // Today's pairing: a name-found master whose main release's list pairs whole with a copy's files is a reference (HS01); one that
+    // doesn't stays a guess, its list kept with its facts.
+    if searched && let Some(f) = facts.as_mut() {
+        let (cat, list) = (served.catalogue().clone(), f.tracks.clone());
+        let confirmed = crate::run::spawn_blocking(move || -> Result<bool> {
+            Ok(cat.copy_files(record)?.values().any(|files| crate::catalogue::lists::confirms(&list, files)))
+        })
+        .await??;
+        f.guess = !confirmed;
+        if f.guess {
+            f.list = Some(f.tracks.clone());
+        }
+    }
+    keep_read(&served, &album, &subject, facts, credits, musicbrainz, how, now, typing).await
+}
+
+/// What a record's Discogs read found, kept (`read_record`): its facts and time, Discogs' words, MusicBrainz's labels where asked,
+/// its references by `how` with Discogs' list, and its credits by the release (FA15's "asked, none" where it found none).
+#[allow(clippy::too_many_arguments)]
+async fn keep_read(
+    served: &Arc<crate::serve::Serve>,
+    album: &str,
+    subject: &str,
+    facts: Option<AlbumFacts>,
+    credits: Vec<crate::catalogue::credits::CreditRow>,
+    musicbrainz: Option<Vec<MbLabel>>,
+    how: &'static str,
+    now: i64,
+    typing: bool,
+) -> Result<()> {
+    // A guess's facts count nowhere (T-CRED-13): no words, no reference, no list, its credits kept unshown.
+    let guess = facts.as_ref().is_some_and(|f| f.guess);
     let words: Vec<RawWord> = facts
         .iter()
+        .filter(|f| !f.guess)
         .flat_map(|f| {
             let genres = f.genres.iter().map(|g| RawWord { word: g.clone(), kind: "genre".into(), weight: 1.0 });
             genres.chain(f.styles.iter().map(|s| RawWord { word: s.clone(), kind: "style".into(), weight: 1.0 }))
         })
         .collect();
-    let (s, json, a, kept) = (served.clone(), facts.as_ref().map(serde_json::to_string).transpose()?, album.to_string(), facts.clone());
+    let (s, a, subject) = (served.clone(), album.to_string(), subject.to_string());
+    let json = facts.as_ref().map(serde_json::to_string).transpose()?;
     let labels = musicbrainz.as_ref().map(serde_json::to_string).transpose()?;
     crate::run::spawn_blocking(move || -> Result<()> {
-        // The release's labels at MusicBrainz, kept beside its facts (F9), where MusicBrainz answered.
         if let Some(labels) = &labels {
             s.userdata.set_discogs_facts(&musicbrainz_subject(&a), Some(labels), now)?;
         }
         s.userdata.set_discogs_facts(&subject, json.as_deref(), now)?;
         s.userdata.set_words(&subject, "discogs", &words, true, now)?;
-        // In the references too (C43b), with its main release's list.
-        match &kept {
-            Some(f) => super::references::keep_discogs(&s, &a, f),
-            None => Ok(()),
+        if let Some(f) = &facts {
+            if !guess {
+                super::references::keep_discogs_as(&s, &a, f, how)?;
+                // `genres_pass`'s and `types_pass`'s, folded: the library's extra genres, and its Discogs type where MusicBrainz gave none.
+                s.userdata.set_discogs_genres(&[(a.clone(), f.genres.iter().chain(&f.styles).cloned().collect())], now)?;
+                if typing {
+                    let (primary, secondary) = crate::serve::library::release_words(f.formats.iter().map(String::as_str));
+                    s.userdata.set_release_types(&[(format!("dc:{a}"), primary, secondary)], now)?;
+                }
+            }
+            if let (Some(record), Some(release)) = (crate::serve::ids::record_number(&a), f.release.or(f.master)) {
+                s.catalogue().keep_credits(record, "discogs", &format!("release:{release}"), Some(&credits), guess, now)?;
+            }
         }
+        Ok(())
+    })
+    .await?
+}
+
+/// The one scheduled Discogs job's kind on the runner (CRED.11 (g), T-CRED-28).
+pub const PASS_KIND: &str = "discogs:records";
+/// Records read in one of its passes, at Discogs' pace (its 60 a minute, two asks a record).
+const PASS_BATCH: usize = 100;
+
+/// The one scheduled Discogs job (SCENARIOS-CRED CRED.11 (g), T-CRED-28; a change DC3c makes): `fill`'s round, `genres_pass`,
+/// `types_pass` and harvest's own Discogs loop folded into one, on `discogs::start`'s runner, paused with background reading (O5),
+/// only while Discogs is on. Its list: the records lacking a genre, a year or a type first, Incoming's arrivals included (the intake
+/// plan's GET no longer reads), then every other album (harvest's), each asked once while its facts are fresh by the one due marker
+/// it shares with the record's open (its facts' time): never once by each of the rounds it folds. Each read as the open's is, by
+/// MusicBrainz's link or a reference that counts; where it has neither, by Discogs' search for its names (never by an artist name
+/// two artists here share, X8), and what that finds is a guess until today's pairing confirms it whole (the owner's 02:32 rule,
+/// HS01): kept with its facts, its credits unshown, its genres, styles and types counted nowhere, and no reference kept. How many
+/// it read.
+pub async fn scheduled_pass(served: Arc<crate::serve::Serve>) -> Result<usize> {
+    if !super::switches::is_on(super::switches::DISCOGS) {
+        return Ok(0);
+    }
+    let (s, now) = (served.clone(), super::moment::now_secs());
+    let (due, typed): (Vec<(String, String, String)>, std::collections::HashSet<String>) = crate::run::spawn_blocking(move || -> Result<_> {
+        let lacking: std::collections::HashSet<String> = s.library.lacking()?.into_iter().filter(|l| l.genre || l.year).map(|l| l.id).collect();
+        let untyped: std::collections::HashSet<String> = s.library.albums_to_type()?.into_iter().map(|a| a.0).collect();
+        let mut out: Vec<(bool, String, String, String)> = Vec::new();
+        for (album, _, artist, title) in s.library.album_subjects()? {
+            if due(s.userdata.discogs_facts(&album_subject(&album))?.as_ref(), now) {
+                out.push((!(lacking.contains(&album) || untyped.contains(&album)), album, artist, title));
+            }
+        }
+        out.sort_by_key(|o| o.0);
+        Ok((out.into_iter().take(PASS_BATCH).map(|(_, a, ar, t)| (a, ar, t)).collect(), untyped))
     })
     .await??;
-    Ok(facts)
+    if due.is_empty() {
+        return Ok(0);
+    }
+    let Ok(job) = crate::runner::runner().begin_keyed(PASS_KIND, PASS_KIND, None) else { return Ok(0) };
+    let (total, mut n) = (due.len() as u64, 0usize);
+    for (i, (album, artist, title)) in due.into_iter().enumerate() {
+        if super::switches::background_paused() || !super::switches::is_on(super::switches::DISCOGS) {
+            break;
+        }
+        job.step("Reading Discogs", i as u64, Some(total));
+        super::discogs::on_turn(&job, &super::discogs::TURN);
+        let Some(record) = crate::serve::ids::record_number(&album) else { continue };
+        match read_record_as(served.clone(), record, Some((artist, title)), typed.contains(&album)).await {
+            Ok(()) => n += 1,
+            Err(e) => tracing::info!("discogs: {album}: {e:#}"),
+        }
+    }
+    job.finish(Ok::<_, anyhow::Error>(n));
+    Ok(n)
 }
 
 /// An artist's facts, by their MusicBrainz id where known, else their name.
@@ -223,38 +393,6 @@ pub async fn release_group(served: &Arc<crate::serve::Serve>, group: &str) -> Re
     let (ud, json) = (served.userdata.clone(), facts.as_ref().map(serde_json::to_string).transpose()?);
     crate::run::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), now)).await??;
     Ok(facts)
-}
-
-/// A round of albums asked in the background, one round at a time (Missing genres and years: those not asked yet,
-/// shown the next time the fixes are read).
-pub fn fill(served: Arc<crate::serve::Serve>, albums: Vec<String>) {
-    static RUNNING: AtomicBool = AtomicBool::new(false);
-    if albums.is_empty() || RUNNING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    crate::run::spawn(async move {
-        let s = served.clone();
-        let todo = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
-            let now = super::moment::now_secs();
-            let mut out = Vec::new();
-            for a in albums {
-                if due(s.userdata.discogs_facts(&album_subject(&a))?.as_ref(), now) {
-                    out.push(a);
-                }
-                if out.len() == ROUND {
-                    break;
-                }
-            }
-            Ok(out)
-        })
-        .await;
-        for a in todo.ok().and_then(Result::ok).unwrap_or_default() {
-            if let Err(e) = album(&served, &a).await {
-                tracing::debug!("discogs: {a}: {e:#}");
-            }
-        }
-        RUNNING.store(false, Ordering::SeqCst);
-    });
 }
 
 #[cfg(test)]

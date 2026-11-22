@@ -453,6 +453,8 @@ pub struct ReadMore {
     pub artists: Vec<(Ref, String)>,
     /// A Bandcamp album page's tags, as it lists them (GEN.60: kept by `read_reference_kept`).
     pub tags: Vec<String>,
+    /// The credits the answer gives, and the reference they were read by (T-CRED-8: kept by `read_reference_kept` for any opener).
+    pub credits: Option<(Ref, Vec<crate::catalogue::credits::CreditRow>)>,
 }
 
 /// A list read through a reference (`tracklist`'s reader): its tracks, the release they were read from where the reference was a
@@ -478,6 +480,11 @@ pub fn discogs_more(v: &serde_json::Value, as_release: bool) -> ReadMore {
         .map(|(id, name)| (Ref::new("discogs", "artist", &id.to_string()), name))
         .collect();
     ReadMore { also: master.into_iter().collect(), artists, ..ReadMore::default() }
+}
+
+/// `discogs_more`, with the release's credits (CRED.6 (b), T-CRED-8): the answer the tracklist is read from, its credits kept too.
+fn discogs_credited(v: &serde_json::Value, release: &str, as_release: bool) -> ReadMore {
+    ReadMore { credits: Some((Ref::new("discogs", "release", release), super::discogs::release_credit_rows(v))), ..discogs_more(v, as_release) }
 }
 
 /// How long a record's list its page asked for and could not have is left before a page asks for it again (C54), unless a source
@@ -911,7 +918,10 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
     let not_found = |e: &anyhow::Error| e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND);
     let release = |id: String| async move {
         match super::track_fetch_records::release_by_id(&id).await {
-            Ok(v) => Ok(Some((list_of_release(&v), musicbrainz_more(&v.links)))),
+            Ok(v) => {
+                let credits = Some((Ref::new("musicbrainz", "release", &v.release), v.credits.clone()));
+                Ok(Some((list_of_release(&v), ReadMore { credits, ..musicbrainz_more(&v.links) })))
+            }
             Err(e) if not_found(&e) => Ok(None),
             Err(e) => Err(e),
         }
@@ -927,9 +937,9 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
             Some(id) => Ok(release(id.clone()).await?.map(|(list, more)| (list, Some(Ref::new("musicbrainz", "release", &id)), more))),
             None => Ok(None),
         },
-        ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| (list_of_discogs(&v), None, discogs_more(&v, true)))),
+        ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| (list_of_discogs(&v), None, discogs_credited(&v, &r.value, true)))),
         ("discogs", "master") => match super::discogs::master(r.value.parse()?).await?.and_then(|m| m.main_release) {
-            Some(main) => Ok(super::discogs::release_raw(main).await?.map(|v| (list_of_discogs(&v), None, discogs_more(&v, false)))),
+            Some(main) => Ok(super::discogs::release_raw(main).await?.map(|v| (list_of_discogs(&v), None, discogs_credited(&v, &main.to_string(), false)))),
             None => Ok(None),
         },
         ("bandcamp", "album") => match crate::bandcamp::Bandcamp::get().album(&r.value).await {
@@ -955,7 +965,24 @@ pub fn read_reference_kept(served: Option<Arc<crate::serve::Serve>>) -> impl Fn(
             if let Ok(Some((_, _, more))) = &read
                 && r.source == "bandcamp"
             {
-                super::words::keep_bandcamp_read(served, &r.value, &more.tags).await;
+                super::words::keep_bandcamp_read(served.clone(), &r.value, &more.tags).await;
+            }
+            // T-CRED-8: the credits of an answer read anyway, kept for the record the reference names; a name-found reference that
+            // nothing confirms keeps them unshown (T-CRED-13).
+            if let (Ok(Some((_, _, more))), Some(served)) = (&read, &served)
+                && let Some((by, rows)) = more.credits.clone()
+            {
+                let (s, r) = (served.clone(), r.clone());
+                let _ = crate::run::spawn_blocking(move || -> Result<()> {
+                    let cat = s.catalogue();
+                    for subject in cat.subject_of(&r)? {
+                        let Some(record) = ids::record_number(&subject) else { continue };
+                        let guess = cat.references_of(&subject)?.iter().any(|(x, row)| *x == r && row.how == "search" && !row.confirmed);
+                        cat.keep_credits(record, &by.source, &format!("{}:{}", by.kind, by.value), Some(&rows), guess, now_secs())?;
+                    }
+                    Ok(())
+                })
+                .await;
             }
             read
         })
@@ -1063,6 +1090,39 @@ pub fn step_018_facts(served: &crate::serve::Serve) -> Result<crate::catalogue::
     served.catalogue().step_018_facts(&carry, &|| Ok(()))
 }
 
+/// 0.18's step, its part `credits` (SCENARIOS-CRED CRED.17): what 0.17 kept of the records' credits, read from the user data and
+/// handed to the catalogue's part: each MusicBrainz release's tracks that perform works with each work's composers, and its Discogs
+/// links; each album's Discogs credits as kept, by name, with the master and release they were read by. Nothing is asked. Done
+/// before: none. Blocking.
+pub fn step_018_credits(served: &crate::serve::Serve) -> Result<Option<crate::catalogue::step_018::FactsReport>> {
+    let mut carry = crate::catalogue::step_018::CreditsCarry::default();
+    let works = served.userdata.mb_works()?;
+    for (release, json) in served.userdata.mb_releases()? {
+        let Ok(stored) = serde_json::from_str::<super::works::Stored>(&json) else { continue };
+        let tracks = stored
+            .tracks
+            .iter()
+            .map(|t| {
+                let composers: Vec<(String, String)> = t
+                    .works
+                    .iter()
+                    .filter_map(|w| works.get(w))
+                    .flat_map(|(_, c)| serde_json::from_str::<Vec<super::works::Person>>(c).unwrap_or_default())
+                    .map(|p| (p.mbid, p.name))
+                    .collect();
+                (t.disc, t.position, composers)
+            })
+            .collect();
+        carry.releases.insert(release, (tracks, stored.discogs));
+    }
+    for (subject, json) in served.userdata.discogs_facts_of("album:")? {
+        let (Some(album), Ok(f)) = (subject.strip_prefix("album:"), serde_json::from_str::<super::discogs::AlbumFacts>(&json)) else { continue };
+        let credits = f.credits.iter().map(|c| (c.name.clone(), c.role.clone(), c.tracks.clone())).collect();
+        carry.discogs.insert(album.to_string(), (credits, f.master, f.release));
+    }
+    served.catalogue().step_018_credits(&carry, &|| Ok(()))
+}
+
 /// How many failed questions a record's list is asked again after, before the record is let go of to Health's item.
 const LIST_TRIES: i64 = 3;
 
@@ -1139,17 +1199,23 @@ fn keep_match_in(cat: &Catalogue, record: i64, album: &str, m: &super::matching_
 /// found by the record's name or MusicBrainz's link (the facts do not say which: `search`, which a link at 0.17's step makes
 /// surer), and the main release's list; the count worked out with it. Blocking.
 pub fn keep_discogs(served: &crate::serve::Serve, album: &str, f: &super::discogs::AlbumFacts) -> Result<()> {
-    let Some(record) = ids::record_number(album) else { return Ok(()) };
-    keep_discogs_in(served.catalogue(), record, album, f, &files_of(served, album)?)
+    keep_discogs_as(served, album, f, "search")
 }
 
-/// `keep_discogs`, `files` the record's.
-fn keep_discogs_in(cat: &Catalogue, record: i64, album: &str, f: &super::discogs::AlbumFacts, files: &[Listed]) -> Result<()> {
+/// `keep_discogs`, the master and release kept as found `how`: "link" for MusicBrainz's link (the record's Discogs job, CRED.6 (a):
+/// never "search" standing for a link), "hand" for a hand's pick.
+pub fn keep_discogs_as(served: &crate::serve::Serve, album: &str, f: &super::discogs::AlbumFacts, how: &str) -> Result<()> {
+    let Some(record) = ids::record_number(album) else { return Ok(()) };
+    keep_discogs_in(served.catalogue(), record, album, f, &files_of(served, album)?, how)
+}
+
+/// `keep_discogs_as`, `files` the record's.
+fn keep_discogs_in(cat: &Catalogue, record: i64, album: &str, f: &super::discogs::AlbumFacts, files: &[Listed], how: &str) -> Result<()> {
     if let Some(master) = f.master {
-        cat.set_reference(album, &Ref::new("discogs", "master", &master.to_string()), "search")?;
+        cat.set_reference(album, &Ref::new("discogs", "master", &master.to_string()), how)?;
     }
     let held = match f.release {
-        Some(release) => cat.set_reference(album, &Ref::new("discogs", "release", &release.to_string()), "search")?,
+        Some(release) => cat.set_reference(album, &Ref::new("discogs", "release", &release.to_string()), how)?,
         None => false,
     };
     if let (true, Some(release)) = (held && !f.tracks.is_empty(), f.release) {
@@ -1710,7 +1776,7 @@ pub mod tests {
         let counting = || cat.record(record).unwrap().unwrap().counting;
         assert_eq!(work_out_in(&cat, record, &tracks).unwrap(), None, "no list");
         let discogs = crate::app::discogs::AlbumFacts { master: Some(1000001), release: Some(2000001), tracks: bonus.clone(), ..Default::default() };
-        keep_discogs_in(&cat, record, &album, &discogs, &tracks).unwrap();
+        keep_discogs_in(&cat, record, &album, &discogs, &tracks, "search").unwrap();
         assert_eq!(counting(), None, "Discogs' main release has a bonus track");
         assert_eq!(cat.references_of(&album).unwrap().len(), 2, "its master and release, kept all the same");
         // VR10, changed by design: no count is worked out as lists arrive, by order or by agreement; the hand's line stays.

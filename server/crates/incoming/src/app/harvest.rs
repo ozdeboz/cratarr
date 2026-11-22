@@ -20,7 +20,6 @@ const ROUND: Duration = Duration::from_secs(30 * 60);
 const BATCH: usize = 200;
 /// How long what a source said stands before it is asked again.
 const MB_AGAIN: i64 = 90 * 86_400;
-const DISCOGS_AGAIN: i64 = 180 * 86_400;
 const LASTFM_AGAIN: i64 = 90 * 86_400;
 /// MusicBrainz's tags kept from this many votes (its genres, a curated list, always).
 const MB_TAG_VOTES: i64 = 2;
@@ -95,22 +94,8 @@ async fn round() -> Result<()> {
     if let Err(e) = super::incomplete::pass(&served, &http).await {
         tracing::info!("harvest: albums missing tracks not looked at: {e:#}");
     }
-    // Discogs: every album's master (not only those without a genre, as the genres' pass asks).
-    for (subject, a) in due(&served, "discogs", albums.iter().map(|a| (format!("album:{}", a.0), a)), DISCOGS_AGAIN).await? {
-        let rg = if super::discogs::is_mbid(&a.1) { super::discogs::release_group_of(&http, &a.1).await.unwrap_or_default() } else { None };
-        let said = match super::discogs::master_of(rg.as_deref(), &a.2, &a.3).await {
-            Ok(Some(id)) => super::discogs::master(id).await.map(|m| {
-                m.map(|m| {
-                    let genres = m.genres.into_iter().map(|g| RawWord { word: g, kind: "genre".into(), weight: 1.0 });
-                    genres.chain(m.styles.into_iter().map(|s| RawWord { word: s, kind: "style".into(), weight: 1.0 })).collect::<Vec<RawWord>>()
-                })
-                .unwrap_or_default()
-            }),
-            Ok(None) => Ok(Vec::new()),
-            Err(e) => Err(e),
-        };
-        keep(&served, &subject, "discogs", said).await?;
-    }
+    // Discogs: every album's master's words come from the one scheduled Discogs job now (SCENARIOS-CRED CRED.11 (g), T-CRED-28;
+    // LOOKUPS' LK.S1), one due marker per record, under the guess rule.
     // Last.fm, with the server's own key: albums by their names, artists by theirs.
     let ud = served.userdata.clone();
     let Some(key) = crate::run::spawn_blocking(move || super::discover::server_lastfm_key(&ud)).await?? else { return Ok(()) };

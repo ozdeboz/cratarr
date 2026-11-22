@@ -102,6 +102,13 @@ pub struct Fields {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(any(test, feature = "ts"), ts(optional))]
     pub record: Option<String>,
+    /// `/api/artists/open`'s: a credited person's MusicBrainz id and name (SCENARIOS-CRED CRED.12, T-CRED-9).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(any(test, feature = "ts"), ts(optional))]
+    pub mbid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(any(test, feature = "ts"), ts(optional))]
+    pub name: Option<String>,
 }
 
 /// What `/api/play` plays: a record of a source.
@@ -222,6 +229,9 @@ pub struct RecordProperties {
     pub year: FactView<Option<i32>>,
     pub labels: FactView<Vec<Named>>,
     pub cover: FactView<Option<String>>,
+    /// Its credits by role (SCENARIOS-CRED CRED.2, CRED.15's server half): every source's, merged by id, in the one order; the same
+    /// for every account but a Listed person's open, which `decide()` gives the viewer. Empty: none beyond its artists.
+    pub credits: Vec<crate::credits::RoleView>,
 }
 
 /// One line of the Versions section (RS4): a copy, or an edition (another record of the album). `plays` marks the one that plays

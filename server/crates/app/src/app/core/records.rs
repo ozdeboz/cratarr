@@ -163,9 +163,23 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         replacing,
         editions: around.editions.clone(),
         libraries: around.libraries.clone(),
+        credits: credits_of(serve.catalogue().credits_read(row.id, &library_of)?, around),
     };
     let _ = viewer;
     Ok(Some((rev, facts)))
+}
+
+/// What a record's credits are worked out from, as the view names them (SCENARIOS-CRED): the files' source by its library's id
+/// (`files@<library>`, the same for every viewer). An artist here is named by the catalogue's name for them, never a source's
+/// spelling (the name fact, NAMES.1, is DC3a's).
+fn credits_of(mut c: cratarr_domain::credits::Credits, around: &Around) -> cratarr_domain::credits::Credits {
+    for s in &mut c.said {
+        if let Some(folder) = s.source.strip_prefix("files@").and_then(|f| f.parse::<i64>().ok()) {
+            let library = around.libraries.iter().find(|l| l.folder == folder).map_or_else(|| folder.to_string(), |l| l.id.clone());
+            s.source = format!("files@{library}");
+        }
+    }
+    c
 }
 
 /// Each source's secondary types of a record kept in the facts layer (`secondary`, a JSON list of words), per reference, each a

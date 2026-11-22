@@ -2,8 +2,9 @@
 //! stores it (ID3v2 "TPE1", Vorbis "ARTIST", …) and a normalised name in Picard's vocabulary ("artist"), with every
 //! value as stored: nothing is split or merged here (see `normalise`). Cover art is not read.
 
-/// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`).
-pub const READER_VERSION: u32 = 9;
+/// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`). Reader 10 names every role
+/// tag Picard writes and reads ID3v2's TIPL, TMCL and IPLS pairs itself (SCENARIOS-CRED CRED.4, T-CRED-25).
+pub const READER_VERSION: u32 = 10;
 
 /// What is wrong with a file that could still be read (a file that cannot be read at all is an error instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +75,17 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
         ItemKey::ContentGroup => "grouping",
         ItemKey::Performer => "performer",
         ItemKey::Composer => "composer",
+        // The role tags (CRED.4, T-CRED-25): each a credit of its file's track, in Picard's vocabulary. ID3v2's TIPL pairs
+        // (producer, arranger, engineer, DJ-mix, mix) are read as pairs instead (`pairs`), so each keeps its role in the raw layer.
+        ItemKey::Lyricist => "lyricist",
+        ItemKey::Writer => "writer",
+        ItemKey::Arranger => "arranger",
+        ItemKey::Conductor => "conductor",
+        ItemKey::Producer => "producer",
+        ItemKey::Engineer => "engineer",
+        ItemKey::MixEngineer => "mixer",
+        ItemKey::MixDj => "djmixer",
+        ItemKey::Remixer => "remixer",
         ItemKey::Label => "label",
         ItemKey::CatalogNumber => "catalognumber",
         ItemKey::Bpm | ItemKey::IntegerBpm => "bpm",
@@ -97,8 +109,12 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
 /// where lofty does not map them (Opus's `R128_*`, a lower-case MP4 freeform), decision 0035.
 fn by_raw_key(raw: &str) -> Option<&'static str> {
     let last = raw.rsplit(':').next().unwrap_or(raw);
-    const NAMED: [&str; 8] = [
+    const NAMED: [&str; 10] = [
         "albumartists",
+        // Picard's writer where the format has no field for it: ID3v2's TXXX:WRITER, an MP4 freeform; Vorbis's WRITER or AUTHOR,
+        // read by its own key (CRED.1).
+        "writer",
+        "author",
         // A style (0.9.7), as Vorbis `STYLE`, ID3v2 `TXXX:STYLE` or an MP4 freeform keeps it.
         "style",
         "replaygain_track_gain",
@@ -108,7 +124,29 @@ fn by_raw_key(raw: &str) -> Option<&'static str> {
         "r128_track_gain",
         "r128_album_gain",
     ];
-    NAMED.into_iter().find(|n| last.eq_ignore_ascii_case(n))
+    NAMED.into_iter().find(|n| last.eq_ignore_ascii_case(n)).map(|n| if n == "author" { "writer" } else { n })
+}
+
+/// The role pairs lofty makes items of from ID3v2's TIPL (its `TIPL_MAPPINGS`): read as pairs instead (`pair_name`).
+const TIPL_ITEMS: [ItemKey; 5] = [ItemKey::Producer, ItemKey::Arranger, ItemKey::Engineer, ItemKey::MixDj, ItemKey::MixEngineer];
+
+/// The name of an ID3v2 TIPL or TMCL pair, by its raw key (`TIPL:producer`, `TMCL:piano`; ID3v2.3's IPLS is TIPL): TIPL's involvement
+/// roles by Picard's names (producer, arranger, engineer, DJ-mix as djmixer, mix as mixer), any other pair a performer on the
+/// instrument its key names (TMCL's, and Picard's ID3v2.3 performer pairs in TIPL/IPLS), the instrument kept in the raw key. None for
+/// any other key (T-CRED-25).
+pub(super) fn pair_name(raw: &str) -> Option<&'static str> {
+    let (frame, key) = raw.split_once(':')?;
+    if !matches!(frame, "TIPL" | "TMCL") || key.trim().is_empty() {
+        return None;
+    }
+    Some(match (frame, key.trim().to_lowercase().as_str()) {
+        ("TIPL", "producer") => "producer",
+        ("TIPL", "arranger") => "arranger",
+        ("TIPL", "engineer") => "engineer",
+        ("TIPL", "dj-mix") => "djmixer",
+        ("TIPL", "mix") => "mixer",
+        _ => "performer",
+    })
 }
 
 /// Read a file and say what, if anything, is wrong with it. The normal mode is tried first; if it fails, the relaxed
@@ -303,8 +341,17 @@ fn read_with(path: &Path, mode: ParsingMode) -> Result<FileTags> {
         for item in tag.items() {
             let Some(value) = item.value().text() else { continue };
             let key = item.key();
+            // ID3v2's TIPL pairs lofty makes items of are read as pairs, with their role (`unmapped`): never twice, never as "TIPL".
+            if tag_type == lofty::tag::TagType::Id3v2 && TIPL_ITEMS.contains(&key) {
+                continue;
+            }
+            // Vorbis's WRITER and AUTHOR are one key to lofty, which names it AUTHOR: read by their own names instead (`unmapped`).
+            if tag_type == lofty::tag::TagType::VorbisComments && key == ItemKey::Writer {
+                continue;
+            }
             let raw = key.map_key(tag_type).map(str::to_string).unwrap_or_else(|| format!("{key:?}"));
-            let name = normalised(key).or_else(|| by_raw_key(&raw));
+            // ID3v2's TEXT is the lyricist's frame ("Lyricist/Text writer"), whichever of the two keys lofty reads it as.
+            let name = if tag_type == lofty::tag::TagType::Id3v2 && raw == "TEXT" { Some("lyricist") } else { normalised(key).or_else(|| by_raw_key(&raw)) };
             // ID3v2 keeps several values of one frame in one string, separated by NUL.
             for v in value.split('\0').map(str::trim).filter(|v| !v.is_empty()) {
                 out.items.push((raw.clone(), name, v.to_string()));
@@ -314,7 +361,7 @@ fn read_with(path: &Path, mode: ParsingMode) -> Result<FileTags> {
     // The fields lofty has no key for, which its generic tags leave out (0.13: STYLE was never read since lofty 0.25):
     // from the format's own tag, those Cratarr names. A failure here leaves the file read as above.
     for (raw, v) in unmapped(path, file.file_type(), mode) {
-        if let Some(name) = by_raw_key(&raw) {
+        if let Some(name) = pair_name(&raw).or_else(|| by_raw_key(&raw)) {
             for v in v.split('\0').map(str::trim).filter(|v| !v.is_empty()) {
                 out.items.push((raw.clone(), Some(name), v.to_string()));
             }
@@ -333,7 +380,7 @@ fn unmapped(path: &Path, file_type: lofty::file::FileType, mode: ParsingMode) ->
     let Ok(mut f) = std::fs::File::open(path) else { return Vec::new() };
     let vorbis = |vc: &lofty::ogg::tag::VorbisComments| -> Vec<(String, String)> {
         vc.items()
-            .filter(|(k, _)| ItemKey::from_key(TagType::VorbisComments, k).is_none() && !k.starts_with("RATING:"))
+            .filter(|(k, _)| matches!(ItemKey::from_key(TagType::VorbisComments, k), None | Some(ItemKey::Writer)) && !k.starts_with("RATING:"))
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     };
@@ -345,15 +392,27 @@ fn unmapped(path: &Path, file_type: lofty::file::FileType, mode: ParsingMode) ->
             FileType::Mpeg => {
                 use lofty::id3::v2::Frame;
                 let tag = lofty::mpeg::MpegFile::read_from(&mut f, options).ok()?.id3v2()?.clone();
+                // TIPL and TMCL (ID3v2.3's IPLS, which lofty reads as TIPL), each pair with its role or instrument in the raw key
+                // (T-CRED-25): from the whole tag, as lofty's own items take some of TIPL's pairs out of what `split_tag` leaves.
+                let pairs: Vec<(String, String)> = (&tag)
+                    .into_iter()
+                    .filter_map(|frame| match frame {
+                        Frame::KeyValue(kv) if matches!(frame.id().as_str(), "TIPL" | "TMCL") => Some((frame.id().as_str().to_string(), kv)),
+                        _ => None,
+                    })
+                    .flat_map(|(id, kv)| kv.key_value_pairs.iter().map(move |(k, v)| (format!("{id}:{}", k.trim()), v.to_string())).collect::<Vec<_>>())
+                    .collect();
                 let (rest, _) = tag.split_tag();
-                (&*rest)
+                let mut out: Vec<(String, String)> = (&*rest)
                     .into_iter()
                     .filter_map(|frame| match frame {
                         Frame::UserText(t) => Some((t.description.to_string(), t.content.to_string())),
                         Frame::Text(t) => Some((frame.id().as_str().to_string(), t.value.to_string())),
                         _ => None,
                     })
-                    .collect()
+                    .collect();
+                out.extend(pairs);
+                out
             }
             FileType::Mp4 => {
                 use lofty::mp4::{AtomData, AtomIdent};

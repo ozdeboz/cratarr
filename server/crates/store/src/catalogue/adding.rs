@@ -163,7 +163,7 @@ impl Catalogue {
         let ids: Vec<i64> = read.artists.iter().map(|(id, _)| *id).collect();
         let named = served(&ids);
         let artists: Vec<&str> = read.artists.iter().map(|(id, name)| named.get(id).map_or(name.as_str(), String::as_str)).collect();
-        let credit = Some(cratarr_rules::names::credit_text(&artists, None)).filter(|c| !c.trim().is_empty());
+        let credit = Some(cratarr_rules::names::credit_text(&artists.iter().map(|a| (*a, None)).collect::<Vec<_>>())).filter(|c| !c.trim().is_empty());
         let stored = Some(read.row.title.clone()).filter(|t| !t.trim().is_empty() && t != "[Unknown Album]").and_then(|t| fact_value("album", &t));
         let lists: Vec<Vec<RefTrack>> = match &read.pick {
             Some(p) => read.lists.iter().filter(|l| &l.reference == p).map(|l| l.tracks.clone()).collect(),

@@ -14,7 +14,8 @@
 
 use anyhow::Result;
 pub use cratarr_domain::facts::{List, Reference};
-use cratarr_domain::facts::Present;
+/// The one pairing that confirms a list whole (the owner's 02:32 rule, HS01), for the crates above (CRED.11 (g)).
+pub use cratarr_domain::facts::{Present, confirms};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::Catalogue;
