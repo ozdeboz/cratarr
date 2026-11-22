@@ -66,13 +66,32 @@ pub(crate) struct Whole {
 
 impl Whole {
     pub(crate) async fn open(name: &str) -> Self {
+        Self::opened(name, false).await
+    }
+
+    /// As `open`, with Cratarr's own source connected over its Music folder, its one main library, as an install has it: an
+    /// artist page (`/api/artists/cratarr`) asks it.
+    pub(crate) async fn open_own(name: &str) -> Self {
+        Self::opened(name, true).await
+    }
+
+    async fn opened(name: &str, own: bool) -> Self {
         let dir = std::env::temp_dir().join(format!("cratarr-whole-router-{name}-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         served.users.set("me", "pw").unwrap();
         served.sessions.set_required(true).unwrap();
         let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
-        let saved = crate::settings::Saved { music_folder: Some(dir.to_string_lossy().into_owned()), ..Default::default() };
+        let music = dir.to_string_lossy().into_owned();
+        let sources = if own {
+            use crate::settings::{Libraries, LibraryKind, LibrarySetting, SourceConfig};
+            let values: crate::source::Values = [("folders".to_string(), serde_json::json!([music]))].into();
+            let libraries = Libraries(vec![LibrarySetting::new(music.clone(), LibraryKind::Main)]);
+            vec![SourceConfig { id: crate::source::cratarr::KIND.id.into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values }]
+        } else {
+            Vec::new()
+        };
+        let saved = crate::settings::Saved { music_folder: Some(music), sources, ..Default::default() };
         let app = crate::app::App::new(cfg, saved, crate::settings::Origin::Env, Some(Arc::clone(&served))).await.unwrap();
         // As `main` does: the server answers from the app's catalogue (requests, the record pages).
         served.attach_catalogue(app.library.catalogue());

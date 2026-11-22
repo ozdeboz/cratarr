@@ -56,9 +56,11 @@ fn plant(w: &Whole, files: &[File]) {
     w.served.refresh().unwrap();
 }
 
-/// The pass and the build again (a source's answer kept since).
+/// The pass and the build again (a source's answer kept since): the catalogue's next pass ends telling the library, as a pass does.
 fn again(w: &Whole) {
-    w.app.library.catalogue().identify().unwrap();
+    let cat = w.app.library.catalogue();
+    cat.identify().unwrap();
+    cat.changed_outside_pass();
     w.served.refresh().unwrap();
 }
 
@@ -136,7 +138,7 @@ fn own_record(dir: &str, album: &str, artist: &str, n: usize) -> Vec<File> {
 /// compound still credited. Red first: one compound chip, opening the compound.
 #[tokio::test]
 async fn chicago_waves_is_two_artists_record() {
-    let w = Whole::open("dc3a-f54-2").await;
+    let w = Whole::open_own("dc3a-f54-2").await;
     let me = w.session("me");
     let by = ("cookie", me.as_str());
     let cat = w.app.library.catalogue();
@@ -249,7 +251,7 @@ fn perspeeks() -> Vec<File> {
 /// artist "Various Artists". Red first: Perspeeks is credited to Various Artists, a compilation.
 #[tokio::test]
 async fn a_splits_artists_own_it_everywhere() {
-    let w = Whole::open("dc3a-names-19").await;
+    let w = Whole::open_own("dc3a-names-19").await;
     let me = w.session("me");
     let by = ("cookie", me.as_str());
     let mut files = own_record("Secede/Bolt", "Bolt", "Secede", 1);
@@ -294,7 +296,7 @@ fn deep_harbour() -> Vec<File> {
 /// alone, and Alfa Mist's page lists the record only through its tracks.
 #[tokio::test]
 async fn every_tracks_artists_are_the_records() {
-    let w = Whole::open("dc3a-names-21").await;
+    let w = Whole::open_own("dc3a-names-21").await;
     let me = w.session("me");
     let by = ("cookie", me.as_str());
     plant(&w, &deep_harbour());
@@ -410,7 +412,7 @@ const TK: &str = "c0000000-0000-4000-8000-0000000a0497";
 #[tokio::test]
 async fn featuring_is_per_track_and_never_rises() {
     const REL_HARBOUR: &str = "c0000000-0000-4000-8000-000000004970";
-    let w = Whole::open("dc3a-cred-25").await;
+    let w = Whole::open_own("dc3a-cred-25").await;
     let me = w.session("me");
     let by = ("cookie", me.as_str());
     let mut files = record_files(
@@ -462,6 +464,47 @@ async fn featuring_is_per_track_and_never_rises() {
     // CRED.27 (q2), (q3).
     let lines = songs(&w, &signals);
     assert_eq!((lines[2].1.as_str(), lines[5].1.as_str()), ("Rowan Fell & Oda Brenn", "Rowan Fell & Oda Brenn"), "tracks 3 and 6: {lines:?}");
+}
+
+/// MATCH.4's rows that stay DC3's ((a), (b) and (e) are DC1a's NAMES.25): a track credit's id. (c) a "Rainbow Bridge" file, ARTIST
+/// "Jimi Hendrix", no ids: C55's first of the name; (d) a Perspeeks file, "Kettel", no ids: the one Kettel; (f) ARTISTS ["Nicola Conte",
+/// "Rosalia De Souza"] with two track ids: each by its id; (g) two names and one id: the counts differ, no pairing, each by name. Never a
+/// track credited to the key's first where its file pairs the name with an id. Guards: green by DC1a's track rule; F54's worked credit
+/// (the one splitter) must keep them.
+#[tokio::test]
+async fn a_tracks_credit_takes_the_id_its_file_pairs() {
+    const NC: &str = "c0000000-0000-4000-8000-0000000a0410";
+    const RDS: &str = "c0000000-0000-4000-8000-0000000a0411";
+    let w = Whole::open("dc3a-match-4").await;
+    let cat = w.app.library.catalogue();
+    let first = cat.artist_for("Jimi Hendrix").unwrap();
+    let mut files = own_record("Jimi Hendrix/Rainbow Bridge", "Rainbow Bridge", "Jimi Hendrix", 1);
+    files.extend(own_record("Kettel/Myam James", "Myam James", "Kettel", 1));
+    files.extend(record_files("Various Artists/Perspeeks", "Perspeeks", &[("albumartist", "Various Artists")], &[vec![("artist", "Kettel")], vec![("artist", "Secede")]]));
+    // Rosalia De Souza holds her id by her own record's files.
+    files.extend(record_files("Rosalia De Souza/Garota", "Garota Moderna", &[("albumartist", "Rosalia De Souza"), ("artist", "Rosalia De Souza"), ("musicbrainz_albumartistid", RDS)], &[Vec::new()]));
+    files.extend(record_files(
+        "Nicola Conte/Bossa",
+        "Bossa",
+        &[("albumartist", "Nicola Conte"), ("musicbrainz_albumartistid", NC)],
+        &[
+            vec![("artist", "Nicola Conte & Rosalia De Souza"), ("artists", "Nicola Conte"), ("artists", "Rosalia De Souza"), ("musicbrainz_artistid", NC), ("musicbrainz_artistid", RDS)],
+            vec![("artist", "Nicola Conte & Rosalia De Souza"), ("artists", "Nicola Conte"), ("artists", "Rosalia De Souza"), ("musicbrainz_artistid", NC)],
+        ],
+    ));
+    plant(&w, &files);
+    let holder = |id: &str| cat.subject_of(&Ref::new("musicbrainz", "artist", id)).unwrap().first().cloned();
+    let rainbow = songs(&w, &album(&w, "Jimi Hendrix/Rainbow Bridge"));
+    let ids_of = |album_dir: &str| -> Vec<Vec<String>> {
+        w.served.library.songs_of_albums(&[album(&w, album_dir)]).unwrap().into_iter().map(|s| s.artists.iter().map(|a| a.id.clone()).collect()).collect()
+    };
+    assert_eq!(rainbow[0].2, ["Jimi Hendrix"]);
+    assert_eq!(ids_of("Jimi Hendrix/Rainbow Bridge"), [vec![crate::serve::ids::artist(first)]], "(c) C55's first of the name");
+    assert!(ids_of("Various Artists/Perspeeks")[0] == [artist(&w, "Kettel")] || ids_of("Various Artists/Perspeeks")[1] == [artist(&w, "Kettel")], "(d) the one Kettel");
+    let bossa = ids_of("Nicola Conte/Bossa");
+    let (nc, rds) = (holder(NC).expect("Nicola Conte holds NC"), holder(RDS));
+    assert_eq!(bossa[0], [nc.clone(), rds.clone().expect("Rosalia De Souza holds RDS")], "(f) each by its id");
+    assert_eq!(bossa[1], [artist(&w, "Nicola Conte"), artist(&w, "Rosalia De Souza")], "(g) two names, one id: each by name");
 }
 
 /// COU.10 (a), (b) and (d), and COU.13 (b)'s credit half. (a) "Harbour Sampler", twelve artists, no ALBUMARTIST, no reference: Various
