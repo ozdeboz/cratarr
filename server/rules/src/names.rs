@@ -111,19 +111,43 @@ fn fold(c: char) -> char {
     }
 }
 
-/// A record's artists as one text, where only text fits (a card's line, the notification): the one formatter the server, the page
-/// (index.wasm) and the device (rules-ffi) share (NAMES.24; the owner, 2026-11-20 ~18:35, "A & B", "A, B & C"). A source that
-/// confirms the credit and gives its own phrase ("Commodo x Alfa Mist") is said as it gives it. An empty name is no artist.
-pub fn credit_text(names: &[&str], phrase: Option<&str>) -> String {
-    if let Some(phrase) = phrase.map(str::trim).filter(|p| !p.is_empty()) {
-        return phrase.to_string();
-    }
-    let names: Vec<&str> = names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()).collect();
+/// A credit as one text, where only text fits (a card's line, a track's line, the player, the notification): the one formatter the
+/// server, the page (index.wasm) and the device (rules-ffi) share (NAMES.24; the owner, 2026-11-20 ~18:35, "A & B", "A, B & C";
+/// SCENARIOS-CRED CRED.27, the owner's credit model, 2026-11-21 14:24). It takes the credit's ordered list: each entry's name and the
+/// phrase printed after it ("Rowan Fell feat. Oda Brenn", "Commodo x Alfa Mist"); an entry with none, its own join, ", " within a
+/// run and " & " before the run's last. A separator ("/", ";") is never printed. An empty name is no artist.
+pub fn credit_text(entries: &[(&str, Option<&str>)]) -> String {
+    // Red first (CRED.27): one phrase for the whole credit, as before.
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.trim()).filter(|n| !n.is_empty()).collect();
     match names.as_slice() {
         [] => String::new(),
         [one] => (*one).to_string(),
         [rest @ .., last] => format!("{} & {last}", rest.join(", ")),
     }
+}
+
+/// Whether a joining text is a list separator, never a phrase (CRED.24): "/" and ";", and nothing at all.
+pub fn is_separator(join: &str) -> bool {
+    matches!(join.trim(), "" | "/" | ";")
+}
+
+/// The phrase printed after an entry of a worked-out credit (CRED.27, NAMES.24, amended): the hand's (MATCH.11's split keeps its
+/// printed phrase); then the files', where they name the same artists as the worked-out credit and it is a real phrase, never a
+/// separator; then the first confirming source's (in the order they answered: T-NAMES-13); else none (`credit_text`'s own join).
+pub fn phrase_of<'a>(hand: Option<&'a str>, files: Option<&'a str>, files_name_the_same: bool, sources: &[&'a str]) -> Option<&'a str> {
+    // Red first (CRED.27): no phrase is chosen.
+    let _ = (hand, files, files_name_the_same, sources);
+    None
+}
+
+/// A track's title as a row shows it beside its credit (CRED.28; the owner, ~14:38, "Trim the title on screen"): its "(feat. X)"
+/// ("ft.", "featuring", in round or square brackets) taken off where the credit names that guest X (by name, case and accents
+/// aside), and that part alone; every other part kept ("[Live]", "(Remix)"); a guest the credit doesn't name, kept. The stored
+/// title is never touched: OpenSubsonic, search and the files keep it whole.
+pub fn title_shown(title: &str, featured: &[&str]) -> String {
+    // Red first (CRED.28): the title shows whole.
+    let _ = featured;
+    title.to_string()
 }
 
 /// A track's title as every surface names it (OBJ5, OB2: one name for a track): its name, else its file's name without its
@@ -170,7 +194,7 @@ mod tests {
         }
         let case = |name: Option<&'static str>, file: &'static str, artists: Vec<&'static str>, record: &'static str| {
             let title = track_title(name, file);
-            let line = track_line(&credit_text(&artists, None), record);
+            let line = track_line(&credit_text(&artists.iter().map(|a| (*a, None)).collect::<Vec<_>>()), record);
             Case { name, file, artists, record, title, line }
         };
         let cases = vec![
@@ -204,18 +228,101 @@ mod tests {
         }
     }
 
+    /// The names alone, as a credit with no phrase.
+    fn plain<'a>(names: &[&'a str]) -> Vec<(&'a str, Option<&'a str>)> {
+        names.iter().map(|n| (*n, None)).collect()
+    }
+
     /// NAMES.24's formatter (its rules half; the surfaces are DC3's SPLIT): every artist named, "A & B", "A, B & C", one alone, a
     /// confirming source's own phrase as it gives it. Red first: a card names the album artist alone (records.rs's artist line).
+    /// Its phrase rows rewritten for CRED.27 (a pin changed by design, Found item 24): the phrase is each entry's, printed after it,
+    /// where it was one text for the whole credit; DC1a's rows stand as the no-phrase case.
     #[test]
     fn one_formatter_names_a_records_artists() {
-        assert_eq!(credit_text(&["Commodo", "Alfa Mist"], None), "Commodo & Alfa Mist");
-        assert_eq!(credit_text(&["Commodo", "Alfa Mist", "Anz"], None), "Commodo, Alfa Mist & Anz");
-        assert_eq!(credit_text(&["Secede", "Kettel"], None), "Secede & Kettel");
-        assert_eq!(credit_text(&["Glass Harbour"], None), "Glass Harbour");
-        assert_eq!(credit_text(&[], None), "");
-        assert_eq!(credit_text(&["Commodo", " ", "Alfa Mist"], None), "Commodo & Alfa Mist", "an empty name is no artist");
-        assert_eq!(credit_text(&["Commodo", "Alfa Mist"], Some("Commodo x Alfa Mist")), "Commodo x Alfa Mist");
-        assert_eq!(credit_text(&["Commodo", "Alfa Mist"], Some("  ")), "Commodo & Alfa Mist", "an empty phrase is none");
+        assert_eq!(credit_text(&plain(&["Commodo", "Alfa Mist"])), "Commodo & Alfa Mist");
+        assert_eq!(credit_text(&plain(&["Commodo", "Alfa Mist", "Anz"])), "Commodo, Alfa Mist & Anz");
+        assert_eq!(credit_text(&plain(&["Secede", "Kettel"])), "Secede & Kettel");
+        assert_eq!(credit_text(&plain(&["Glass Harbour"])), "Glass Harbour");
+        assert_eq!(credit_text(&[]), "");
+        assert_eq!(credit_text(&plain(&["Commodo", " ", "Alfa Mist"])), "Commodo & Alfa Mist", "an empty name is no artist");
+        assert_eq!(credit_text(&[("Commodo", Some("x")), ("Alfa Mist", None)]), "Commodo x Alfa Mist");
+        assert_eq!(credit_text(&[("Commodo", Some("  ")), ("Alfa Mist", None)]), "Commodo & Alfa Mist", "an empty phrase is none");
+    }
+
+    /// CRED.27: the printed phrase is the hand's, then the files', then a source's (rows (q1)-(q8), and the no-phrase case), and
+    /// `credit_text` prints each entry's: the files' real phrase between the same artists first; a separator never printed (MusicBrainz's
+    /// then); the files naming other artists than the credit give none; MATCH.11's hand split keeps its printed phrase. The rows are
+    /// written to shared/credit-texts.json for the page's and the device's tests. Never a separator printed; never a files' phrase where
+    /// the files name other artists; never the hand split's phrase replaced. Red first: `credit_text` took one phrase for the whole
+    /// credit (rules/names.rs:117).
+    #[test]
+    fn the_printed_phrase_is_the_hands_then_the_files_then_a_sources() {
+        #[derive(serde::Serialize)]
+        struct Row {
+            row: &'static str,
+            says: &'static str,
+            names: Vec<&'static str>,
+            hand: Option<&'static str>,
+            files: Option<&'static str>,
+            files_name_the_same: bool,
+            sources: Vec<&'static str>,
+            roles: Vec<&'static str>,
+            text: String,
+        }
+        // Each row: the credit's two names, their roles, the phrase each place offers between them, the text.
+        let rows: Vec<(&'static str, &'static str, [&'static str; 2], [&'static str; 2], Option<&'static str>, Option<&'static str>, bool, Vec<&'static str>, &'static str)> = vec![
+            ("q1", "Night Signals 5: the files' \"&\" (a real phrase, the same artists), MusicBrainz's \"x\", Discogs' \"&\"", ["Rowan Fell", "Oda Brenn"], ["main", "main"], None, Some("&"), true, vec!["x", "&"], "Rowan Fell & Oda Brenn"),
+            ("q2", "Night Signals 3: the files' \"/\" (a separator: none), MusicBrainz's \"&\"", ["Rowan Fell", "Oda Brenn"], ["main", "main"], None, Some("/"), true, vec!["&"], "Rowan Fell & Oda Brenn"),
+            ("q3", "Night Signals 6: the files' \";\" (none), MusicBrainz's \"&\"", ["Rowan Fell", "Oda Brenn"], ["main", "main"], None, Some(";"), true, vec!["&"], "Rowan Fell & Oda Brenn"),
+            ("q4", "Night Signals 4: the files' \"ft.\", MusicBrainz's \"feat.\"", ["Rowan Fell", "Oda Brenn"], ["main", "featuring"], None, Some("ft."), true, vec!["feat."], "Rowan Fell ft. Oda Brenn"),
+            ("q5", "Deep Harbour 1: the files' \"/\" only", ["Commodo", "Alfa Mist"], ["main", "main"], None, Some("/"), true, vec![], "Commodo & Alfa Mist"),
+            ("q6", "the files name fewer artists than the credit (\"Rowan Fell\" for two): no files' phrase; a confirming source's", ["Rowan Fell", "Oda Brenn"], ["main", "main"], None, Some("x"), false, vec!["with"], "Rowan Fell with Oda Brenn"),
+            ("q6b", "as (q6) with no source's phrase: credit_text's own", ["Rowan Fell", "Oda Brenn"], ["main", "main"], None, Some("x"), false, vec![], "Rowan Fell & Oda Brenn"),
+            ("q7", "MATCH.11's split of \"Commodo & Alfa Mist\" by hand: the printed \"&\" it keeps", ["Commodo", "Alfa Mist"], ["main", "main"], Some("&"), Some("/"), true, vec!["x"], "Commodo & Alfa Mist"),
+            ("q8", "Harbour's record: the files' album line's \"feat.\", MusicBrainz's \" feat. \"", ["Rowan Fell", "Tamsin Kell"], ["main", "featuring"], None, Some("feat."), true, vec!["feat."], "Rowan Fell feat. Tamsin Kell"),
+        ];
+        let mut written = Vec::new();
+        for (row, says, names, roles, hand, files, same, sources, text) in rows {
+            let phrase = phrase_of(hand, files, same, &sources);
+            let got = credit_text(&[(names[0], phrase), (names[1], None)]);
+            assert_eq!(got, text, "({row}) {says}");
+            written.push(Row { row, says, names: names.to_vec(), hand, files, files_name_the_same: same, sources, roles: roles.to_vec(), text: got });
+        }
+        assert_eq!(credit_text(&[("Anz", None), ("Commodo", None), ("Alfa Mist", None)]), "Anz, Commodo & Alfa Mist", "no phrase: its own join");
+        assert_eq!(credit_text(&[("Rowan Fell", Some("/")), ("Oda Brenn", None)]), "Rowan Fell & Oda Brenn", "a separator never printed");
+        #[derive(serde::Serialize)]
+        struct Table {
+            about: &'static str,
+            rows: Vec<Row>,
+        }
+        let table = Table {
+            about: "A credit's printed phrases (SCENARIOS-CRED CRED.27), written by the rules crate's tests: the phrase between two entries is the hand's, then the files' (the same artists, a real phrase, never a separator), then the first confirming source's, else credit_text's own join; the text credit_text prints.",
+            rows: written,
+        };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shared/credit-texts.json");
+        let json = serde_json::to_string_pretty(&table).unwrap() + "\n";
+        let kept = std::fs::read_to_string(&path).unwrap_or_default().replace('\r', "");
+        if kept != json {
+            std::fs::write(&path, &json).unwrap();
+            panic!("shared/credit-texts.json was not the table's written form: written now, commit it");
+        }
+    }
+
+    /// CRED.28: a title shows trimmed where its credit names its guest, and stays whole otherwise: "Harbour (feat. Tamsin Kell)" by
+    /// "Rowan Fell feat. Tamsin Kell" shows "Harbour"; "Sloth (feat. Oda Brenn) [Live]" shows "Sloth [Live]"; "Song (feat. Friends)"
+    /// (a placeholder: no featured credit) and "Tide (feat. Oda Brenn)" (a hand's split naming Rowan Fell alone) stay whole; no other
+    /// bracket trimmed. Never a stored title cut (the formatter is display only); never a title trimmed where the credit doesn't name
+    /// that guest. Red first: titles show whole everywhere.
+    #[test]
+    fn a_title_shows_trimmed_where_its_credit_names_the_guest() {
+        assert_eq!(title_shown("Harbour (feat. Tamsin Kell)", &["Tamsin Kell"]), "Harbour");
+        assert_eq!(title_shown("Sloth (feat. Oda Brenn) [Live]", &["Oda Brenn"]), "Sloth [Live]");
+        assert_eq!(title_shown("Song (feat. Friends)", &[]), "Song (feat. Friends)");
+        assert_eq!(title_shown("Tide (feat. Oda Brenn)", &[]), "Tide (feat. Oda Brenn)");
+        assert_eq!(title_shown("Tide (feat. Oda Brenn)", &["Tamsin Kell"]), "Tide (feat. Oda Brenn)", "a guest the credit doesn't name");
+        assert_eq!(title_shown("Night (Remix) [feat. Oda Brenn]", &["oda brenn"]), "Night (Remix)", "square brackets too; every other part kept");
+        assert_eq!(title_shown("Harbour (Featuring Tamsin Kell)", &["Tamsin Kell"]), "Harbour");
+        assert_eq!(title_shown("Embrace (feat. Kerys Lae & Loïc Brenn)", &["Kerys Lae & Loïc Brenn"]), "Embrace", "a featured part one name, whole");
     }
 
     #[test]

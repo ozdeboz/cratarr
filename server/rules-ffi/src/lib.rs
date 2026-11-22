@@ -32,10 +32,17 @@ pub fn brake_accel(v0: f64, to: f64, length: f64, t: f64) -> f64 {
     cratarr_rules::brake::accel(v0, to, length, t)
 }
 
-/// A record's artists as one text where only text fits, the notification's (NAMES.24's one formatter: "A & B", "A, B & C", or a
-/// confirming source's own phrase), as the server and the page say it.
+/// One entry of a credit as its text reads it (CRED.27): the artist's name and the phrase printed after it, if any.
+#[derive(uniffi::Record)]
+pub struct CreditEntry {
+    pub name: String,
+    pub phrase: Option<String>,
+}
+
+/// A credit as one text where only text fits, the notification's (NAMES.24's one formatter, CRED.27: each entry's phrase printed
+/// after it, else "A & B", "A, B & C"), as the server and the page say it.
 #[uniffi::export]
-pub fn credit_text(names: Vec<String>, phrase: Option<String>) -> String {
-    let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    cratarr_rules::names::credit_text(&names, phrase.as_deref())
+pub fn credit_text(entries: Vec<CreditEntry>) -> String {
+    let entries: Vec<(&str, Option<&str>)> = entries.iter().map(|e| (e.name.as_str(), e.phrase.as_deref())).collect();
+    cratarr_rules::names::credit_text(&entries)
 }
