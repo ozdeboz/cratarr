@@ -1,9 +1,9 @@
 //! Change cover (0.9.5, the owner: not happy with an album's cover, look up others and choose one): an album's cover
-//! candidates (its Discogs master's and some of its releases', the Cover Art Archive's), and the one chosen written as
-//! a file beside the tracks and inside each (the owner's rule for covers), in every copy of the record (0101): the picture
-//! fetched once, and each copy written and put back by itself, as copies can hold different pictures. Written ahead: before
-//! anything changes, a copy's old cover file and old picture inside are kept in the data folder with what Undo needs, under
-//! the undo token. Cratarr's own library only: the albums whose files it holds.
+//! candidates (its Discogs master's and some of its releases', the Cover Art Archive's), and the one chosen kept as the record's
+//! chosen cover in Cratarr's own store (0.18, the owner, 2026-11-20 21:42: "Cover in the database"; COU.11): a command on the one
+//! path (`PickCover`), its Undo the cover shown before; no file written (writing into and beside files is 0.19's). What remains of
+//! the 0.17 writer (`prepared`, `write_kept`, `undo_kept`) serves Health's cover fix and the Undo of a 0.17 run. Cratarr's own
+//! library only: the albums whose files it holds.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -325,29 +325,8 @@ fn uploaded(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The cover the administrator chose (`url`) or uploaded (`data`) as a run on the one path (decision 0092's writers'
-/// map, 0.14: the choice is the yes; Undo is the run's).
-pub async fn run<H: super::incoming_host::IncomingHost>(app: &std::sync::Arc<H>, album: &str, url: Option<&str>, data: Option<Vec<u8>>) -> Result<super::file_runs::Status> {
-    run_on(app.clone(), album, url, data).await
-}
-
-/// `run`, on its host.
-async fn run_on(app: std::sync::Arc<dyn super::incoming_host::IncomingHost>, album: &str, url: Option<&str>, data: Option<Vec<u8>>) -> Result<super::file_runs::Status> {
-    let (data, from) = match (url, data) {
-        (Some(u), _) => (fetch(u).await?, "chosen"),
-        (None, Some(d)) => {
-            uploaded(&d)?;
-            (d, "uploaded")
-        }
-        (None, None) => bail!("Which picture?"),
-    };
-    let a = album.to_string();
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let p = crate::run::spawn_blocking(move || proposal(&served, &a, &data, from)).await??;
-    Ok(super::file_runs::start_on(app, p))
-}
-
-/// A picture as a run: one file of the run a copy, each said as it stands now. Blocking.
+/// A picture as a run, as 0.17's Change cover made one: one file of the run a copy, each said as it stands now. What a 0.17 run's
+/// Undo reads back (COU.20) has this shape; no route makes one in 0.18 (COU.11: the chosen cover is kept in Cratarr's store). Blocking.
 pub fn proposal(served: &crate::serve::Serve, album: &str, data: &[u8], from: &str) -> Result<super::file_runs::Proposal> {
     let (_, artist, title) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
     let (kept, said) = prepare(served, &copies(served, album, None)?, data)?;
@@ -475,6 +454,201 @@ pub fn undo_kept(keep: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// Change cover on the one path (SCENARIOS-COUPLING COU.11, FA14; the owner, 2026-11-20 21:42: "Cover in the database"; GF's kind
+/// `cover`): the picture kept as the record's chosen cover in Cratarr's store, its bytes, source, who and when, a hand fact;
+/// nothing written into or beside a file (GEN.58). Reset (`picture` none) lets the choice go, and the files' picture shows again.
+/// Its Undo gives back the cover shown before. An administrators' command, `decide()`'s Change cover right.
+pub struct PickCover {
+    pub serve: std::sync::Arc<crate::serve::Serve>,
+    pub record: i64,
+    /// The picture (its bytes) and its source (`upload`, `coverartarchive`, `discogs`); none: Reset.
+    pub picture: Option<(Vec<u8>, String)>,
+}
+
+impl PickCover {
+    /// A candidate's picture (`url`, one of its hosts), fetched: what Change cover's choice keeps.
+    pub async fn chosen(serve: std::sync::Arc<crate::serve::Serve>, record: i64, url: &str) -> Result<Self> {
+        let source = if url.contains("discogs.com") { "discogs" } else { "coverartarchive" };
+        let bytes = fetch(url).await?;
+        kind_of(&bytes)?;
+        Ok(Self { serve, record, picture: Some((bytes, source.to_string())) })
+    }
+
+    /// An administrator's own picture (Upload cover).
+    pub fn uploaded(serve: std::sync::Arc<crate::serve::Serve>, record: i64, data: Vec<u8>) -> Result<Self> {
+        uploaded(&data)?;
+        kind_of(&data)?;
+        Ok(Self { serve, record, picture: Some((data, "upload".to_string())) })
+    }
+}
+
+/// What a cover's Change keeps: the record, the chosen cover before it by its source and when (its bytes stay in the store, set
+/// aside as a candidate), and whether it picked one or reset the choice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PickData {
+    record: i64,
+    before: Option<(String, i64)>,
+    picked: bool,
+}
+
+/// Changing a record's cover: an administrator's, with a sign-in or a full key (`Action::ChangeCover`'s right).
+fn administers(v: &cratarr_domain::can::Viewer) -> cratarr_domain::can::Decision {
+    use cratarr_domain::can::{Decision, Scope, Why, said};
+    if v.scope != Scope::Full {
+        Decision::Deny(Why::Right(said::KEY))
+    } else if v.role.administers() {
+        Decision::Allow
+    } else {
+        Decision::Deny(Why::Right(said::ADMINISTRATORS))
+    }
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T, super::ToggleError> {
+    Ok(crate::run::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+}
+
+/// The record's kept cover now set to `to` (none: let go), the one set aside kept as a candidate; the library built so every
+/// surface and the device's covers feed take the new stamp at once.
+fn set_cover(serve: &crate::serve::Serve, record: i64, to: Option<crate::catalogue::covers::Cover>) -> Result<()> {
+    let cat = serve.catalogue();
+    let before = match to {
+        Some(c) => cat.keep_cover(record, &c)?,
+        None => cat.drop_cover(record)?,
+    };
+    if let Some(b) = before {
+        cat.set_aside_cover(record, &b)?;
+    }
+    serve.refresh()?;
+    Ok(())
+}
+
+impl super::commands::Command for PickCover {
+    type Result = Option<String>;
+
+    fn kind(&self) -> cratarr_domain::change::ChangeKind {
+        cratarr_domain::change::ChangeKind::Cover
+    }
+
+    fn decide(&self, v: &cratarr_domain::can::Viewer) -> cratarr_domain::can::Decision {
+        administers(v)
+    }
+
+    fn plan<'a>(&'a self, _v: &'a cratarr_domain::can::Viewer) -> super::commands::Boxed<'a, Result<super::commands::Plan<Option<String>>, super::ToggleError>> {
+        Box::pin(async move {
+            let (cat, record) = (self.serve.catalogue().clone(), self.record);
+            let before = blocking(move || cat.kept_cover(record)).await?.filter(crate::catalogue::covers::Cover::chosen);
+            if self.picture.is_none() && before.is_none() {
+                return Ok(super::commands::Plan::Nothing(None));
+            }
+            let data = PickData { record, before: before.map(|b| (b.source, b.at)), picked: self.picture.is_some() };
+            Ok(super::commands::Plan::Change(super::commands::Planned {
+                object: crate::serve::ids::record(record),
+                name: if self.picture.is_some() { "Cover changed".into() } else { "Cover reset".into() },
+                data: serde_json::to_value(data).map_err(|e| anyhow::anyhow!("{e}"))?,
+            }))
+        })
+    }
+
+    fn apply<'a>(
+        &'a self,
+        v: &'a cratarr_domain::can::Viewer,
+        id: cratarr_domain::change::ChangeId,
+        _planned: &'a super::commands::Planned,
+    ) -> super::commands::Boxed<'a, Result<super::commands::Applied<Option<String>>, super::ToggleError>> {
+        Box::pin(async move {
+            let at = super::moment::now_secs();
+            let cover = self.picture.as_ref().map(|(bytes, source)| crate::catalogue::covers::Cover {
+                mime: crate::serve::art::sniff(bytes).to_string(),
+                bytes: bytes.clone(),
+                source: source.clone(),
+                who: Some(v.account.clone()).filter(|a| !a.is_empty()),
+                at,
+                how: crate::catalogue::covers::HAND.to_string(),
+                run: None,
+                change: Some(id.0),
+            });
+            let (serve, record) = (self.serve.clone(), self.record);
+            blocking(move || set_cover(&serve, record, cover)).await?;
+            let print = self.serve.cover_stamps().get(&crate::serve::ids::record(record)).cloned();
+            Ok(super::commands::Applied { result: print, rev: None, records: vec![record] })
+        })
+    }
+}
+
+/// Whether the chosen cover now is what a cover's Change `id` left: its own pick, or no choice after its Reset.
+fn left_by(d: &PickData, id: i64, now: Option<&crate::catalogue::covers::Cover>) -> bool {
+    match now {
+        Some(n) => d.picked && n.change == Some(id),
+        None => !d.picked,
+    }
+}
+
+/// A cover's Undo: the cover shown before back (a candidate set aside, or none), where the store still holds what the Change left.
+pub struct CoverKind {
+    pub serve: std::sync::Arc<crate::serve::Serve>,
+}
+
+impl super::commands::Undoable for CoverKind {
+    fn kind(&self) -> cratarr_domain::change::ChangeKind {
+        cratarr_domain::change::ChangeKind::Cover
+    }
+
+    fn may(&self, v: &cratarr_domain::can::Viewer, _c: &cratarr_domain::change::Change) -> cratarr_domain::can::Decision {
+        administers(v)
+    }
+
+    fn shows<'a>(&'a self, c: &'a cratarr_domain::change::Change) -> super::commands::Boxed<'a, Result<super::commands::Shows, super::ToggleError>> {
+        Box::pin(async move {
+            let d: PickData = serde_json::from_str(&c.data).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let cat = self.serve.catalogue().clone();
+            let record = d.record;
+            let now = blocking(move || cat.kept_cover(record)).await?.filter(crate::catalogue::covers::Cover::chosen);
+            Ok(if left_by(&d, c.id.0, now.as_ref()) { super::commands::Shows::Applied } else { super::commands::Shows::NotApplied })
+        })
+    }
+
+    fn undo<'a>(
+        &'a self,
+        _path: &'a super::commands::Commands,
+        c: &'a cratarr_domain::change::Change,
+        _by: &'a cratarr_domain::can::Viewer,
+        _parts: Option<&'a [String]>,
+    ) -> super::commands::Boxed<'a, Result<super::commands::Undone, super::commands::Failed>> {
+        use cratarr_domain::change::Refusal;
+        use super::commands::Failed;
+        Box::pin(async move {
+            let d: PickData = serde_json::from_str(&c.data).map_err(|e| Failed::Error(anyhow::anyhow!("{e}").into()))?;
+            let (serve, record, before) = (self.serve.clone(), d.record, d.before.clone());
+            let (data, id) = (d.clone(), c.id.0);
+            let changed = crate::run::spawn_blocking(move || -> Result<bool> {
+                let cat = serve.catalogue();
+                // A change on top (another pick, a Reset, a Replace's kept cover since) changes nothing (CP5).
+                let now = cat.kept_cover(record)?.filter(crate::catalogue::covers::Cover::chosen);
+                if !left_by(&data, id, now.as_ref()) {
+                    return Ok(false);
+                }
+                let back = match &before {
+                    Some((source, at)) => Some(cat.candidate_cover(record, source, *at)?.ok_or_else(|| anyhow::anyhow!("its cover before is no longer kept"))?),
+                    None => None,
+                };
+                set_cover(&serve, record, back)?;
+                Ok(true)
+            })
+            .await
+            .map_err(|e| Failed::Error(anyhow::anyhow!("{e}").into()))?
+            .map_err(|e| Failed::Error(e.into()))?;
+            if !changed {
+                return Err(Failed::Refused(Refusal::ChangedSince(None)));
+            }
+            Ok(super::commands::Undone { rev: None, redo: None, records: vec![record] })
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "covers_tests.rs"]
+mod store_tests;
 
 #[cfg(test)]
 mod tests {

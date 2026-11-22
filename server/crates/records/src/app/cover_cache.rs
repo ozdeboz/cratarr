@@ -186,6 +186,63 @@ where
     Ok(old(file).await)
 }
 
+/// COU.12 (a) (DOMAIN-CORE D.1's pictures row; T-COU-7): a record you have whose files hold no picture shows the first of its sources'
+/// pictures to answer (`pictures_of`, its references'), kept in Cratarr's store as it first answered (a service's, below the files and
+/// any pick), so OpenSubsonic, the device and every list show the one picture, and it stays with the service switched off. None: no
+/// such record, one not had (the cover cache's), one with a picture kept already, or none answers now. Cover bytes are the one
+/// outside read a GET may make (the owner, 2026-11-21 04:43).
+pub async fn first_answer(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str) -> Result<Option<(Vec<u8>, &'static str)>> {
+    first_answer_with(cat, album, fetch_picture).await
+}
+
+/// `first_answer` through `fetch`.
+pub async fn first_answer_with<F, Fut>(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str, fetch: F) -> Result<Option<(Vec<u8>, &'static str)>>
+where
+    F: Fn(Picture) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<Vec<u8>>>>,
+{
+    let Some(record) = crate::serve::ids::record_number(album) else { return Ok(None) };
+    let c = cat.clone();
+    let read = crate::run::spawn_blocking(move || -> Result<Option<(i64, Vec<Picture>)>> {
+        let Some(row) = c.record(record)?.filter(|r| r.had) else { return Ok(None) };
+        if c.kept_cover(row.id)?.is_some() {
+            return Ok(None);
+        }
+        let refs: Vec<(String, String, String)> = c.references_of(&crate::serve::ids::record(row.id))?.into_iter().map(|(r, _)| (r.source, r.kind, r.value)).collect();
+        Ok(Some((row.id, pictures_of(None, &refs))))
+    });
+    let Some((id, pictures)) = read.await?? else { return Ok(None) };
+    let one = record_turn(id);
+    let _one = one.lock().await;
+    for p in pictures {
+        let source = match &p {
+            Picture::Group(_) => "coverartarchive",
+            Picture::Discogs(..) => "discogs",
+            Picture::Bandcamp(_) => "bandcamp",
+            Picture::Outside(_) => "outside",
+        };
+        let _turn = crate::runner::resource::COVERS.take(crate::runner::Priority::Asked).await;
+        if let Ok(Some(bytes)) = fetch(p).await
+            && !bytes.is_empty()
+        {
+            let cover = crate::catalogue::covers::Cover {
+                mime: crate::serve::art::sniff(&bytes).to_string(),
+                bytes: bytes.clone(),
+                source: source.to_string(),
+                who: None,
+                at: super::moment::now_secs(),
+                how: crate::catalogue::covers::FIRST.to_string(),
+                run: None,
+                change: None,
+            };
+            let c = cat.clone();
+            crate::run::spawn_blocking(move || c.keep_cover(id, &cover)).await??;
+            return Ok(Some(sniffed(bytes)));
+        }
+    }
+    Ok(None)
+}
+
 /// Whether a record's "no picture" (M5) is kept for these pictures (`print`), younger than a day.
 fn none_kept(file: &std::path::Path, print: &str) -> bool {
     let young = std::fs::metadata(file).ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age < NONE_KEEP);

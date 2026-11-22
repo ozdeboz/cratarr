@@ -9,6 +9,7 @@ pub mod can;
 pub mod change;
 pub mod facts;
 pub mod identity;
+pub mod picture;
 pub mod record;
 pub mod request;
 pub mod soulseek;

@@ -110,11 +110,24 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
     // list and the device's index serve it: one rule for the Head, the rows and the index (VR39); else the record's own.
     let album = crate::serve::ids::record(row.id);
     let built = if row.had { serve.record_types(std::slice::from_ref(&album)).remove(&album).and_then(|(kind, _)| kind) } else { None };
+    // VR49: its secondaries' sources: the hand's list (final for its kind), each service's per reference (a guess's counting nowhere),
+    // and the rule's, as the build heard them for a record you have.
+    let set = serve.userdata.overrides_of(&album)?;
+    let hand_secondary = set.secondary.clone();
+    let heard = if row.had { serve.library.secondaries_heard(&album)? } else { None };
+    let mut secondaries = secondaries_said(&read);
+    if let Some(h) = &heard {
+        let reference = h.mbid.as_deref().map(|m| cratarr_domain::facts::Reference::new("musicbrainz", "release", m));
+        let guessed = reference.as_ref().is_some_and(|r| read.guesses.contains(r));
+        secondaries.extend(h.musicbrainz.clone().map(|words| cratarr_domain::facts::Said { reference, source: "musicbrainz".into(), value: Some(words), guessed }));
+        secondaries.extend(h.discogs.clone().map(|words| cratarr_domain::facts::Said { reference: None, source: "discogs".into(), value: Some(words), guessed: false }));
+    }
     let facts = RecordFacts {
         id: row.id,
-        title: row.title.clone(),
+        // COU.13 (d): a title set by hand wins, with Reset.
+        title: set.title.clone().unwrap_or_else(|| row.title.clone()),
         kind: built.or_else(|| row.kind.clone()),
-        secondary: Vec::new(),
+        secondary: hand_secondary.clone().unwrap_or_default(),
         year: row.year,
         // NAMES.10: each credited artist by its id, named by its one served name (the spelling credited most beside its id), never
         // the record's files' string; its birth name only where the library serves it no rows.
@@ -126,15 +139,17 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         labels: labels_of(&read.labels),
         genres: row.genres.clone(),
         cover: row.cover.clone(),
-        hand: Vec::new(),
+        hand: hand_secondary.iter().map(|_| "secondary").chain(set.title.iter().map(|_| "title")).map(str::to_string).collect(),
         copies,
         shortest,
         only_guesses: read.copies.only_guesses,
         picked: read.copies.picked,
         lists: read.lists.clone(),
         pick: read.pick.clone(),
-        years: said_of(&read, "year"),
-        types: said_of(&read, "type"),
+        years: read.said_of("year"),
+        types: read.said_of("type"),
+        secondaries,
+        rule_secondary: heard.map(|h| h.rule).unwrap_or_default(),
         // The release type rule over the picked list's titles and lengths (VR39, M10): the one rule the build types an album by.
         picked_kind: read.pick.as_ref().and_then(|p| read.lists.iter().find(|l| &l.reference == p)).and_then(|l| {
             let lengths: Vec<Option<u64>> = l.tracks.iter().map(|t| t.length_ms.and_then(|ms| u64::try_from(ms).ok())).collect();
@@ -153,16 +168,17 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
     Ok(Some((rev, facts)))
 }
 
-/// Each source's value of one of a record's facts, per reference (`kind:value`, none for a fact no reference gives), each a guess's
-/// where its reference is one (VR8): what `resolve()` reads (VR39). A value that does not read as one is none.
-fn said_of<T: std::str::FromStr>(read: &crate::catalogue::holding::RecordRead, fact: &str) -> Vec<cratarr_domain::facts::Said<T>> {
+/// Each source's secondary types of a record kept in the facts layer (`secondary`, a JSON list of words), per reference, each a
+/// guess's where its reference is one (VR49, VR8). A value that does not read as a list is none.
+fn secondaries_said(read: &crate::catalogue::holding::RecordRead) -> Vec<cratarr_domain::facts::Said<Vec<String>>> {
     read.said
         .iter()
-        .filter(|s| s.fact == fact)
+        .filter(|s| s.fact == "secondary")
         .map(|s| {
             let reference = s.of.split_once(':').map(|(kind, value)| cratarr_domain::facts::Reference::new(&s.source, kind, value));
             let guessed = reference.as_ref().is_some_and(|r| read.guesses.contains(r));
-            cratarr_domain::facts::Said { reference, source: s.source.clone(), value: s.value.as_deref().and_then(|v| v.parse().ok()), guessed }
+            let value = s.value.as_deref().and_then(|v| serde_json::from_str::<Vec<String>>(v).ok());
+            cratarr_domain::facts::Said { reference, source: s.source.clone(), value, guessed }
         })
         .collect()
 }
@@ -486,6 +502,35 @@ mod tests {
     /// 13:59: no majority). Low Ceiling, one each: no type until root picks Discogs' list
     /// (11 tracks, 52:00), then the release type rule's over it, "by the picked list", and the picked release's year. A had record's
     /// year is its files', its type the rule's. Red first: the year one value with no versions, the type the record's own column.
+    /// VR49 (the entity's half; the domain's `a_records_secondaries_are_one_set_naming_their_sources`): (c) Salt Lines, not had:
+    /// MusicBrainz's Live on `G70`, Discogs' Live and Remix on `M70`: one set, each word naming its sources; (e) Thin Walls: its only
+    /// reference a guess saying Live: none; (d) Low Ceiling: Discogs' Compilation; root's Live by hand, alone; after Reset,
+    /// Compilation [discogs]. Red first: the view carried no secondaries.
+    #[test]
+    fn a_records_secondaries_name_their_sources_on_its_view() {
+        let serve = served();
+        let words = |e: &Entity<RecordProperties>| e.properties.secondary.iter().flatten().map(|v| (v.value.clone(), v.by.join(","))).collect::<Vec<_>>();
+        let pairs = |p: &[(&str, &str)]| p.iter().map(|(w, by)| (w.to_string(), by.to_string())).collect::<Vec<_>>();
+        let salt = serve.catalogue().record_for_tests("Salt Lines", 0);
+        held(&serve, salt, &[("musicbrainz", "release-group", "G70", "link"), ("discogs", "master", "M70", "link")]);
+        says(&serve, salt, "secondary", "musicbrainz", "release-group", "G70", r#"["live"]"#);
+        says(&serve, salt, "secondary", "discogs", "master", "M70", r#"["live","remix"]"#);
+        let e = answer(&serve, salt, &alice(), &Place::Search, &[]);
+        assert_eq!(words(&e), pairs(&[("live", "musicbrainz,discogs"), ("remix", "discogs")]), "(c)");
+        let thin = serve.catalogue().record_for_tests("Thin Walls", 0);
+        held(&serve, thin, &[("musicbrainz", "release", "R80s", "search")]);
+        says(&serve, thin, "secondary", "musicbrainz", "release", "R80s", r#"["live"]"#);
+        assert!(words(&answer(&serve, thin, &alice(), &Place::Search, &[])).is_empty(), "(e) a guess counts nowhere");
+        let low = serve.catalogue().record_for_tests("Low Ceiling", 0);
+        held(&serve, low, &[("discogs", "release", "D72", "link")]);
+        says(&serve, low, "secondary", "discogs", "release", "D72", r#"["compilation"]"#);
+        let album = crate::serve::ids::record(low);
+        serve.userdata.set_overrides(std::slice::from_ref(&album), &[("secondary".to_string(), Some(serde_json::json!(["live"])))], 1).unwrap();
+        assert_eq!(words(&answer(&serve, low, &root(), &Place::Search, &[])), pairs(&[("live", "hand")]), "(d) the hand's list, final");
+        serve.userdata.set_overrides(std::slice::from_ref(&album), &[("secondary".to_string(), None)], 2).unwrap();
+        assert_eq!(words(&answer(&serve, low, &root(), &Place::Search, &[])), pairs(&[("compilation", "discogs")]), "(d) after Reset");
+    }
+
     #[test]
     fn a_records_year_and_type_are_resolved_none_chosen() {
         let serve = served();
@@ -602,9 +647,10 @@ mod tests {
     fn the_copy_reader_is_read_once_per_list() {
         const READERS: [&str; 5] = ["catalogue().copies_of(", "cat.copies_of(", ".copies_held(", ".requested_held(", ".record_read("];
         // (file, calls): what each reads.
-        let allowed: [(&str, usize, &str); 7] = [
+        let allowed: [(&str, usize, &str); 8] = [
             ("requests/src/app/intake_card.rs", 1, "one arrival's \"Which release\" row (F53: `which_release_row`)"),
             ("app/src/app/core/records.rs", 1, "one record: its view, or the handler deciding (`decided`)"),
+            ("store/src/catalogue/adding.rs", 1, "one record: the copy the gate places, named from its facts (COU.15)"),
             ("incoming/src/app/albums.rs", 1, "one record's copies judged for copying (`judged_copies`: VR28, by the holding's pairs)"),
             ("playing/src/app/device_index.rs", 1, "every record of the index at once, at its build"),
             ("requests/src/app/requests.rs", 2, "every open request's record at once (`records_held`); one request's story (`held_for`)"),

@@ -54,7 +54,6 @@
   import { BANDCAMP, albumIdOf } from '../bandcampPreview';
   import { can, offers } from '../capabilities.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from '../favourites.svelte';
-  import { whenWritten } from '../fileRuns.svelte';
   import { askFor, followingNow } from '../following.svelte';
   import { jobs } from '../jobs.svelte';
   import { isKept, setKept } from '../kept.svelte';
@@ -558,7 +557,9 @@
     stopLook();
     return act(async () => {
       const r = await setAlbumCover(OWN, rid, c.url);
-      whenWritten(r, `Changed the cover of ${title}.`, () => void refreshCover(OWN, rid, albumCoverUrl(OWN, rid)));
+      const after = () => void refreshCover(OWN, rid, albumCoverUrl(OWN, rid));
+      after();
+      withUndo(`Changed the cover of ${title}.`, [r.undo], { after });
     }, 'Could not change the cover').finally(() => (settingCover = null));
   };
   const size = (c: CoverChoice) => (c.width && c.height ? `${c.width} × ${c.height}` : '');
@@ -571,7 +572,9 @@
     if (file.size > COVER_MAX) return toast.fail(null, 'That picture is too large (at most 12 MB)');
     try {
       const r = await uploadAlbumCover(OWN, of, file);
-      whenWritten(r, `Changed the cover of ${name}.`, () => void refreshCover(OWN, of, albumCoverUrl(OWN, of)));
+      const after = () => void refreshCover(OWN, of, albumCoverUrl(OWN, of));
+      after();
+      withUndo(`Changed the cover of ${name}.`, [r.undo], { after });
     } catch (err) {
       const big = err instanceof ApiError && err.status === 413;
       toast.fail(missingCall(err) || big ? null : err, big ? 'That picture is too large (at most 12 MB)' : missingCall(err) ? "This server can't take a cover yet" : "The cover wasn't uploaded");

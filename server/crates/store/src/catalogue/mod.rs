@@ -8,7 +8,11 @@
 //! changed) and link each to a file. A folder that cannot be read, or that walks to nothing where it had files, keeps its
 //! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
+mod adding;
+#[cfg(test)]
+mod adding_tests;
 mod artists;
+pub mod covers;
 pub use artists::Credits;
 mod editions;
 pub mod facts;
@@ -18,7 +22,11 @@ mod id3;
 pub mod identity;
 mod index_log;
 #[cfg(test)]
+mod coupling_tests;
+#[cfg(test)]
 mod join_tests;
+#[cfg(test)]
+mod keys_tests;
 #[cfg(test)]
 mod judging_tests;
 mod provenance;
@@ -326,6 +334,9 @@ pub struct AlbumCopy {
     pub old_id: String,
     pub old_base: String,
     pub pid: String,
+    /// Every file of it Cratarr placed, as placed (T-COU-1): it speaks for no one, its record's facts are another copy's or as
+    /// they were.
+    pub silent: bool,
 }
 
 /// What one file of an album says of its record ([`vote_of`]).
@@ -962,6 +973,13 @@ pub struct ServedRow {
     /// The placing folder of the copy Cratarr placed it in (COU.18), where it lies under one: what gathers it, never its tags
     /// (COU.17, T-COU-16).
     pub placed: Option<String>,
+    /// A file Cratarr placed into a record's copy (a fetched track, a better copy), while it is as placed (T-COU-17): the place on
+    /// its record's list it was placed for. It has no vote in its folder's album and is no source of its record's facts or picture
+    /// (COU.1, COU.3, T-COU-1, T-COU-15).
+    pub told: Option<(u32, u32)>,
+    /// Its track's place in its record (`tracks.disc`, `tracks.number`; COU.5, T-COU-4, T-COU-11): what every surface orders by and
+    /// the served song's `track` and `discNumber` are.
+    pub place: Option<(Option<u32>, Option<u32>)>,
 }
 
 /// What the served library takes from a file's analysis: its gain and peak, its tempo when confident, and its album's
@@ -1173,6 +1191,10 @@ impl Catalogue {
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track); CREATE INDEX IF NOT EXISTS tracks_by_record ON tracks (record);")?;
         let set_aside = lists::reshape_before(&conn).context("keying the lists by reference")?;
         conn.execute_batch(records::SCHEMA).context("creating the records' references")?;
+        // T-COU-17 (DC1a part 3b): a placed file's tags as first read, on a table part 3a made.
+        if !conn.prepare("SELECT 1 FROM pragma_table_info('placements') WHERE name = 'heard'")?.exists([])? {
+            conn.execute_batch("ALTER TABLE placements ADD COLUMN heard TEXT")?;
+        }
         lists::reshape_after(&conn, set_aside).context("keying the lists by reference")?;
         conn.execute_batch(artists::SCHEMA).context("creating the artists' numbers")?;
         conn.execute_batch(labels::SCHEMA).context("creating the labels' kept rows")?;
@@ -1200,6 +1222,7 @@ impl Catalogue {
         move_analysis_shapes(&conn)?;
         index_log::start(&conn).context("starting the library's change log")?;
         conn.execute_batch(facts::SCHEMA).context("creating the facts with no home")?;
+        conn.execute_batch(covers::SCHEMA).context("creating the records' kept covers")?;
         record_log::start(&conn).context("starting what the records owe the change log")?;
         let facts_written = Arc::new(AtomicU64::new(0));
         count_facts_writes(&conn, facts_written.clone())?;
@@ -1694,6 +1717,13 @@ impl Catalogue {
             let Some(before) = before else { continue };
             if (before.0 as u64, before.1) != after {
                 self.carry_over(folder, &rel, (before.0 as u64, before.1), after)?;
+                // COU.3 (c) (T-COU-17): Cratarr's own write (a Health repair) never ends a placed file's silence: as placed it was,
+                // as placed it stays, its new size and time noted; its tags as first read still decide (a changed tag speaks).
+                self.db().execute(
+                    "UPDATE placements SET size = ?3, mtime = ?4 WHERE folder = ?1 AND path = ?2 AND number IS NOT NULL
+                       AND (size IS NULL OR size = ?5) AND (mtime IS NULL OR mtime = ?6)",
+                    params![folder, rel, after.0 as i64, after.1, before.0, before.1],
+                )?;
             }
             todo.push((folder, rel));
         }
@@ -2686,9 +2716,12 @@ impl Catalogue {
             new.retain(|f| !claimed.contains(&(f.folder, f.rel.clone())));
             // A placed file as placed (T-COU-17): its size and time as first read.
             tx.execute(
-                "UPDATE placements SET size = (SELECT f.size FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path),
-                   mtime = (SELECT f.mtime FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path)
-                 WHERE size IS NULL AND number IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path)",
+                &format!(
+                    "UPDATE placements SET size = (SELECT f.size FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path),
+                       mtime = (SELECT f.mtime FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path), heard = {}
+                     WHERE size IS NULL AND number IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.folder = placements.folder AND f.rel = placements.path)",
+                    provenance::HEARD
+                ),
                 [],
             )?;
         }
@@ -2887,6 +2920,7 @@ impl Catalogue {
         let (given, records) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
         records::files_references(&tx, albums, &records, now())?;
         let apart = records::record_credits(&tx, albums, &records, now())?;
+        records::record_places(&tx, albums, &records)?;
         tx.commit()?;
         said_apart(&apart);
         Ok(given)
@@ -2915,6 +2949,7 @@ impl Catalogue {
         };
         records::files_references(&tx, albums, &records, now())?;
         let apart = records::record_credits(&tx, albums, &records, now())?;
+        records::record_places(&tx, albums, &records)?;
         tx.commit()?;
         said_apart(&apart);
         Ok(())
@@ -4606,7 +4641,7 @@ fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str, gains: 
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut st = db.prepare(&format!(
         "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime, f.bits, f.rate, f.came, t.record,
-           (SELECT count(*) > 1 FROM files o WHERE o.track = f.track)
+           (SELECT count(*) > 1 FROM files o WHERE o.track = f.track), t.disc, t.number, t.id IS NOT NULL
          FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {which} AND {}{}",
         served("f."),
         within("f.rel")
@@ -4629,6 +4664,8 @@ fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str, gains: 
             record: r.get(11)?,
             shared: r.get(12)?,
             placed: None,
+            told: None,
+            place: r.get::<_, bool>(15)?.then(|| Ok::<_, rusqlite::Error>((r.get(13)?, r.get(14)?))).transpose()?,
         })
     })?;
     for f in files {
@@ -4648,6 +4685,17 @@ fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str, gains: 
     if !placings.is_empty() {
         for row in rows.iter_mut() {
             row.placed = placings.iter().filter(|p| !p.is_empty() && row.rel.starts_with(&format!("{p}/"))).max_by_key(|p| p.len()).cloned();
+        }
+    }
+    // The files Cratarr placed here, while as placed (T-COU-17): their told place (COU.1, COU.3).
+    let told: Vec<(String, provenance::Told)> = db
+        .prepare_cached(&format!("SELECT path, disc, number, size, mtime FROM placements WHERE folder = ?1 AND number IS NOT NULL AND {}", provenance::SAME_TAGS))?
+        .query_map([folder], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, Option<u32>>(1)?.unwrap_or(1), r.get::<_, u32>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<i64>>(4)?))))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (path, t) in &told {
+        if let Some(&at) = index.get(path) {
+            let row = &mut rows[at];
+            row.told = provenance::as_placed(t, row.size as i64, row.mtime);
         }
     }
     // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
@@ -5081,13 +5129,15 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
     // A cover file changed, came or went (0.9.7) builds it again too: its album's stamp moves.
     let (covers, cover_size, cover_mtime): (i64, f64, f64) =
         db.query_row("SELECT count(*), total(size), total(mtime) FROM cover_files", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    // A kept cover picked, reset or carried builds its album again too (COU.11): its stamp moves on every surface.
+    let (kept, kept_at): (i64, f64) = db.query_row("SELECT count(*), total(at) FROM record_covers", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
     // New analyses build the library again too (their gains and tempi are the songs').
     let (analysed, at): (i64, f64) = db.query_row("SELECT count(*), total(analysed_at) FROM analysis", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
     // How many are read goes with the analyses' tail (0.9.7): tags read again over unchanged files (a new reader's
     // reread of every file, hours on the NAS) build the library at most every so often, as new analyses do, and not
     // after every pass: each build had the radio and the crates read everything again, and the sim went past 768 MB.
     // A file Cratarr wrote changes its size and time, which still builds at once.
-    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} covers {covers}/{cover_size}/{cover_mtime} analysis {analysed}/{at}/{read}"))
+    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} covers {covers}/{cover_size}/{cover_mtime}/{kept}/{kept_at} analysis {analysed}/{at}/{read}"))
 }
 
 /// Test helpers, for this module's tests and those moved up to the crates above (SPLIT-PLAN 3.2).

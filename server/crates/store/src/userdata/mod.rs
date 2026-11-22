@@ -381,6 +381,14 @@ pub struct ImportChange {
     pub now: Imported,
 }
 
+/// What followed songs to new ids at a fresh start (`UserData::follow_pids`): the annotations moved, and the rows left where their
+/// key named two songs (T-COU-18: counted, never moved).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Followed {
+    pub moved: usize,
+    pub apart: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppQueue {
     /// The app that saved it (Subsonic's `c`); every install of an app shares its name.
@@ -733,6 +741,16 @@ fn add_excluded_artists(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// A playlist line carries its song's persistent key (COU.9, T-COU-19), as the other rows keyed to a song do, so it follows its song
+/// at a fresh start: lines from before get the column, empty until the next build fills it (`UserData::carry_pids`). Safe to repeat.
+fn add_playlist_item_pid(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('playlist_item') WHERE name = 'pid'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE playlist_item ADD COLUMN pid TEXT")?;
+    }
+    Ok(())
+}
+
 /// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
 fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
@@ -864,6 +882,7 @@ impl UserData {
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
+        add_playlist_item_pid(&conn).context("keying the playlists' lines to their songs")?;
         add_scrobble_off(&conn)?;
         add_request_record(&conn)?;
         add_review_folder(&conn).context("keeping reviews by the copy that waited")?;
@@ -1872,34 +1891,66 @@ impl UserData {
         Ok(())
     }
 
-    /// Songs' annotations, and what imports brought in for them, follow their persistent ids to new song ids (the
-    /// catalogue was rebuilt): `moves` is (persistent id, song id now). A persistent id given twice goes to its first
-    /// song only: two would move its data there and back every time. Ids are for life, so what lies on one of `songs`, the
-    /// ids of tracks alive, listed or away with their library, stays: a copy tagged otherwise has a persistent id of its own,
-    /// the one on a row can leave with a copy while the track stays, and two records can be tagged alike. Returns how many
-    /// annotations moved.
-    pub fn follow_pids(&self, moves: &[(String, String)], songs: &std::collections::HashSet<String>) -> Result<usize> {
-        let mut to = std::collections::HashMap::new();
+    /// Everything keyed to a song follows its persistent key to its new song id (the catalogue was rebuilt; COU.9, T-COU-19): its
+    /// annotations (plays, hearts, stars, ratings), what imports brought in, its bookmarks, its play history and the playlist lines on
+    /// it. `moves` is (persistent key, song id now). A key two songs have moves no row to either: each such row is counted
+    /// (T-COU-18). Ids are for life, so what lies on one of `songs`, the ids of tracks alive, listed or away with their library, stays.
+    pub fn follow_pids(&self, moves: &[(String, String)], songs: &std::collections::HashSet<String>) -> Result<Followed> {
+        let mut to: std::collections::HashMap<&str, Option<&str>> = std::collections::HashMap::new();
         for (pid, item) in moves {
-            to.entry(pid.as_str()).or_insert(item.as_str());
+            to.entry(pid.as_str()).and_modify(|now| *now = now.filter(|n| *n == item.as_str())).or_insert(Some(item.as_str()));
         }
         let mut db = self.db();
         let tx = db.transaction()?;
-        let follow = |table: &str, of_songs: &str| -> Result<usize> {
-            let mut rows = tx.prepare_cached(&format!("SELECT DISTINCT pid, item FROM {table} WHERE pid IS NOT NULL{of_songs}"))?;
+        let mut apart = 0;
+        let mut follow = |table: &str, column: &str, of_songs: &str| -> Result<usize> {
+            let mut rows = tx.prepare_cached(&format!("SELECT DISTINCT pid, {column} FROM {table} WHERE pid IS NOT NULL AND {column} IS NOT NULL{of_songs}"))?;
             let rows: Vec<(String, String)> = rows.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            let mut go = tx.prepare_cached(&format!("UPDATE OR IGNORE {table} SET item = ?3 WHERE pid = ?1 AND item = ?2{of_songs}"))?;
+            let mut go = tx.prepare_cached(&format!("UPDATE OR IGNORE {table} SET {column} = ?3 WHERE pid = ?1 AND {column} = ?2{of_songs}"))?;
             let mut n = 0;
             for (pid, item) in rows.iter().filter(|(_, item)| !songs.contains(item)) {
-                if let Some(now) = to.get(pid.as_str()).filter(|now| **now != item.as_str()) {
-                    n += go.execute(params![pid, item, now])?;
+                match to.get(pid.as_str()) {
+                    Some(Some(now)) if *now != item.as_str() => n += go.execute(params![pid, item, now])?,
+                    Some(None) => apart += 1,
+                    _ => {}
                 }
             }
             Ok(n)
         };
-        let n = follow("annotation", " AND kind = 'song'")?;
-        follow("imported", " AND kind = 'song'")?;
-        follow("bookmark", "")?;
+        let moved = follow("annotation", "item", " AND kind = 'song'")?;
+        follow("imported", "item", " AND kind = 'song'")?;
+        follow("bookmark", "item", "")?;
+        follow("plays", "song", "")?;
+        follow("playlist_item", "track", "")?;
+        tx.commit()?;
+        Ok(Followed { moved, apart })
+    }
+
+    /// The rows on each song carry its persistent key now (T-COU-6): at every build, so a handover (Replace's take-over, a better
+    /// copy, a track back) gives the rows on a track its key, and a fresh start finds them by it. `keys` is (persistent key, song id).
+    /// How many rows took a new key.
+    pub fn carry_pids(&self, keys: &[(String, String)]) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS song_keys (song TEXT PRIMARY KEY, pid TEXT NOT NULL) WITHOUT ROWID; DELETE FROM temp.song_keys;")?;
+        {
+            let mut put = tx.prepare_cached("INSERT OR REPLACE INTO temp.song_keys (song, pid) VALUES (?1, ?2)")?;
+            for (pid, song) in keys {
+                put.execute(params![song, pid])?;
+            }
+        }
+        let mut n = 0;
+        for (table, column, of_songs) in [("annotation", "item", " AND kind = 'song'"), ("imported", "item", " AND kind = 'song'"), ("bookmark", "item", ""), ("plays", "song", ""), ("playlist_item", "track", "")] {
+            n += tx.execute(
+                &format!(
+                    "UPDATE {table} SET pid = (SELECT k.pid FROM temp.song_keys k WHERE k.song = {table}.{column})
+                      WHERE {column} IN (SELECT song FROM temp.song_keys){of_songs}
+                        AND pid IS NOT (SELECT k.pid FROM temp.song_keys k WHERE k.song = {table}.{column})"
+                ),
+                [],
+            )?;
+        }
+        tx.execute_batch("DELETE FROM temp.song_keys;")?;
         tx.commit()?;
         Ok(n)
     }
@@ -2780,18 +2831,21 @@ mod tests {
     fn data_follows_a_song_to_its_new_id() {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
-        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())], &Default::default()).unwrap(), 1);
+        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())], &Default::default()).unwrap(), Followed { moved: 1, apart: 0 });
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 1);
     }
 
+    /// Changed by design (COU.9, T-COU-18): a key two songs have moves no row to either, counted; before, to the first song.
     #[test]
-    fn a_track_in_two_folders_keeps_its_data_on_the_first() {
+    fn a_key_two_songs_have_moves_nothing_and_is_counted() {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
         let both = [("pid1".to_string(), "tr-5".to_string()), ("pid1".to_string(), "tr-8".to_string())];
-        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 1, "moved once, to the first");
-        assert_eq!(u.get("me", Kind::Song, &["tr-5".into()]).unwrap()["tr-5"].play_count, 1);
-        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 0, "and it stays there");
+        let followed = u.follow_pids(&both, &Default::default()).unwrap();
+        assert_eq!(followed.moved, 0, "moved to neither");
+        assert!(followed.apart > 0, "counted");
+        assert_eq!(u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"].play_count, 1, "left where it was");
+        assert!(!u.get("me", Kind::Song, &["tr-5".into(), "tr-8".into()]).unwrap().values().any(|a| a.play_count > 0));
     }
 
     const KEY: ImportKey = ImportKey { account: "me", source: "jellyfin", server_user: "u1" };

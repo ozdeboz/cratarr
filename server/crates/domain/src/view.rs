@@ -211,6 +211,11 @@ pub struct RecordProperties {
     /// What its type is by, in the server's words (VR39): "by the release type rule", "by the picked list", "by its sources",
     /// "set by you"; none where it has none.
     pub type_why: String,
+    /// Its secondary types (VR49), each word with the sources that say it ("hand", "rule", a service): one set, in the order the
+    /// served words have.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(any(test, feature = "ts"), ts(optional))]
+    pub secondary: Option<Vec<FactVersion<String>>>,
     pub title: FactView<String>,
     pub artists: FactView<Vec<Named>>,
     pub credit: String,

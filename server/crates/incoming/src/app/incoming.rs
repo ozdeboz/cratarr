@@ -16,11 +16,15 @@ use super::shelf::{Shelf, ShelfRead, Shelves};
 use crate::journal::{Entry, Event, EventId, Journal, TrackMove};
 use crate::ports::{Acquisition, Files};
 
+#[cfg(test)]
+mod adding_tests;
 mod carry_on;
 #[cfg(test)]
 mod layout_tests;
 mod queue;
 mod replace;
+#[cfg(test)]
+pub(crate) use replace::keep_cover;
 pub use queue::JobView;
 pub(super) use super::incoming_base::{LidarrPair, lidarr_pair};
 pub use replace::{ReplacePreview, ReplaceSheet};
@@ -41,6 +45,43 @@ const COPIED: &str = "copied";
 /// Where a Copy to's Undo put the copies (T1): the second it began under, written before a file moves, and each file's trash token
 /// (`trash::restore_file` brings it back), so they can be found again.
 const UNCOPIED: &str = "uncopied";
+
+/// What the gate names a copy's files by in a main library (COU.15): the record's facts in the database, read on the blocking pool
+/// (`Catalogue::names_from_record`): the main libraries decide a record's tracks, the hand's title from the user data, each artist
+/// by the name the library serves.
+struct Namer {
+    cat: Arc<crate::catalogue::Catalogue>,
+    mains: Vec<i64>,
+    kinds: Vec<(i64, crate::settings::LibraryKind)>,
+    userdata: Arc<crate::userdata::UserData>,
+    served: Option<Arc<crate::serve::Serve>>,
+}
+
+impl Namer {
+    /// The names of the copy at `dir` in catalogue folder `folder`: each music file's path inside it, with its tags. Blocking.
+    fn names(&self, folder: i64, dir: &str) -> Result<Vec<(String, crate::naming::Tags)>> {
+        let places = super::room::Places::of(&self.kinds, &self.cat.folders());
+        let library = super::requests::library_of(&self.kinds, &places);
+        let title = |record: i64| self.userdata.overrides_of(&crate::serve::ids::record(record)).ok().and_then(|o| o.title);
+        let served = |ids: &[i64]| -> std::collections::HashMap<i64, String> {
+            let Some(s) = self.served.as_ref() else { return Default::default() };
+            let asked: Vec<String> = ids.iter().map(|id| crate::serve::ids::artist(*id)).collect();
+            let named = s.library.names_of(&asked).unwrap_or_default();
+            ids.iter().zip(&asked).filter_map(|(id, a)| named.get(a).map(|n| (*id, n.clone()))).collect()
+        };
+        self.cat.names_from_record(folder, dir, &self.mains, &title, &served, &library)
+    }
+
+    /// Whether the folder `to` in catalogue folder `target` holds a copy of the record the copy at `dir` in `folder` is (T-COU-14).
+    /// Blocking.
+    fn held_there(&self, folder: i64, dir: &str, target: i64, to: &str) -> Result<bool> {
+        let there = self.cat.records_under(target, to)?;
+        Ok(!there.is_empty() && self.cat.records_under(folder, dir)?.iter().any(|r| there.contains(r)))
+    }
+}
+
+/// The words a Replace asked to carry over is refused with, whole, nothing moved (T-COU-5): writing into files is quiet in 0.18.
+pub const QUIET: &str = "Quiet until 0.19";
 
 /// A file's size and modification time in milliseconds, as a copy is told by (T1); none where no file is there.
 fn stamp_of(path: &std::path::Path) -> Option<(u64, i64)> {
@@ -1250,6 +1291,40 @@ impl IncomingService {
         self.lib.is_kept(target).then(|| self.placing_layout(source_id, target).ok()).flatten().filter(|(_, asks)| *asks).map(|(t, _)| t.to_string())
     }
 
+    /// The copy the gate places at `dir` in catalogue folder `target` told to the catalogue as its record's (`Catalogue::place_copy`;
+    /// COU.17 (c), (d), T-COU-16): the record the copy at `at` is. Never stops the move: what could not be told is logged, and the
+    /// copy is gathered as before.
+    async fn place(&self, at: &Located, target: i64, dir: &str) {
+        let (c, from, to, id) = (self.lib.catalogue(), (at.dir.folder, at.dir.dir.clone()), dir.to_string(), at.album.id.clone());
+        let placed = crate::run::spawn_blocking(move || -> Result<()> {
+            let record = match crate::serve::ids::record_number(&id) {
+                Some(r) => Some(r),
+                None => c.records_under(from.0, &from.1)?.first().copied(),
+            };
+            if let Some(record) = record {
+                c.place_copy(target, &to, record)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+        if let Err(e) = placed {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "a placed copy not told to the catalogue");
+        }
+    }
+
+    /// What names a copy's files from its record's facts (COU.15).
+    fn namer(&self) -> Namer {
+        Namer {
+            cat: self.lib.catalogue(),
+            mains: self.lib.main_folders(),
+            kinds: self.folder_kinds(),
+            userdata: self.lib.playlists_db().clone(),
+            served: served(),
+        }
+    }
+
     /// Work out Keep for an album into the main library in catalogue folder `target`: its new names, or why not. Reads
     /// the disk and the catalogue; changes nothing.
     async fn plan_keep(&self, at: &Located, target: i64, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
@@ -1259,19 +1334,19 @@ impl IncomingService {
             Ok((t, _)) => t,
             Err(waits) => return Ok((music, Err(KeepRefused::Learning(waits)))),
         };
-        let (c, folder, dir, root, music_, year) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string));
+        let (namer, folder, dir, root, music_, year) = (self.namer(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string));
         let plan = crate::run::spawn_blocking(move || -> Result<Result<crate::incoming::KeepPlan, KeepRefused>> {
-            let prefix = format!("{dir}/");
-            let music_files: Vec<(String, crate::naming::Tags)> = c
-                .album_tags(folder, &dir)?
-                .into_iter()
-                .map(|(rel, tags)| (rel.strip_prefix(&prefix).unwrap_or(&rel).to_string(), crate::naming::Tags(tags)))
-                .collect();
+            // Named from the record's facts in the database (COU.15), never the files' raw tags.
+            let music_files = namer.names(folder, &dir)?;
             let others: Vec<String> =
                 files_under(&root.join(&dir)).into_iter().filter(|f| !music_files.iter().any(|(m, _)| m == f)).collect();
             let plan = crate::incoming::plan_keep(&template, &music_files, &others, year.as_deref())
                 .map(|p| crate::incoming::follow_spelling(p, |parent| crate::incoming::folders_in(&music_, parent)));
             Ok(match plan {
+                // A copy of its record lies there already (T-COU-14): two copies never share a folder; Replace in is the gate's way.
+                Ok(plan) if music_.join(&plan.folder).exists() && namer.held_there(folder, &dir, target, &plan.folder)? => {
+                    Err(KeepRefused::Other(format!("{name} already holds a copy of it in {}: Replace in {name} instead", plan.folder)))
+                }
                 Ok(plan) if music_.join(&plan.folder).exists() => Err(KeepRefused::Other(format!("{name} already has a folder named {}", plan.folder))),
                 Ok(plan) => Ok(plan),
                 Err(crate::incoming::KeepRefusal::NeedsYear) => Err(KeepRefused::NeedsYear),
@@ -1671,7 +1746,10 @@ impl IncomingService {
     ) -> Result<KeepResult, ToggleError> {
         let (what, title) = self.adopted_named(&at.source, at.dir.folder, target, &at.album.title);
         let run = super::file_runs::track(&self.journal, what, title);
+        // The one lock over the library's files (0092): a Keep never writes beside a file run, nor one beside it.
+        let turn = super::file_runs::turn(&self.journal).await;
         let done = self.keep_moving(at, target, year, converted, job).await;
+        drop(turn);
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(at, target)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
@@ -1705,7 +1783,8 @@ impl IncomingService {
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
-        self.complete_covers(at).await;
+        // Nothing put inside or beside the files (COU.12, GEN.58): an arrival is added as it arrived, its picture the store's
+        // resolver's to show.
         let (root, plan) = self.plan_move(at, target, year).await?;
         let plan = plan.map_err(ToggleError::from)?;
         if !self.can_write(&at.root).await || !self.can_write(&root).await {
@@ -1768,6 +1847,9 @@ impl IncomingService {
             self.hold(p).await;
         }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
+        // The copy it places told to the catalogue before its files appear there (COU.17 (c), T-COU-16): gathered by its record and
+        // its folder, never by the tag hash.
+        self.place(at, target, &plan.folder).await;
         let (files, held) = (self.files.clone(), underway.clone());
         let moved = crate::run::spawn_blocking(move || {
             let _held = held;
@@ -1789,26 +1871,6 @@ impl IncomingService {
             carry_on::carry_on(self.lib.clone(), p, &event);
         }
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
-    }
-
-    /// Before an album moves into the library: its cover inside every track and as a file next to them (the owner,
-    /// 2026-10-19; `covers_inside`), in its own folder, so the cover file moves with it and an Undo takes it back.
-    /// Never stops the move: what could not be done is logged.
-    async fn complete_covers(&self, at: &Located) {
-        let dir = at.root.join(&at.dir.dir);
-        let shown = dir.display().to_string();
-        match crate::run::spawn_blocking(move || crate::covers_inside::complete(&dir)).await {
-            Ok(Ok(done)) => {
-                if done.cover_file.is_some() || !done.embedded.is_empty() {
-                    tracing::info!("covers: {shown}: cover file written: {}, inside {} tracks", done.cover_file.is_some(), done.embedded.len());
-                }
-                for (t, why) in done.left {
-                    tracing::warn!("covers: {} left without a picture inside: {why}", t.display());
-                }
-            }
-            Ok(Err(e)) => tracing::warn!("covers: {shown}: {e:#}"),
-            Err(e) => tracing::warn!("covers: {shown}: {e}"),
-        }
     }
 
     /// What became of a server's album after Keep, Replace or Delete; `None` when none of them happened to it.
@@ -4263,7 +4325,7 @@ mod tests {
 
 /// Where a record's copy in catalogue folder `folder` lies. Cratarr's own alone: another server's id is no record.
 pub(super) async fn copy_dir_in(album: &str, folder: i64) -> Option<String> {
-    let (served, id) = (crate::serve::instance()?, album.to_string());
+    let (served, id) = (served()?, album.to_string());
     let copies = crate::run::spawn_blocking(move || served.library.copies_of(&id)).await.ok()?.ok()?;
     copies.into_iter().find(|c| c.folder == folder).map(|c| c.dir)
 }

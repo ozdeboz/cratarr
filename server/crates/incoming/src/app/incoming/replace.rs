@@ -42,8 +42,6 @@ pub struct ReplacePreview {
     pub diff: Vec<TagDiff>,
     /// What the new copy lacks that the album had ("Year", "MusicBrainz ids", "4 fewer tags").
     pub lost: Vec<String>,
-    /// What "Replace and carry over" brings into the new copy, and what follows the album by itself.
-    pub carry: Vec<String>,
     /// How many files it writes: every file of the new copy, music and others (RY01's sheet says it, as Copy to's does).
     pub files: usize,
     /// The new copy's library: someone's own music for a Replace from it (RY01), whose copy it is; else its Incoming library.
@@ -68,7 +66,6 @@ impl ReplacePreview {
             covers: ReplaceCovers::default(),
             diff: Vec::new(),
             lost: Vec::new(),
-            carry: Vec::new(),
             files: 0,
             from: Some(from),
             from_dir: None,
@@ -174,10 +171,6 @@ const COMPARED: [&str; 13] = [
     "musicbrainz_trackid",
     "musicbrainz_albumartistid",
 ];
-/// What Cratarr knows of the album that carries over into the new copy: its MusicBrainz ids, and its numbers (as
-/// Renumber may have set them).
-const CARRIED: [&str; 7] =
-    ["musicbrainz_albumid", "musicbrainz_releasegroupid", "musicbrainz_albumartistid", "musicbrainz_trackid", "musicbrainz_artistid", "tracknumber", "discnumber"];
 
 type Named = std::collections::BTreeMap<String, String>;
 
@@ -193,9 +186,9 @@ fn named(path: &std::path::Path) -> Named {
     out
 }
 
-/// The differences of each pair (the old file in its main library, the new one in Incoming), what the new copy loses,
-/// and what carrying over brings. Blocking: it reads every file's tags.
-fn compare(pairs: &[(PathBuf, PathBuf)], keep_cover: bool) -> (Vec<TagDiff>, Vec<String>, Vec<String>) {
+/// The differences of each pair (the old file in its main library, the new one in Incoming), and what the new copy loses. Nothing is
+/// carried into the new copy: writing into files is quiet in 0.18 (T-COU-5). Blocking: it reads every file's tags.
+fn compare(pairs: &[(PathBuf, PathBuf)]) -> (Vec<TagDiff>, Vec<String>) {
     let read: Vec<(String, Named, Named)> =
         pairs.iter().map(|(o, n)| (n.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(), named(o), named(n))).collect();
     let mut diff = Vec::new();
@@ -230,38 +223,7 @@ fn compare(pairs: &[(PathBuf, PathBuf)], keep_cover: bool) -> (Vec<TagDiff>, Vec
     if has < had {
         lost.push(format!("{} fewer tags", had - has));
     }
-    let differs_in = |fields: &[&str]| read.iter().any(|(_, o, n)| fields.iter().any(|f| o.contains_key(*f) && o.get(*f) != n.get(*f)));
-    let mut carry = Vec::new();
-    if differs_in(&CARRIED[..5]) {
-        carry.push("MusicBrainz ids".to_string());
-    }
-    if differs_in(&CARRIED[5..]) {
-        carry.push("Track numbers".to_string());
-    }
-    if keep_cover {
-        carry.push("Cover".to_string());
-    }
-    // These follow the album by its id, whatever the files say.
-    carry.extend(["Release type", "Album tags"].map(String::from));
-    (diff, lost, carry)
-}
-
-/// Carries what Cratarr knows of the album into the new copy before Replace (0.9.7, "Replace and carry over"): each new
-/// file gets its old one's MusicBrainz ids and numbers where they differ. The new copy is changed where it lies, so an
-/// Undo of Replace brings it back to Incoming as it was carried. Never stops Replace: what could not be written is
-/// logged.
-fn carry_over(pairs: &[(PathBuf, PathBuf)]) {
-    for (old, new) in pairs {
-        let (o, n) = (named(old), named(new));
-        let set: Vec<(&'static str, Option<String>)> =
-            CARRIED.iter().filter(|f| o.contains_key(**f) && o.get(**f) != n.get(**f)).map(|f| (*f, o.get(*f).cloned())).collect();
-        if set.is_empty() {
-            continue;
-        }
-        if let Err(e) = crate::app::fixes::write(new, &set) {
-            tracing::warn!("replace: {} not carried over: {e:#}", new.display());
-        }
-    }
+    (diff, lost)
 }
 
 /// Each old track in its main library (at `music`) with the new file taking it over, as paths.
@@ -291,45 +253,34 @@ fn covers_of(source_id: &str, album_id: &str, new: Option<&str>, main: i64, old:
     ReplaceCovers { current, new: Some(cover_at(source_id, album_id, new)) }
 }
 
-/// The old album's cover written into the new copy's folder before Replace (0.9.5, `cover: keep`): its cover file
-/// (else the picture inside its first track) beside the new tracks and inside each, the copy's own cover file set aside
-/// in the data folder. Never stops Replace: what could not be done is logged.
-fn keep_cover(old: &std::path::Path, new: &std::path::Path) {
+/// The old copy's cover kept before Replace (0.9.5's `cover: keep`; COU.12 (b), T-COU-8, T-COU-15): where no hand picked the
+/// record's cover, the old copy's picture (its cover file, else the picture inside its first track) becomes the record's chosen
+/// cover in Cratarr's store, kept before the old files go to the trash; a hand's pick stays as it is. Nothing is written into or
+/// beside the new copy (GEN.58). Blocking; never stops Replace: what could not be kept is logged.
+pub(crate) fn keep_cover(cat: &crate::catalogue::Catalogue, record: i64, old: &std::path::Path, by: &str) -> Result<bool> {
+    if cat.kept_cover(record)?.is_some_and(|k| k.chosen()) {
+        return Ok(false);
+    }
     let picture = match crate::serve::art::cover_file(old) {
         Some(f) => std::fs::read(&f).ok(),
         None => crate::covers_inside::tracks_of(old).iter().find_map(|t| crate::serve::art::embedded(t)).map(|(_, b)| b),
     };
-    let Some(data) = picture else {
+    let Some(bytes) = picture else {
         tracing::info!("covers: {} has no cover to keep", old.display());
-        return;
+        return Ok(false);
     };
-    let mime = crate::serve::art::sniff(&data);
-    let ext = match mime {
-        "image/png" => "png",
-        "image/webp" => "webp",
-        "image/gif" => "gif",
-        _ => "jpg",
+    let cover = crate::catalogue::covers::Cover {
+        mime: crate::serve::art::sniff(&bytes).to_string(),
+        bytes,
+        source: by.to_string(),
+        who: None,
+        at: epoch_now(),
+        how: crate::catalogue::covers::KEPT.to_string(),
+        run: None,
+        change: None,
     };
-    if let Some(own) = crate::serve::art::cover_file(new) {
-        let aside = crate::serve::instance().and_then(|s| s.data_dir.clone()).map(|d| std::path::Path::new(&d).join("cover-undo").join(format!("replace-{}", epoch_now())));
-        if let Some(aside) = aside
-            && std::fs::create_dir_all(&aside).is_ok()
-            && let Some(name) = own.file_name()
-        {
-            let _ = std::fs::copy(&own, aside.join(name));
-        }
-        if let Err(e) = std::fs::remove_file(&own) {
-            tracing::warn!("covers: {}: {e}", own.display());
-            return;
-        }
-    }
-    if let Err(e) = crate::covers_inside::write_file(&new.join(format!("cover.{ext}")), &data) {
-        tracing::warn!("covers: {}: {e:#}", new.display());
-        return;
-    }
-    for (t, why) in crate::covers_inside::replace(&crate::covers_inside::tracks_of(new), Some((&data, mime))) {
-        tracing::warn!("covers: {} kept its own picture: {why}", t.display());
-    }
+    cat.keep_cover(record, &cover)?;
+    Ok(true)
 }
 
 #[derive(Debug, Serialize)]
@@ -443,7 +394,7 @@ impl IncomingService {
             return Ok((folder, dir));
         }
         let (mains, id, place) = (self.lib.main_folders(), at.album.id.clone(), (at.dir.folder, at.dir.dir.clone()));
-        let found = match crate::serve::instance() {
+        let found = match super::served() {
             Some(served) => crate::run::spawn_blocking(move || -> Result<Option<(i64, String)>> {
                 let copies = served.library.copies_of(&id)?;
                 let own = copies
@@ -483,6 +434,7 @@ impl IncomingService {
         let (c, folder, dir, root, year) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string));
         // The served library the guard below reads (RF11): the running server's, or a unit test's (`incoming::served`).
         let served = super::served();
+        let namer = self.namer();
         crate::run::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
             // The old album's folder goes to the trash whole, so what else lies in it must not; at the library's root, the library
             // would go with it.
@@ -498,7 +450,9 @@ impl IncomingService {
             let new = album_files(&c, folder, &dir)?;
             let old = album_files(&c, main, &old_dir)?;
             let new_others: Vec<String> = files_under(&root.join(&dir)).into_iter().filter(|f| !new.iter().any(|m| &m.rel == f)).collect();
-            let plan = match crate::incoming::plan_replace(&template, &old, &new, &new_others, year.as_deref()) {
+            // The new files named from the record's facts (COU.15, COU.7), paired by the tracks they hold (C37a, PAIR01.19).
+            let names = namer.names(folder, &dir)?;
+            let plan = match crate::incoming::plan_replace(&template, &old, &new, &names, &new_others, year.as_deref()) {
                 Ok(p) => {
                     let keep = crate::incoming::KeepPlan { folder: p.folder, moves: p.moves };
                     let keep = crate::incoming::follow_spelling(keep, |parent| crate::incoming::folders_in(&music, parent));
@@ -538,7 +492,7 @@ impl IncomingService {
         Ok(match self.plan_replace(&at, into, year).await? {
             Ok(p) => {
                 let pairs = pairs_of(&p.root, &p.old_dir, &at, &p.plan);
-                let (diff, lost, carry) = crate::run::spawn_blocking(move || compare(&pairs, true)).await.unwrap_or_default();
+                let (diff, lost) = crate::run::spawn_blocking(move || compare(&pairs)).await.unwrap_or_default();
                 ReplacePreview {
                     covers: covers_of(source_id, album_id, new.as_deref(), p.main, kept.as_deref(), &p.old_dir),
                     title: at.album.title,
@@ -551,7 +505,6 @@ impl IncomingService {
                     acquisition,
                     diff,
                     lost,
-                    carry,
                     files: p.plan.moves.len(),
                     from,
                     from_dir,
@@ -569,7 +522,6 @@ impl IncomingService {
                 acquisition,
                 diff: Vec::new(),
                 lost: Vec::new(),
-                carry: Vec::new(),
                 files: 0,
                 from,
                 from_dir,
@@ -623,7 +575,7 @@ impl IncomingService {
         Ok(match self.plan_from_copy(&at, main.clone(), year).await? {
             Ok(p) => {
                 let pairs = pairs_of(&p.root, &p.old_dir, &at, &p.plan);
-                let (diff, lost, _) = crate::run::spawn_blocking(move || compare(&pairs, false)).await.unwrap_or_default();
+                let (diff, lost) = crate::run::spawn_blocking(move || compare(&pairs)).await.unwrap_or_default();
                 ReplacePreview {
                     title: at.album.title,
                     old: p.old_dir,
@@ -636,8 +588,7 @@ impl IncomingService {
                     covers: ReplaceCovers::default(),
                     diff,
                     lost,
-                    carry: Vec::new(),
-                    files: p.plan.moves.len(),
+                        files: p.plan.moves.len(),
                     from,
                     from_dir,
                 }
@@ -654,7 +605,6 @@ impl IncomingService {
                 covers: ReplaceCovers::default(),
                 diff: Vec::new(),
                 lost: Vec::new(),
-                carry: Vec::new(),
                 files: 0,
                 from,
                 from_dir,
@@ -699,6 +649,9 @@ impl IncomingService {
     pub(super) async fn replacing_from_copy(&self, at: &Located, main: (i64, String), year: Option<&str>, sheet: Option<&ReplaceSheet>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(&at.album.id, main.0)?;
         let _alone = self.alone(&at.album.id, main.0, &at.album.title, "being replaced")?;
+        // The one lock over the library's files (0092), taken after the one-at-a-time guard, so a second tap at once is told at once
+        // (RY01.13) and none writes beside a file run.
+        let _turn = crate::app::file_runs::turn(&self.journal).await;
         let now = epoch_now();
         let (event, planned, music) = self.event_from_copy(at, main, year, now).await?;
         if sheet.is_some_and(|s| *s != planned) {
@@ -1028,6 +981,10 @@ impl IncomingService {
     /// so a refusal shows at once.
     #[allow(clippy::too_many_arguments)]
     pub async fn replace(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
+        // "Replace and carry over" writes into the new copy: refused whole, nothing moved (T-COU-5, GEN.58).
+        if carry {
+            return Err(ToggleError::Refused(super::QUIET.into()));
+        }
         let at = self.locate(source_id, album_id, from).await?;
         self.refuse_if_queued(album_id, at.dir.folder)?;
         let into = self.replaced_in(source_id, to)?;
@@ -1047,19 +1004,14 @@ impl IncomingService {
         if !self.can_write(&at.root).await || !self.can_write(&music).await {
             return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
-        // The old album's cover kept (0.9.5, the owner's choice in the ask): written into the new copy first, so it
-        // moves in with it (a conversion's tracks get it inside again from the cover file).
-        if keep {
-            let (old, new) = (music.join(&planned.old_dir), at.root.join(&at.dir.dir));
-            if let Err(e) = crate::run::spawn_blocking(move || keep_cover(&old, &new)).await {
-                tracing::warn!("covers: {e}");
-            }
-        }
-        // What Cratarr knows of the album carried into the new copy (0.9.7, "Replace and carry over").
-        if carry {
-            let pairs = pairs_of(&music, &planned.old_dir, &at, &planned.plan);
-            if let Err(e) = crate::run::spawn_blocking(move || carry_over(&pairs)).await {
-                tracing::warn!("replace: {e}");
+        // The old copy's cover kept (0.9.5, the owner's choice in the ask; COU.12 (b)): the record's chosen cover in Cratarr's store
+        // where no hand picked one, before the old files go to the trash; nothing written into the new copy.
+        if keep && let Some(record) = crate::serve::ids::record_number(album_id) {
+            let (old, c, by) = (music.join(&planned.old_dir), self.lib.catalogue(), format!("files@{}", self.library_name(source_id, planned.main)));
+            match crate::run::spawn_blocking(move || keep_cover(&c, record, &old, &by)).await {
+                Ok(Err(e)) => tracing::warn!("covers: {e:#}"),
+                Err(e) => tracing::warn!("covers: {e}"),
+                Ok(Ok(_)) => {}
             }
         }
         let quality = self.quality_at(source_id, planned.main);
@@ -1083,7 +1035,10 @@ impl IncomingService {
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
         let run = crate::app::file_runs::track(&self.journal, "replace", format!("Replaced: {}", at.album.title));
+        // The one lock over the library's files (0092): a Replace never writes beside a file run.
+        let turn = crate::app::file_runs::turn(&self.journal).await;
         let done = self.replacing(at, into, year, converted, job).await;
+        drop(turn);
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(at, into)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
@@ -1100,7 +1055,7 @@ impl IncomingService {
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
-        self.complete_covers(at).await;
+        // Nothing put inside or beside the new copy (COU.12, GEN.58): its files go as they arrived.
         let Planned { main, root: music, old_dir, old_files, plan } = self.plan_replace(at, Some(into), year).await?.map_err(refused)?;
         if !self.can_write(&at.root).await || !self.can_write(&music).await {
             return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
@@ -1196,6 +1151,8 @@ impl IncomingService {
             self.hold(p).await;
         }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
+        // The new copy told to the catalogue as its record's before its files appear (COU.17 (d), COU.7, T-COU-16).
+        self.place(at, main, &plan.folder).await;
         let (files, held) = (self.files.clone(), underway.clone());
         let moved = crate::run::spawn_blocking(move || {
             let _held = held;

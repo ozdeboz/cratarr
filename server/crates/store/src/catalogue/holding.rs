@@ -317,6 +317,28 @@ pub struct RecordRead {
     pub guesses: Vec<cratarr_domain::facts::Reference>,
 }
 
+impl RecordRead {
+    /// Each source's value of one of its facts, per reference (`kind:value`, none for a fact no reference gives), each a guess's where
+    /// its reference is one (VR8): what `resolve()` reads (VR39). A value that does not read as one is none.
+    pub fn said_of<T: std::str::FromStr>(&self, fact: &str) -> Vec<cratarr_domain::facts::Said<T>> {
+        self.said
+            .iter()
+            .filter(|s| s.fact == fact)
+            .map(|s| {
+                let reference = s.of.split_once(':').map(|(kind, value)| cratarr_domain::facts::Reference::new(&s.source, kind, value));
+                let guessed = reference.as_ref().is_some_and(|r| self.guesses.contains(r));
+                cratarr_domain::facts::Said { reference, source: s.source.clone(), value: s.value.as_deref().and_then(|v| v.parse().ok()), guessed }
+            })
+            .collect()
+    }
+
+    /// Its year by the one rule (`facts::record_year`): a had record's (a copy present) the one it was made with, else its sources'.
+    pub fn year(&self) -> cratarr_domain::facts::Resolved<i32> {
+        let had = self.copies.copies.iter().any(|c| c.present > 0);
+        cratarr_domain::facts::record_year(None, had, self.row.year, &self.said_of("year"), self.pick.as_ref())
+    }
+}
+
 /// `Catalogue::record_read` in the caller's transaction.
 pub fn record_read_in(tx: &Connection, id: i64, library: &dyn Fn(i64) -> Library) -> Result<Option<RecordRead>> {
     let Some(end) = super::records::merged_end(tx, id)? else { return Ok(None) };

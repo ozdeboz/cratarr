@@ -366,3 +366,66 @@ impl Catalogue {
         Ok(Some((report, merges)))
     }
 }
+
+/// The part `covers`' mark (SCENARIOS-COUPLING COU.20, T-COU-21): its report, in `FactsReport`'s shape.
+pub const COVERS: &str = "018:covers";
+
+/// A 0.17 Change cover pick as its kept run gives it: the record it was for (`al-<n>`, followed through merges), the picture's bytes
+/// read from what the run kept (the file it wrote), who and when (the run's), and the run, whose Undo drops the pick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoverPick {
+    pub record: i64,
+    pub bytes: Vec<u8>,
+    pub who: Option<String>,
+    pub at: i64,
+    pub run: i64,
+}
+
+impl Catalogue {
+    /// The part `covers` (COU.20, T-COU-21), once: each 0.17 Change cover pick still kept and not undone (`picks`, the journal's,
+    /// read by the app) becomes its record's chosen cover in Cratarr's store, by the hand, at its run's time; of two picks of one
+    /// record the later stays. A record a hand picked since in the store keeps that. `unknown`: picks whose run 0.17 pruned (what the
+    /// data folder still holds of them), listed: they can't be known as picks, so their records show their files' picture (C-COU-6).
+    /// No file is read but the kept pictures, and none written. One IMMEDIATE transaction whose last write is its mark; `after` heard
+    /// before it. Done before: none. Blocking.
+    pub fn step_018_covers(&self, picks: &[CoverPick], unknown: &[String], after: &dyn Fn() -> Result<()>) -> Result<Option<FactsReport>> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.query_row("SELECT 1 FROM meta WHERE key = ?1", [COVERS], |_| Ok(())).optional()?.is_some() {
+            return Ok(None);
+        }
+        let mut report = FactsReport::default();
+        let mut picks: Vec<&CoverPick> = picks.iter().collect();
+        picks.sort_by_key(|p| (p.at, p.run));
+        for p in picks {
+            let Some(record) = super::records::merged_end(&tx, p.record)? else {
+                report.list("a 0.17 cover pick of a record no longer known", ids::record(p.record));
+                continue;
+            };
+            let held: Option<(String, i64)> = tx.query_row("SELECT how, at FROM record_covers WHERE record = ?1", [record], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+            if held.as_ref().is_some_and(|(how, at)| how != super::covers::CARRIED && how != super::covers::FIRST && *at > p.at) {
+                report.list("a 0.17 cover pick a later hand pick keeps", ids::record(record));
+                continue;
+            }
+            let cover = super::covers::Cover {
+                mime: crate::serve::art::sniff(&p.bytes).to_string(),
+                bytes: p.bytes.clone(),
+                source: "upload".to_string(),
+                who: p.who.clone(),
+                at: p.at,
+                how: super::covers::CARRIED.to_string(),
+                run: Some(p.run),
+                change: None,
+            };
+            super::covers::keep_in(&tx, record, &cover)?;
+            report.count("0.17 cover picks carried", 1);
+        }
+        for u in unknown {
+            report.list("a 0.17 cover pick whose run was pruned: its files' picture shows", u.clone());
+        }
+        after()?;
+        tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![COVERS, serde_json::to_string(&report)?])?;
+        tx.commit()?;
+        Ok(Some(report))
+    }
+}

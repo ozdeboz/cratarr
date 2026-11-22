@@ -21,11 +21,20 @@ pub(super) enum Placed {
     Edition { of: i64, title: String, artist: String },
 }
 
-/// A placed file's told place while it is as placed (T-COU-17): its place on its record's list, where its size and time are the ones
-/// first read (none read yet: as placed).
+/// A placed file's tags as a read leaves them, in their order: what `placements.heard` keeps of its first read (T-COU-17). For a query
+/// over `placements`.
+pub(super) const HEARD: &str = "(SELECT group_concat(g.name || '=' || g.value, char(31)) FROM (SELECT name, value FROM tags t
+     WHERE t.folder = placements.folder AND t.rel = placements.path AND t.name IS NOT NULL ORDER BY t.n) g)";
+
+/// A placement's file still holds the tags first read (none read yet: as placed). For a query over `placements`.
+pub(super) const SAME_TAGS: &str = "(placements.heard IS NULL OR placements.heard IS (SELECT group_concat(g.name || '=' || g.value, char(31)) FROM
+     (SELECT name, value FROM tags t WHERE t.folder = placements.folder AND t.rel = placements.path AND t.name IS NOT NULL ORDER BY t.n) g))";
+
+/// A placed file's told place while it is as placed (T-COU-17): its place on its record's list, where its size, time and tags are the
+/// ones first read (none read yet: as placed).
 pub(super) fn told_of(db: &Connection, folder: i64, rel: &str, size: i64, mtime: i64) -> Result<Option<(u32, u32)>> {
     let row: Option<(Option<u32>, Option<u32>, Option<i64>, Option<i64>)> = db
-        .prepare_cached("SELECT disc, number, size, mtime FROM placements WHERE folder = ?1 AND path = ?2 AND number IS NOT NULL")?
+        .prepare_cached(&format!("SELECT disc, number, size, mtime FROM placements WHERE folder = ?1 AND path = ?2 AND number IS NOT NULL AND {SAME_TAGS}"))?
         .query_row(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
         .optional()?;
     Ok(row.and_then(|(disc, number, s, m)| {
@@ -108,7 +117,7 @@ pub(super) type Told = (u32, u32, Option<i64>, Option<i64>);
 
 /// The files placed for `record` (COU.18), by (catalogue folder, path): each its told place and its size and time as first read.
 pub(super) fn told_files_in(db: &Connection, record: i64) -> Result<HashMap<(i64, String), Told>> {
-    let mut st = db.prepare_cached("SELECT folder, path, disc, number, size, mtime FROM placements WHERE record = ?1 AND number IS NOT NULL")?;
+    let mut st = db.prepare_cached(&format!("SELECT folder, path, disc, number, size, mtime FROM placements WHERE record = ?1 AND number IS NOT NULL AND {SAME_TAGS}"))?;
     let rows = st.query_map([record], |r| {
         Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get::<_, Option<u32>>(2)?.unwrap_or(1), r.get::<_, u32>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, Option<i64>>(5)?)))
     })?;

@@ -171,6 +171,8 @@ impl App {
         let commands = Arc::new(commands::Commands::new(journal.clone(), served.clone(), trash_days));
         if let Some(s) = &served {
             commands.register(Arc::new(crates::out::OutKind { serve: s.clone() }));
+            // Change cover's Undo (COU.11): the cover shown before, from Cratarr's store.
+            commands.register(Arc::new(covers::CoverKind { serve: s.clone() }));
         }
         // What a stop left between a Change's intent and its end, settled by what its store shows.
         if let Err(e) = commands.settle().await {

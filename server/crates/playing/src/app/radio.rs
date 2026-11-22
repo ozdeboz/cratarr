@@ -431,7 +431,7 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
     let mut st = lib.prepare(&format!(
         "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres, s.duration_ms, s.bpm, {ALBUM_ARTIST_HEARD}, s.folder
          FROM songs s LEFT JOIN albums a ON a.id = s.album_id
-         ORDER BY s.album_id, s.disc_no, s.track_no, s.rel"
+         ORDER BY s.album_id, coalesce(s.disc_no, 1), s.track_no IS NULL, s.track_no, s.rel"
     ))?;
     let mut songs = Vec::new();
     let rows = st.query_map([], |r| {

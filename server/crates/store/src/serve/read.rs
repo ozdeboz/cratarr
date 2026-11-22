@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, params_from_iter};
 
 use super::api::{Album, Artist, ArtistRef, GenreRef, ReplayGain, Song, content_type, iso};
 use super::copies::{Copy, Kind, copy_for};
@@ -22,6 +22,16 @@ const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.ge
 /// unknown or nothing (`albums.duration_ms` counts those as nothing), as `source::total_secs`. Over the songs' album
 /// index, in the query that reads the album's format and bitrate.
 const ALBUM_LENGTH: &str = "(SELECT CASE WHEN count(*) = count(nullif(s.duration_ms, 0)) THEN sum(s.duration_ms) END FROM songs s WHERE s.album_id = a.id)";
+
+/// What a built album's secondary types were heard from (`Library::secondaries_heard`, VR49): its MusicBrainz release, MusicBrainz's
+/// and Discogs' secondaries as kept (none: not asked or not found), and the rule's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Heard {
+    pub mbid: Option<String>,
+    pub musicbrainz: Option<Vec<String>>,
+    pub discogs: Option<Vec<String>>,
+    pub rule: Vec<String>,
+}
 
 /// A copy as a source's album listing gives it (`Library::albums_in`).
 #[derive(Debug, Clone)]
@@ -492,7 +502,8 @@ impl Library {
     pub fn album(&self, id: &str) -> Result<Option<Album>> {
         let Some(mut album) = self.albums_by_id(&[id.to_string()])?.pop() else { return Ok(None) };
         let db = self.db();
-        let ns = numbers(&db, "SELECT n FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no, rel", &[&id])?;
+        // One order (T-COU-4): a song with no place after those with one, by path.
+        let ns = numbers(&db, "SELECT n FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no IS NULL, track_no, rel", &[&id])?;
         let mut songs = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
         self.song_artists(&db, &mut songs)?;
         album.song = Some(songs);
@@ -568,7 +579,7 @@ impl Library {
             "SELECT s.n FROM songs s JOIN albums a ON a.id = s.album_id
                WHERE s.album_id IN (SELECT album_id FROM album_artists WHERE artist_id = ?1)
                   OR s.id IN (SELECT song_id FROM song_artists WHERE artist_id = ?1)
-               ORDER BY a.year DESC, a.order_name, a.n, coalesce(s.disc_no, 1), s.track_no, s.rel",
+               ORDER BY a.year DESC, a.order_name, a.n, coalesce(s.disc_no, 1), s.track_no IS NULL, s.track_no, s.rel",
             &[&artist_id],
         )?;
         let mut own = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?;
@@ -839,7 +850,7 @@ impl Library {
     pub fn album_tracks(&self, album: &str) -> Result<Vec<(String, i64, String, String, u64, Option<u32>, Option<u32>)>> {
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT id, folder, rel, title, coalesce(duration_ms, 0), disc_no, track_no FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no, rel",
+            "SELECT id, folder, rel, title, coalesce(duration_ms, 0), disc_no, track_no FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no IS NULL, track_no, rel",
         )?;
         let rows = st.query_map([album], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)?.max(0) as u64, r.get::<_, Option<i64>>(5)?.map(|d| d.max(0) as u32), r.get::<_, Option<i64>>(6)?.map(|t| t.max(0) as u32)))
@@ -884,6 +895,25 @@ impl Library {
 
     /// These albums' kept types (GOTO.S4: the build's own, never worked out again): `release_type` and `secondary`, by id; an album
     /// not in the library left out.
+    /// What a built album's secondary types were heard from (VR49): its MusicBrainz release and that release's secondaries as kept
+    /// (`mb:<release>`), Discogs' for it (`dc:<album>`), and the rule's (`rule_secondaries`: its album artist Various Artists over
+    /// five or more track artists). None: no such album built. The record's view reads its secondaries from these with the hand's,
+    /// by the domain's one rule, as the build serves them.
+    pub fn secondaries_heard(&self, id: &str) -> Result<Option<Heard>> {
+        let db = self.db();
+        let Some(mbid): Option<Option<String>> = db.prepare_cached("SELECT mbid FROM albums WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()? else { return Ok(None) };
+        let various: bool = db
+            .prepare_cached("SELECT EXISTS (SELECT 1 FROM album_artists WHERE album_id = ?1 AND position = 0 AND lower(name) = 'various artists')")?
+            .query_row([id], |r| r.get(0))?;
+        // Its track artists by name key, as the build counts them (`rule_secondaries`).
+        let names: Vec<String> =
+            db.prepare_cached("SELECT sa.name FROM song_artists sa JOIN songs s ON s.id = sa.song_id WHERE s.album_id = ?1")?.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let artists = names.iter().map(|n| crate::serve::ids::artist_key(n)).collect::<HashSet<String>>().len();
+        let musicbrainz = mbid.as_ref().and_then(|m| self.release_types_of(&format!("mb:{m}"))).map(|k| k.1);
+        let discogs = self.release_types_of(&format!("dc:{id}")).map(|k| k.1);
+        Ok(Some(Heard { mbid, musicbrainz, discogs, rule: cratarr_domain::facts::rule_secondaries(various, artists) }))
+    }
+
     pub fn kept_types(&self, ids: &[String]) -> Result<HashMap<String, (Option<String>, Vec<String>)>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT release_type, secondary FROM albums WHERE id = ?1")?;
@@ -1281,7 +1311,7 @@ impl Library {
         let mut of: HashMap<String, Vec<Song>> = HashMap::new();
         for chunk in albums.chunks(500) {
             let marks = vec!["?"; chunk.len()].join(", ");
-            let mut st = db.prepare(&format!("SELECT {SONG_COLS} FROM songs s WHERE s.album_id IN ({marks}) ORDER BY coalesce(s.disc_no, 1), s.track_no, s.rel"))?;
+            let mut st = db.prepare(&format!("SELECT {SONG_COLS} FROM songs s WHERE s.album_id IN ({marks}) ORDER BY coalesce(s.disc_no, 1), s.track_no IS NULL, s.track_no, s.rel"))?;
             let mut songs = st.query_map(params_from_iter(chunk.iter()), song_of)?.collect::<rusqlite::Result<Vec<_>>>()?;
             self.song_artists(&db, &mut songs)?;
             for s in songs {
@@ -1465,6 +1495,19 @@ impl Library {
         Ok(Some((copy.folder, copy.dir, cover, Some(rel))))
     }
 
+    /// The files of the copy that plays (`album_art`'s), in the one order (T-COU-4): where the picture inside its files is looked
+    /// for, the first that speaks first (T-COU-22). Blocking.
+    pub fn art_files(&self, album: &str, folder: i64, dir: &str) -> Result<Vec<String>> {
+        let db = self.db();
+        let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+        let mut st = db.prepare_cached(
+            "SELECT c.rel FROM copy_files c LEFT JOIN songs s ON s.id = c.song WHERE c.album = ?1 AND c.folder = ?2 AND substr(c.rel, 1, ?3) = ?4
+             ORDER BY coalesce(s.disc_no, 1), s.track_no IS NULL, s.track_no, c.rel",
+        )?;
+        let rows = st.query_map(rusqlite::params![album, folder, prefix.chars().count() as i64, prefix], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// What a player reports about a song in Cratarr's ids (the pushed player state, decision 0031): the song id, its
     /// album's id, the album's name and album artist. `None` when the track is not in the library.
     #[allow(dead_code)] // see `SongIds`
@@ -1515,15 +1558,12 @@ impl Library {
         Ok(st.exists([id])?)
     }
 
-    /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. Copies
-    /// share their tracks, so an id on two songs is two tracks tagged alike: two records, a copy that left its record among
-    /// them. It says neither, and the data stays where it is: going to the first folder's, it would leave the record that
-    /// holds it, whichever folder that happens to be. The price: a persistent id on two songs is followed nowhere, so after
-    /// a start with its ids lost, two records of one release keep what they had on dead ids, though no song holds those
-    /// (`all_song_ids`): nothing here says which of the two they were.
+    /// Every song's persistent key with the song (COU.9, T-COU-18): what the rows on a song carry, and what they follow to a rebuilt
+    /// catalogue. Copies share their tracks, so a key on two songs is two tracks alike (two records of one release): the rows on it
+    /// follow neither, and are counted (`UserData::follow_pids`); each song's rows still carry its key.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT pid, min(id) FROM songs GROUP BY pid HAVING count(*) = 1 ORDER BY pid")?;
+        let mut st = db.prepare("SELECT pid, id FROM songs ORDER BY pid, id")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

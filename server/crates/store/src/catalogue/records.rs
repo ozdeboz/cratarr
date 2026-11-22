@@ -71,9 +71,10 @@ CREATE TABLE IF NOT EXISTS expected (
 -- placed (filled at its first read). Kept for good: it outlives C50's week and the fetcher's item. A copy placed is gathered by it,
 -- never by the tag hash (COU.17); an arrival joins its record by it, the strongest evidence (WM.8); a placed file pairs at its told
 -- place while it is as placed (WM.25 (e)). It decides only for files under its own path.
+-- `heard`: a placed file's tags as first read (T-COU-17: as placed is its size, time and tags as read at placing).
 CREATE TABLE IF NOT EXISTS placements (
   folder INTEGER NOT NULL, path TEXT NOT NULL, record INTEGER NOT NULL, track INTEGER, disc INTEGER, number INTEGER,
-  size INTEGER, mtime INTEGER, at INTEGER NOT NULL,
+  size INTEGER, mtime INTEGER, at INTEGER NOT NULL, heard TEXT,
   PRIMARY KEY (folder, path)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS placements_record ON placements (record);
 -- WM.12 (DOMAIN-CORE §12: an edition, one card): a record linked to another as its edition by evidence stored at the join (an
@@ -609,6 +610,8 @@ pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<
     )?;
     tx.execute("DELETE FROM reference_tracks WHERE record = ?1", [from])?;
     super::facts::merge_in(tx, from, into)?;
+    // Its kept cover: the later pick stays, the other a candidate (T-COU-20).
+    super::covers::merge_in(tx, from, into)?;
     // What was placed for it, and the edition it was linked to, follow it (WM.9 (b)).
     tx.execute("UPDATE placements SET record = ?2 WHERE record = ?1", params![from, into])?;
     tx.execute("UPDATE edition_links SET of = ?2 WHERE of = ?1", params![from, into])?;
@@ -820,7 +823,8 @@ fn files_named(tx: &Connection) -> Result<Vec<(i64, &'static str, String)>> {
 /// listed, as `assign` keeps the record with (CR18). What its files name and credit is the record's: an Incoming copy nobody
 /// has checked does not decide.
 fn first_ranked<'a>(albums: &'a [super::AlbumCopy], records: &[Option<i64>]) -> std::collections::BTreeMap<i64, &'a super::AlbumCopy> {
-    let key = |i: usize, a: &super::AlbumCopy| (a.rank, a.tracks.len(), std::cmp::Reverse(i));
+    // A copy whose every file Cratarr placed, as placed, speaks for no one (T-COU-1): any other first.
+    let key = |i: usize, a: &super::AlbumCopy| (!a.silent, a.rank, a.tracks.len(), std::cmp::Reverse(i));
     let mut first: std::collections::BTreeMap<i64, (usize, &super::AlbumCopy)> = std::collections::BTreeMap::new();
     for (i, (a, record)) in albums.iter().zip(records).enumerate() {
         let Some(record) = record else { continue };
@@ -966,6 +970,10 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
     // The artists a credit went from here (Z10), noted at the end where it was their last.
     let mut uncredited: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for (record, a) in first {
+        // A copy of files Cratarr placed, as placed, alone: no source of its record's credits or labels (T-COU-1, COU.2).
+        if a.silent {
+            continue;
+        }
         // Its names change on a retag only (R28, N11), as its list is let go of (R17): the copy that counts must rank at least as
         // high as the one that named it last (`named_rank`). A build without that copy (its library parked or out of reach, an
         // Incoming copy ranked first meanwhile) leaves them; a retag of it shows, as does a better copy (a Keep into Music).
@@ -1047,6 +1055,80 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![artist, at])?;
     }
     Ok(apart)
+}
+
+/// Each record's tracks' places (`tracks.disc`, `tracks.number`) from its deciding copy (`first_ranked`: a main library's first; FA2,
+/// D.1), in the record pass's transaction (SCENARIOS-COUPLING COU.5, COU.6, COU.19; T-COU-4, T-COU-10, T-COU-11; OQ-COU-1 (a)):
+/// - **a list picked** orders the record: each of the copy's files at the place of the list's track it pairs with (COU.6 (c));
+/// - **else your own files' numbers stand** (VR01: a record you have shows its files' list), each file's own (its tags', else its
+///   name's leading number); a number changed outside Cratarr is read at the scan that sees its file change (COU.6 (d));
+/// - **a file Cratarr placed, while as placed,** sits at the place it was placed for, between the files that pair with its
+///   neighbours on the list it was fetched by where the copy numbers otherwise (T-COU-10), never at its own numbers (COU.5);
+/// - a copy that no longer decides gives no place: the next one's numbers are read at that scan (COU.19).
+/// Written where they differ, so a pass over a library as it was writes nothing. How many tracks moved.
+pub(super) fn record_places(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>]) -> Result<usize> {
+    use cratarr_domain::facts::{Present, RefTrack, pairs_with};
+    let mut moved = 0;
+    let mut set = tx.prepare_cached("UPDATE tracks SET disc = ?2, number = ?3 WHERE id = ?1 AND retired_at IS NULL AND (disc IS NOT ?2 OR number IS NOT ?3)")?;
+    // An album the pass gave no record (its tracks held by files gone a while elsewhere: another copy that went) is still its tracks'
+    // record's copy: the one that decides once the other is gone (COU.19).
+    let mut of_track = tx.prepare_cached("SELECT record FROM tracks WHERE id = ?1 AND retired_at IS NULL")?;
+    let mut held: Vec<Option<i64>> = Vec::with_capacity(albums.len());
+    for (a, record) in albums.iter().zip(records) {
+        held.push(match record {
+            Some(r) => Some(*r),
+            None => match a.tracks.first() {
+                Some((track, ..)) => of_track.query_row([track], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten(),
+                None => None,
+            },
+        });
+    }
+    for (record, a) in first_ranked(albums, &held) {
+        let files: Vec<Present> = a.files.iter().map(|(folder, rel)| super::provenance::present_in(tx, *folder, rel)).collect::<Result<_>>()?;
+        let picked: Option<Vec<RefTrack>> = match super::lists::pick_in(tx, record)? {
+            Some(p) => super::lists::lists_in(tx, record)?.into_iter().find(|l| l.reference == p).map(|l| l.tracks).filter(|t| !t.is_empty()),
+            None => None,
+        };
+        let mut places: Vec<Option<(u32, Option<u32>)>> = vec![None; files.len()];
+        match &picked {
+            Some(list) => {
+                for (t, f) in pairs_with(list, &files) {
+                    places[f] = Some((list[t].disc, Some(list[t].position)));
+                }
+            }
+            None => {
+                // The list a placed file was fetched by, to find its neighbours on it (T-COU-10): the record's judging lists.
+                let lists: Vec<Vec<RefTrack>> = super::lists::lists_in(tx, record)?.into_iter().filter(|l| !l.guessed && !l.tracks.is_empty()).map(|l| l.tracks).collect();
+                for (i, f) in files.iter().enumerate() {
+                    places[i] = Some(match f.told {
+                        Some((disc, number)) => {
+                            let mut at = (disc, Some(number));
+                            for list in lists.iter().filter(|l| l.iter().any(|t| (t.disc, t.position) == (disc, number))) {
+                                let pairs = pairs_with(list, &files);
+                                let own = |position: u32| pairs.iter().find(|(t, _)| (list[*t].disc, list[*t].position) == (disc, position)).and_then(|(_, j)| files[*j].number);
+                                if let Some(before) = number.checked_sub(1).filter(|n| *n > 0).and_then(own) {
+                                    at = (disc, Some(before + 1));
+                                    break;
+                                }
+                                if let Some(after) = own(number + 1).and_then(|n| n.checked_sub(1)) {
+                                    at = (disc, Some(after));
+                                    break;
+                                }
+                            }
+                            at
+                        }
+                        None => (f.disc.unwrap_or(1), f.number),
+                    });
+                }
+            }
+        }
+        for ((track, ..), place) in a.tracks.iter().zip(&places) {
+            if let Some((disc, number)) = place {
+                moved += set.execute(params![track, disc, number])?;
+            }
+        }
+    }
+    Ok(moved)
 }
 
 /// An album's artists the files give a MusicBrainz id for, each with it (lower case), where they give as many ids as artists (R6's
@@ -4588,6 +4670,8 @@ impl Catalogue {
             for table in ["record_labels", "reference_tracks", "lists_to_read", "facts"] {
                 tx.prepare_cached(&format!("DELETE FROM {table} WHERE record = ?1"))?.execute([record])?;
             }
+            // Its kept cover and candidates with it (RT01, COU.11).
+            super::covers::forget_in(&tx, record)?;
             tx.prepare_cached("DELETE FROM records WHERE id = ?1")?.execute([record])?;
             tx.prepare_cached(FORGOTTEN)?.execute(params![subject, now])?;
         }

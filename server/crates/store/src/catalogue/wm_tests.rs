@@ -12,8 +12,8 @@ use super::holding::Copies;
 use super::identity::RefTrack;
 use crate::serve::ids;
 
-const MUSIC: i64 = 0;
-const IN: i64 = 1;
+pub(super) const MUSIC: i64 = 0;
+pub(super) const IN: i64 = 1;
 const IN2: i64 = 5;
 
 pub(super) fn library(folder: i64) -> Library {
@@ -28,19 +28,19 @@ fn catalogue() -> Catalogue {
     Catalogue::open(None, Vec::new()).unwrap()
 }
 
-fn record(cat: &Catalogue, title: &str, artist: &str) -> i64 {
+pub(super) fn record(cat: &Catalogue, title: &str, artist: &str) -> i64 {
     let db = cat.db();
     db.execute("INSERT INTO records (born, title, artist) VALUES (1, ?1, ?2)", [title, artist]).unwrap();
     db.last_insert_rowid()
 }
 
 /// A list, in order: (title, length in ms).
-fn list(tracks: &[(&str, i64)]) -> Vec<RefTrack> {
+pub(super) fn list(tracks: &[(&str, i64)]) -> Vec<RefTrack> {
     tracks.iter().zip(1..).map(|((title, ms), position)| RefTrack { disc: 1, position, title: title.to_string(), length_ms: Some(*ms), recording: None }).collect()
 }
 
 /// A list kept under a reference held `how` (the request's group: "asked").
-fn keep(cat: &Catalogue, record: i64, value: &str, tracks: &[RefTrack]) {
+pub(super) fn keep(cat: &Catalogue, record: i64, value: &str, tracks: &[RefTrack]) {
     let r = Reference::new("musicbrainz", "release", value);
     cat.db()
         .execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, ?2, ?3, ?4, 1, 'asked')", params![ids::record(record), r.source, r.kind, r.value])
@@ -78,7 +78,7 @@ fn paired(c: &Copies, folder: i64) -> u16 {
 }
 
 /// Mumia's list, T1-T4: 3:10, 4:20, 5:30, 6:40, more than 4 s apart.
-const MUMIA: [(&str, i64); 4] = [("T1", 190_000), ("T2", 260_000), ("T3", 330_000), ("T4", 400_000)];
+pub(super) const MUMIA: [(&str, i64); 4] = [("T1", 190_000), ("T2", 260_000), ("T3", 330_000), ("T4", 400_000)];
 
 /// Mumia `al-3211` with its list kept and MUSIC's copy, tagged; its tracks.
 fn mumia(cat: &Catalogue) -> (i64, Vec<i64>) {
@@ -143,13 +143,13 @@ fn a_file_without_a_title_pairs_by_its_name_or_its_length() {
 }
 
 /// A catalogue on real folders (MUSIC, IN; IN2 is the second's place in these tests), its files read as a pass reads them.
-struct Folders {
-    roots: Vec<PathBuf>,
-    cat: Catalogue,
+pub(super) struct Folders {
+    pub(super) roots: Vec<PathBuf>,
+    pub(super) cat: Catalogue,
 }
 
 impl Folders {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let roots: Vec<PathBuf> = [0, 1].iter().map(|n| std::env::temp_dir().join(format!("cratarr-wm-{name}-{n}-{}", std::process::id()))).collect();
         for root in &roots {
             std::fs::remove_dir_all(root).ok();
@@ -160,7 +160,7 @@ impl Folders {
     }
 
     /// These files in `folder` (0 or 1), each (path, its tags), read and identified, each 200 s long.
-    fn add(&self, folder: i64, files: &[(&str, Vec<(&str, &str)>)]) {
+    pub(super) fn add(&self, folder: i64, files: &[(&str, Vec<(&str, &str)>)]) {
         let root = &self.roots[usize::try_from(folder).unwrap()];
         for (rel, _) in files {
             let path = root.join(rel);
@@ -176,7 +176,7 @@ impl Folders {
     }
 
     /// Every album as a build reads them now.
-    fn albums(&self) -> Vec<super::AlbumCopy> {
+    pub(super) fn albums(&self) -> Vec<super::AlbumCopy> {
         let folders: Vec<crate::serve::library::FolderRows> = self
             .cat
             .folders()
@@ -187,11 +187,11 @@ impl Folders {
     }
 
     /// A record pass over every album.
-    fn pass(&self) {
+    pub(super) fn pass(&self) {
         self.cat.assign_records(&self.albums()).unwrap();
     }
 
-    fn record_of(&self, folder: i64, rel: &str) -> Option<i64> {
+    pub(super) fn record_of(&self, folder: i64, rel: &str) -> Option<i64> {
         let track = self.cat.track_of(folder, rel)?;
         self.cat.db().query_row("SELECT record FROM tracks WHERE id = ?1", [track], |r| r.get(0)).ok().flatten()
     }
@@ -340,7 +340,7 @@ fn the_raw_tag_stays_and_the_facts_follow_the_rule() {
 
 impl Folders {
     /// These files' lengths, as a read gives them.
-    fn lengths(&self, folder: i64, files: &[(&str, i64)]) {
+    pub(super) fn lengths(&self, folder: i64, files: &[(&str, i64)]) {
         for (rel, ms) in files {
             self.cat.db().execute("UPDATE files SET duration_ms = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, ms]).unwrap();
         }
@@ -351,10 +351,10 @@ impl Folders {
     }
 }
 
-const MUMIA_DIR: &str = "soulseek/Polo & Pan/Mumia (2023) 2";
+pub(super) const MUMIA_DIR: &str = "soulseek/Polo & Pan/Mumia (2023) 2";
 
 /// Mumia `al-3211` in MUSIC (folder 0): T1-T4 tagged, its list kept (`G135`, "asked"). The record.
-fn mumia_in_music(f: &Folders) -> i64 {
+pub(super) fn mumia_in_music(f: &Folders) -> i64 {
     let files: Vec<(String, Vec<(&str, String)>)> = MUMIA
         .iter()
         .zip(1..)
@@ -372,7 +372,7 @@ fn mumia_in_music(f: &Folders) -> i64 {
 
 /// `ss-140`'s folder in folder 1 (IN2 here), as the real case has it, or every tag stripped: `b.mp3` T1, `c.mp3` "T2 www.", `a.mp3`
 /// T3, and the fourth untitled, named by the site, each within a second of its track.
-fn electronicfresh(f: &Folders, stripped: bool) -> Vec<String> {
+pub(super) fn electronicfresh(f: &Folders, stripped: bool) -> Vec<String> {
     let files = [("b.mp3", Some("T1")), ("c.mp3", Some("T2 www.")), ("a.mp3", Some("T3")), ("T4 - www.electronicfresh.com.mp3", None)];
     let rels: Vec<String> = files.iter().map(|(name, _)| format!("{MUMIA_DIR}/{name}")).collect();
     for (rel, (_, title)) in rels.iter().zip(files) {

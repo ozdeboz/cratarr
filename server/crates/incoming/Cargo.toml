@@ -17,6 +17,8 @@ test-support = ["cratarr-requests/test-support", "cratarr-playing/test-support"]
 [dependencies]
 cratarr-requests.workspace = true
 cratarr-playing.workspace = true
+# Change cover on the one path (COU.11): its command's rights and Change kind.
+cratarr-domain.workspace = true
 anyhow.workspace = true
 image.workspace = true
 lofty.workspace = true

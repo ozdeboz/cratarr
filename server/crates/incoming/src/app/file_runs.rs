@@ -887,6 +887,23 @@ async fn undo_on(app: Arc<dyn IncomingHost>, token: &str, albums: Option<Vec<Str
             tokio::time::sleep(PACE).await;
         }
         let all = run.files.iter().all(|f| f.undone);
+        // T-COU-21 (COU.20): a 0.17 Change cover's pick, carried into Cratarr's store at 0.18's step, goes with its run's Undo, so the
+        // cover shown before the run shows again.
+        if run.files.iter().any(|f| f.undone && f.whole.as_ref().is_some_and(|w| w.op == "cover"))
+            && let Some(served) = crate::serve::instance()
+        {
+            let cat = served.catalogue().clone();
+            match crate::run::spawn_blocking(move || cat.drop_covers_of_run(id)).await {
+                Ok(Ok(records)) if !records.is_empty() => {
+                    if let Err(e) = crate::run::spawn_blocking(move || served.refresh()).await.map_err(anyhow::Error::from).and_then(|r| r) {
+                        tracing::warn!(target: "library", reason = %format!("{e:#}"), "the library not built after a cover's Undo");
+                    }
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!(target: "library", reason = %format!("{e:#}"), "a carried cover pick not dropped with its run"),
+                Err(e) => tracing::warn!(target: "library", reason = %e, "a carried cover pick not dropped with its run"),
+            }
+        }
         let failed = std::mem::take(&mut status.failed);
         status = Status { failed, ..kept_status(id, at, &run, all) };
         tracing::info!(target: "library", what = %status.what, undone = all, failed = status.failed.len(), "file changes undone");

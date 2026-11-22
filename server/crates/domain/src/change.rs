@@ -77,6 +77,8 @@ pub enum ChangeKind {
     Queue(QueueChange),
     TakeBack,
     Pick,
+    /// A record's chosen cover (COU.11, FA14): kept in Cratarr's store, picked or reset by an administrator; no file written.
+    Cover,
     /// The path's own test kind (AP1): one object's picked picture, shared, an administrators' command.
     #[cfg(any(test, feature = "test-support"))]
     TestPicture,
@@ -152,6 +154,7 @@ impl ChangeKind {
             ChangeKind::Queue(Q::NewQueue),
             ChangeKind::TakeBack,
             ChangeKind::Pick,
+            ChangeKind::Cover,
         ];
         #[cfg(any(test, feature = "test-support"))]
         all.push(ChangeKind::TestPicture);
@@ -185,6 +188,7 @@ impl ChangeKind {
             ChangeKind::Queue(Q::NewQueue) => "queue:new_queue",
             ChangeKind::TakeBack => "take_back",
             ChangeKind::Pick => "pick",
+            ChangeKind::Cover => "cover",
             #[cfg(any(test, feature = "test-support"))]
             ChangeKind::TestPicture => "test_picture",
         }
@@ -205,9 +209,13 @@ impl ChangeKind {
             | ChangeKind::ArtistOut
             | ChangeKind::Discover
             | ChangeKind::Import => Scope::Account,
-            ChangeKind::Album(_) | ChangeKind::FileRun | ChangeKind::ImportUsers | ChangeKind::Tempo | ChangeKind::TakeBack | ChangeKind::Pick => {
-                Scope::Shared
-            }
+            ChangeKind::Album(_)
+            | ChangeKind::FileRun
+            | ChangeKind::ImportUsers
+            | ChangeKind::Tempo
+            | ChangeKind::TakeBack
+            | ChangeKind::Pick
+            | ChangeKind::Cover => Scope::Shared,
             ChangeKind::Queue(_) => Scope::Player,
             #[cfg(any(test, feature = "test-support"))]
             ChangeKind::TestPicture => Scope::Shared,
@@ -228,7 +236,8 @@ impl ChangeKind {
             | ChangeKind::Discover
             | ChangeKind::Tempo
             | ChangeKind::Queue(_)
-            | ChangeKind::TakeBack => Window::Day,
+            | ChangeKind::TakeBack
+            | ChangeKind::Cover => Window::Day,
             #[cfg(any(test, feature = "test-support"))]
             ChangeKind::TestPicture => Window::Day,
         }
@@ -245,7 +254,8 @@ impl ChangeKind {
             | ChangeKind::Tempo
             | ChangeKind::Queue(_)
             | ChangeKind::TakeBack
-            | ChangeKind::Pick => false,
+            | ChangeKind::Pick
+            | ChangeKind::Cover => false,
             #[cfg(any(test, feature = "test-support"))]
             ChangeKind::TestPicture => false,
         }
@@ -577,7 +587,7 @@ mod tests {
     #[test]
     fn each_kind_declares_its_scope_window_and_redo() {
         use AlbumAction as A;
-        let rows: [(ChangeKind, Scope, Window, bool); 23] = [
+        let rows: [(ChangeKind, Scope, Window, bool); 24] = [
             (ChangeKind::Playlist, Scope::Account, Window::Day, true),
             (ChangeKind::PlaylistOps, Scope::Account, Window::Day, true),
             (ChangeKind::Crate, Scope::Account, Window::Day, true),
@@ -600,6 +610,7 @@ mod tests {
             (ChangeKind::Queue(QueueChange::NewQueue), Scope::Player, Window::Day, false),
             (ChangeKind::TakeBack, Scope::Shared, Window::Day, false),
             (ChangeKind::Pick, Scope::Shared, Window::UntilPlacingBegins, false),
+            (ChangeKind::Cover, Scope::Shared, Window::Day, false),
             (ChangeKind::TestPicture, Scope::Shared, Window::Day, false),
         ];
         assert_eq!(rows.len(), ChangeKind::all().len(), "every kind in the table");

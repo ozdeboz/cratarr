@@ -3286,14 +3286,16 @@ export const getAlbumCovers = (source: string, album: string) =>
 export const lookAlbumCovers = (source: string, album: string) =>
   post<Started>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers/look`, {});
 /** A run on the one path (0.14): the choice is the yes, its Undo the run's (lib/fileRuns whenWritten). */
+/** Change cover (COU.11): the picture kept as the record's chosen cover in Cratarr's store, a command on the one path; no file is
+ *  written. Its answer's `undo` gives back the cover shown before. */
 export const setAlbumCover = (source: string, album: string, url: string) =>
-  post<FileRun>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
+  post<Answer<string | null>>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
 /** A picture of one's own as the album's cover, for everyone (its administrators', the owner 2026-10-25): written as a
  *  chosen cover is, inside the files and beside them; Undo puts the old one back. JPEG, PNG or WebP, kept as sent, at
  *  most COVER_MAX (a FLAC's picture holds 16 MiB, and every track carries it). */
 export const COVER_MAX = 12 * 1024 * 1024;
 export const uploadAlbumCover = (source: string, album: string, file: Blob) =>
-  request<FileRun>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, {
+  request<Answer<string | null>>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, {
     method: 'PUT',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,

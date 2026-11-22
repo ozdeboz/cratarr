@@ -373,6 +373,12 @@ async fn main() -> Result<()> {
             tracing::info!(target: "migration", "0.18's fold: al-{from} into al-{into}");
         }
     }
+    // Its part `covers` (COU.20), after the fold (its merges followed): 0.17's Change cover picks, not undone and still kept, the
+    // records' chosen covers in Cratarr's store, at their runs' time; what 0.17 pruned listed. No file written.
+    let (picks, unknown) = app::step_018::cover_picks(&app.journal, data_dir.as_deref().map(std::path::Path::new)).context("cannot finish 0.18's step (covers)")?;
+    if let Some(report) = served.catalogue().step_018_covers(&picks, &unknown, &|| Ok(())).context("cannot finish 0.18's step (covers)")? {
+        tracing::info!(target: "migration", "0.18's covers: {}", serde_json::to_string(&report).unwrap_or_default());
+    }
     served.set_playlists(app.crates.clone());
     // Who is still in the directory's group, every hour (decision 0051).
     serve::accounts::watch_directory(served.clone());
