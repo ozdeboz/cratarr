@@ -82,8 +82,8 @@ test('a Sounds like is the true list, by the sounds kept: what is not here is on
   heldHere.tracks = () => ['tr-100'];
   const like = await crateRows('like:tr-100@10', 0, 20, undefined, undefined, undefined, { order: 'own' });
   // Changed by design (SCENARIOS-SIM SIM.18, rule 1): tr-102 and tr-104 lack the seed's sound, so they read not alike on it, and
-  // tr-103, heard, comes before them.
-  assert.deepEqual(like.rows.map((r) => r.id), ['tr-100', 'tr-101', 'tr-103', 'tr-104', 'tr-102'], "what lacks the seed's sound comes after what has it");
+  // tr-103, heard, comes before them. Changed by design (SCENARIOS-SIM SL1): the seed's own record (tr-100, tr-101) is left out.
+  assert.deepEqual(like.rows.map((r) => r.id), ['tr-103', 'tr-104', 'tr-102'], "what lacks the seed's sound comes after what has it");
 });
 
 test('a pick holds only what plays here, and says nothing of what cannot', async () => {
