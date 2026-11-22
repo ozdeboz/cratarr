@@ -483,6 +483,24 @@ impl PickCover {
     }
 }
 
+/// Change cover's choice as its run (SCENARIOS-COUPLING COU.21): the picture at `url` fetched inside the run, then kept on the one path
+/// as `PickCover`; the path's answer (its stamp, its Undo) the run's result. Red: today's choice carried into a run as it is, the
+/// candidates' hosts only (`allowed`).
+pub fn choose(
+    path: std::sync::Arc<super::commands::Commands>,
+    serve: std::sync::Arc<crate::serve::Serve>,
+    v: cratarr_domain::can::Viewer,
+    key: Option<String>,
+    record: i64,
+    url: &str,
+) -> Result<crate::runner::Task, String> {
+    let (kind, account, url) = (format!("cover:{}", crate::serve::ids::record(record)), v.account.clone(), url.trim().to_string());
+    crate::runner::spawn(&kind, &account, false, move |_| async move {
+        let pick = PickCover::chosen(serve, record, &url).await?;
+        path.run(&v, key.as_deref(), &pick).await.map_err(|e| anyhow::anyhow!("{e}"))
+    })
+}
+
 /// What a cover's Change keeps: the record, the chosen cover before it by its source and when (its bytes stay in the store, set
 /// aside as a candidate), and whether it picked one or reset the choice.
 #[derive(Debug, Clone, Serialize, Deserialize)]

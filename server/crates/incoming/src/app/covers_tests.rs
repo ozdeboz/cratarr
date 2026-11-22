@@ -355,3 +355,171 @@ async fn a_record_with_no_picture_shows_the_first_to_answer() {
     lib.path().run(&root(), None, &PickCover { serve: lib.serve.clone(), record, picture: Some((picked.clone(), "upload".into())) }).await.unwrap();
     assert_eq!(lib.serve.cover_bytes(&album).await.unwrap().map(|(_, b)| b), Some(picked));
 }
+
+// ---- COU.21: Change cover from any https image an administrator gives, by name, public only
+
+/// An 8 × 8 picture of one colour, as JPEG, its file padded to `size` bytes (a 400 KB image).
+fn jpeg(red: u8, size: usize) -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(8, 8, image::Rgb([red, 90, 40]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Jpeg).unwrap();
+    let mut bytes = out.into_inner();
+    bytes.resize(size.max(bytes.len()), 0);
+    bytes
+}
+
+/// COU.21's names, as the test's world resolves them: the public ones at a public address (dialled at the fake), the others at
+/// home (192.168.1.20), loopback, link-local (fe80::/10) and unique-local (fc00::/7).
+const WORLD: [(&str, &[&str]); 7] = [
+    ("images.example.org", &["93.184.216.34"]),
+    ("cdn.example.org", &["93.184.216.35"]),
+    ("f4.bcbits.com", &["93.184.216.36"]),
+    ("nas.example.org", &["192.168.1.20"]),
+    ("loop.example.org", &["127.0.0.1"]),
+    ("ll.example.org", &["fe80::1"]),
+    ("ula.example.org", &["fc00::1"]),
+];
+
+/// The stand-in hosts: one fake on this machine answering by the name asked (its Host), each ask noted as `name/path`.
+struct Hosts {
+    port: u16,
+    asked: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Hosts {
+    async fn start(nf: Vec<u8>, bandcamp: Vec<u8>) -> Hosts {
+        use axum::http::StatusCode;
+        use axum::http::header::{CONTENT_TYPE, HOST, LOCATION};
+        use axum::response::IntoResponse;
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let noted = asked.clone();
+        let app = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let (noted, nf, bandcamp) = (noted.clone(), nf.clone(), bandcamp.clone());
+            async move {
+                let host = req.headers().get(HOST).and_then(|h| h.to_str().ok()).unwrap_or_default().split(':').next().unwrap_or_default().to_string();
+                let path = req.uri().path().to_string();
+                noted.lock().unwrap().push(format!("{host}{path}"));
+                let image = |b: Vec<u8>| ([(CONTENT_TYPE, "image/jpeg")], b).into_response();
+                let moved = |to: &str| (StatusCode::FOUND, [(LOCATION, to.to_string())]).into_response();
+                match (host.as_str(), path.as_str()) {
+                    ("images.example.org", "/nf.jpg") => image(nf),
+                    ("f4.bcbits.com", "/img/a1_10.jpg") => image(bandcamp),
+                    ("images.example.org", "/page.html") => ([(CONTENT_TYPE, "text/html")], "<html>a page, not a picture</html>").into_response(),
+                    ("images.example.org", "/huge.jpg") => image(vec![0xFF; super::MOST_BYTES + 1]),
+                    ("images.example.org", "/moved.jpg") => moved("https://cdn.example.org/nf.jpg"),
+                    ("cdn.example.org", "/nf.jpg") => moved("https://nas.example.org/c.jpg"),
+                    ("images.example.org", "/loop.jpg") => moved("https://images.example.org/loop.jpg"),
+                    // A name at home: its picture, were it ever asked.
+                    _ => image(nf),
+                }
+            }
+        });
+        Hosts { port: crate::app::reach::testing::fake(app).await, asked }
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+fn alice() -> Viewer {
+    Viewer::new("alice", false, None, May::default(), None)
+}
+
+/// A run of root's once it has ended.
+async fn ended(id: u64) -> crate::runner::Task {
+    for _ in 0..3000 {
+        if let Some(t) = crate::runner::runner().of("root").into_iter().find(|t| t.id == id && t.finished.is_some()) {
+            return t;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("run {id} did not end");
+}
+
+/// COU.21 (the owner, 2026-11-22: "Any image address, in 0.18"): root's address by name, any public https host (nf.jpg, a Bandcamp
+/// image), is fetched inside its run: `choose` answers at once with the run, unfinished and nothing asked yet (the handler answers
+/// 202 with it, lookups are jobs); the picture is then kept in the record's store as a hand pick (COU.11), every surface shows it,
+/// no file changes, and one Undo gives back the cover shown before. Red first: 0.17's "From an address" fetched only the candidates'
+/// hosts and refused anything else ("That image is not one of the album's covers to choose from").
+#[tokio::test]
+async fn an_administrators_address_is_fetched_in_its_run() {
+    let lib = Lib::new("cou21-taken");
+    let (theirs, nf, bandcamp) = (png(15), jpeg(180, 400 * 1024), jpeg(60, 50 * 1024));
+    lib.night_ferry(MUSIC, Some(&png(25)), Some(&theirs));
+    let (album, record) = (lib.album(), lib.record());
+    let before = lib.files();
+    let hosts = Hosts::start(nf.clone(), bandcamp.clone()).await;
+    let _world = crate::app::reach::world::World::set(&WORLD, hosts.port).await;
+    let path = Arc::new(lib.path());
+    for (address, picture) in [("https://images.example.org/nf.jpg", &nf), ("https://f4.bcbits.com/img/a1_10.jpg", &bandcamp)] {
+        let asked = hosts.asked().len();
+        let run = super::choose(path.clone(), lib.serve.clone(), root(), None, record, address).unwrap_or_else(|e| panic!("{address}: {e}"));
+        assert!(run.finished.is_none(), "{address}: answered at once with its run");
+        assert_eq!(hosts.asked().len(), asked, "{address}: nothing fetched before the run");
+        let run = ended(run.id).await;
+        assert_eq!(run.error, None, "{address}: taken");
+        let kept = lib.cat.kept_cover(record).unwrap().expect("kept in the store");
+        assert_eq!((&kept.bytes, kept.how.as_str(), kept.who.as_deref()), (picture, "hand", Some("root")), "{address}");
+        for (surface, shows) in surfaces(&lib.serve, &album).await {
+            let want = if surface.starts_with("a song") { vec![1] } else { picture.clone() };
+            assert_eq!(shows, Some(want), "{address}: {surface}");
+        }
+        assert_eq!(lib.files(), before, "{address}: no file changes");
+        // One Undo: the cover shown before.
+        let answer: crate::app::commands::Answer<Option<String>> = serde_json::from_value(run.result.expect("its answer")).unwrap();
+        let undone = path.undo(&root(), &[answer.undo.expect("its Undo")], &HashMap::new()).await;
+        assert!(undone.refused.is_empty(), "{address}: {undone:?}");
+        assert_eq!(lib.serve.cover_bytes(&album).await.unwrap().map(|(_, b)| b), Some(theirs.clone()), "{address}: Undo, the files' picture again");
+    }
+    assert_eq!(hosts.asked(), ["images.example.org/nf.jpg", "f4.bcbits.com/img/a1_10.jpg"], "each asked once, in its run");
+}
+
+/// COU.21's refusals, each in its own words, nothing kept, no file touched. At once, no run begun, nothing asked: an http address, an
+/// address by number, and anyone but an administrator. In the run: a page, an image over the cap, and every name whose address is not
+/// public (at home, loopback, link-local, unique-local), judged at the connection after the name resolves, at each hop: moved.jpg's
+/// first hop is followed (to a public https name), its second refused as at home; and more than a few hops are not followed. No name
+/// at home is ever connected to. Red first: 0.17 refused each as "not one of the album's covers to choose from".
+#[tokio::test]
+async fn a_private_or_numeric_address_is_never_fetched() {
+    const PUBLIC: &str = "Cratarr fetches only from public addresses";
+    let lib = Lib::new("cou21-refused");
+    lib.night_ferry(MUSIC, None, Some(&png(35)));
+    let record = lib.record();
+    let before = lib.files();
+    let hosts = Hosts::start(jpeg(180, 400 * 1024), jpeg(60, 1024)).await;
+    let _world = crate::app::reach::world::World::set(&WORLD, hosts.port).await;
+    let path = Arc::new(lib.path());
+    let choose = |v: Viewer, address: &str| super::choose(path.clone(), lib.serve.clone(), v, None, record, address);
+    for (address, words) in [
+        ("http://images.example.org/nf.jpg", "Only https addresses"),
+        ("https://192.168.1.20/c.jpg", PUBLIC),
+        ("https://[fd00::1]/c.jpg", PUBLIC),
+        ("https://93.184.216.34/nf.jpg", PUBLIC),
+    ] {
+        assert_eq!(choose(root(), address).err().as_deref(), Some(words), "{address}: refused at once");
+    }
+    let alices = choose(alice(), "https://images.example.org/nf.jpg").err().unwrap_or_default();
+    assert!(alices.contains("administrators"), "alice: refused at once: {alices}");
+    assert!(hosts.asked().is_empty(), "nothing asked: {:?}", hosts.asked());
+    for (address, words) in [
+        ("https://images.example.org/page.html", "That address isn't an image"),
+        ("https://images.example.org/huge.jpg", "That image is too large"),
+        ("https://nas.example.org/c.jpg", PUBLIC),
+        ("https://loop.example.org/c.jpg", PUBLIC),
+        ("https://ll.example.org/c.jpg", PUBLIC),
+        ("https://ula.example.org/c.jpg", PUBLIC),
+        ("https://images.example.org/moved.jpg", PUBLIC),
+        ("https://images.example.org/loop.jpg", "That address redirects too many times"),
+    ] {
+        let run = choose(root(), address).unwrap_or_else(|e| panic!("{address}: {e}"));
+        assert_eq!(ended(run.id).await.error.as_deref(), Some(words), "{address}");
+        assert_eq!(lib.cat.kept_cover(record).unwrap(), None, "{address}: nothing kept");
+    }
+    assert_eq!(lib.files(), before, "no file touched");
+    let asked = hosts.asked();
+    assert!(asked.contains(&"cdn.example.org/nf.jpg".to_string()), "moved.jpg's first hop followed: {asked:?}");
+    assert!(!asked.iter().any(|a| ["nas.", "loop.", "ll.", "ula."].iter().any(|home| a.starts_with(home))), "no name at home connected to: {asked:?}");
+    let loops = asked.iter().filter(|a| *a == "images.example.org/loop.jpg").count();
+    assert_eq!(loops, 4, "the address and three hops, no more");
+}
