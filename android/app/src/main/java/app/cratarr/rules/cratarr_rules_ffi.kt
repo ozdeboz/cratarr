@@ -764,6 +764,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -790,6 +792,8 @@ fun uniffi_cratarr_rules_ffi_checksum_func_brake_length_ms(
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_v(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_way(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_credit_text(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_device_open(
 ): Short
@@ -896,6 +900,8 @@ fun uniffi_cratarr_rules_ffi_fn_func_brake_v(`v0`: Double,`to`: Double,`length`:
 ): Double
 fun uniffi_cratarr_rules_ffi_fn_func_brake_way(`v0`: Double,`to`: Double,`length`: Double,`t`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
+fun uniffi_cratarr_rules_ffi_fn_func_credit_text(`entries`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_cratarr_rules_ffi_fn_func_device_open(`index`: RustBuffer.ByValue,`sounds`: RustBuffer.ByValue,`own`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_cratarr_rules_ffi_fn_func_fresh_at(uniffi_out_err: UniffiRustCallStatus, 
@@ -1074,6 +1080,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_brake_way() != 18014.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_credit_text() != 19474.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_device_open() != 61812.toShort()) {
@@ -1735,6 +1744,41 @@ public object FfiConverterTypeRulesDevice: FfiConverter<RulesDevice, Pointer> {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+/**
+ * One entry of a credit as its text reads it (CRED.27): the artist's name and the phrase printed after it, if any.
+ */
+data class CreditEntry (
+    var `name`: kotlin.String, 
+    var `phrase`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeCreditEntry: FfiConverterRustBuffer<CreditEntry> {
+    override fun read(buf: ByteBuffer): CreditEntry {
+        return CreditEntry(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: CreditEntry) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterOptionalString.allocationSize(value.`phrase`)
+    )
+
+    override fun write(value: CreditEntry, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterOptionalString.write(value.`phrase`, buf)
     }
 }
 
@@ -2570,6 +2614,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeCreditEntry: FfiConverterRustBuffer<List<CreditEntry>> {
+    override fun read(buf: ByteBuffer): List<CreditEntry> {
+        val len = buf.getInt()
+        return List<CreditEntry>(len) {
+            FfiConverterTypeCreditEntry.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<CreditEntry>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeCreditEntry.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<CreditEntry>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeCreditEntry.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeKeptPick: FfiConverterRustBuffer<List<KeptPick>> {
     override fun read(buf: ByteBuffer): List<KeptPick> {
         val len = buf.getInt()
@@ -2714,6 +2786,19 @@ public object FfiConverterSequenceTypeQueueLane: FfiConverterRustBuffer<List<Que
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_brake_way(
         FfiConverterDouble.lower(`v0`),FfiConverterDouble.lower(`to`),FfiConverterDouble.lower(`length`),FfiConverterDouble.lower(`t`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A credit as one text where only text fits, the notification's (NAMES.24's one formatter, CRED.27: each entry's phrase printed
+         * after it, else "A & B", "A, B & C"), as the server and the page say it.
+         */ fun `creditText`(`entries`: List<CreditEntry>): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_credit_text(
+        FfiConverterSequenceTypeCreditEntry.lower(`entries`),_status)
 }
     )
     }
