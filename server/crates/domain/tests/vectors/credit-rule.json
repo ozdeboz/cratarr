@@ -213,7 +213,7 @@
         { "name": "Rowan Fell", "person": { "source": "musicbrainz", "id": "mb:rf" }, "role": "main", "phrase": "feat." },
         { "name": "Tamsin Kell", "person": { "source": "musicbrainz", "id": "mb:tk" }, "role": "featuring" }
       ] }],
-      "artists": [{ "name": "Rowan Fell", "id": "mb:rf", "phrase": "feat." }, { "name": "Tamsin Kell", "role": "featuring" }],
+      "artists": [{ "name": "Rowan Fell", "id": "mb:rf", "phrase": "feat." }, { "name": "Tamsin Kell", "id": "mb:tk", "role": "featuring" }],
       "text": "Rowan Fell feat. Tamsin Kell", "rule": 1, "compilation": false, "by": ["files", "musicbrainz"]
     },
     {

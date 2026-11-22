@@ -164,6 +164,20 @@ pub fn read(serve: &Serve, id: i64, around: &Around, viewer: &Viewer, place: &Pl
         editions: around.editions.clone(),
         libraries: around.libraries.clone(),
         credits: credits_of(serve.catalogue().credits_read(row.id, &library_of)?, around),
+        artist_phrases: read.phrases.clone(),
+        printed: read
+            .extras
+            .iter()
+            .map(|x| cratarr_domain::credited::Printed {
+                after: usize::try_from(x.after).unwrap_or(0),
+                role: x.role.clone(),
+                artist: x.artist.map(crate::serve::ids::artist),
+                listed: x.reference.as_deref().and_then(|r| r.split_once(':')).map(|(source, id)| cratarr_domain::credits::Listed { source: source.into(), id: id.into() }),
+                name: x.name.clone(),
+                phrase: x.phrase.clone(),
+            })
+            .collect(),
+        credit_by: read.credit_by.clone(),
     };
     let _ = viewer;
     Ok(Some((rev, facts)))

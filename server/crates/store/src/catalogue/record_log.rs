@@ -108,7 +108,9 @@ fn triggers() -> String {
     ];
     for (table, columns) in [
         ("reference_tracks", &["source", "kind", "value", "tracks"][..]),
-        ("record_artists", &["artist", "position", "how"][..]),
+        ("record_artists", &["artist", "position", "how", "phrase"][..]),
+        // DC3a: what a record's credit prints beside its main artists.
+        ("record_credit_extra", &["n", "after", "role", "artist", "name", "ref", "phrase"][..]),
         ("record_labels", &["label", "catno", "how"][..]),
         ("facts", &["fact", "source", "ref", "value"][..]),
         // CRED (LV1): a record's credits as the services said them.

@@ -235,10 +235,11 @@ pub struct Handed {
 /// What to look an album up by, in turn, none twice: as asked, by its main artist, by its name alone. On a real Lidarr
 /// (2026-11-06) "Grouch / Grouch In Dub Rare Specimens" found other albums and "Grouch Rare Specimens" that one, and one
 /// term answered 503 where the album's name alone found it.
+/// F54.4 (5): then a term per credited artist of the record, by its one name (`credited`), before the album's name alone.
 fn terms(artist: &str, main: &str, credited: &[String], album: &str) -> Vec<String> {
-    let _ = credited;
     let mut out = vec![format!("{artist} {album}")];
-    for term in [format!("{main} {album}"), album.to_string()] {
+    let each = credited.iter().map(|a| format!("{} {album}", a.trim()));
+    for term in std::iter::once(format!("{main} {album}")).chain(each).chain(std::iter::once(album.to_string())) {
         if !out.contains(&term) {
             out.push(term);
         }
@@ -246,12 +247,12 @@ fn terms(artist: &str, main: &str, credited: &[String], album: &str) -> Vec<Stri
     out
 }
 
-/// The album among `found` with this name, by the artist as credited, else by the main one: a name alone is not enough,
-/// as other artists have albums of that name.
-fn pick(found: &[serde_json::Value], artist: &str, main: &str, album: &str) -> Option<serde_json::Value> {
+/// The album among `found` with this name, by the artist as credited, else by the main one, else by each credited artist: a name
+/// alone is not enough, as other artists have albums of that name.
+fn pick(found: &[serde_json::Value], artist: &str, main: &str, credited: &[String], album: &str) -> Option<serde_json::Value> {
     let k = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
     let by = |name: &str| found.iter().find(|v| v["title"].as_str().is_some_and(|t| k(t) == k(album)) && v["artist"]["artistName"].as_str().is_some_and(|a| k(a) == k(name)));
-    by(artist).or_else(|| by(main)).cloned()
+    by(artist).or_else(|| by(main)).or_else(|| credited.iter().find_map(|a| by(a))).cloned()
 }
 
 /// Lidarr's profiles and root folders, for the choices on its page in Connections.
@@ -353,12 +354,13 @@ impl Lidarr {
     }
 
     /// Discover's Want (decision 0069): Lidarr fetches the album into Incoming. One without a release group is found by
-    /// its names first (`by_name`): Lidarr may hold it already, and it refuses to add an album twice.
-    pub async fn want(&self, with: &AddWith, release_group: Option<&str>, artist: &str, album: &str) -> Result<Handed> {
+    /// its names first (`by_name`): Lidarr may hold it already, and it refuses to add an album twice. `credited`: the record's
+    /// credited artists, each by its one name, tried after the whole credit (F54.4 (5)).
+    pub async fn want(&self, with: &AddWith, release_group: Option<&str>, artist: &str, credited: &[String], album: &str) -> Result<Handed> {
         let (release_group, named) = match release_group {
             Some(rg) => (rg.to_string(), None),
             None => {
-                let found = self.by_name(artist, album).await?;
+                let found = self.by_name(artist, credited, album).await?;
                 (found["foreignAlbumId"].as_str().context("Lidarr's album had no id")?.to_string(), Some(found))
             }
         };
@@ -368,13 +370,13 @@ impl Lidarr {
 
     /// The album Lidarr's lookup finds by these names (`terms`, `pick`). A term that fails is passed over for the next;
     /// that failure is what is told if no term finds it.
-    async fn by_name(&self, artist: &str, album: &str) -> Result<serde_json::Value> {
+    async fn by_name(&self, artist: &str, credited: &[String], album: &str) -> Result<serde_json::Value> {
         let main = main_artist(artist);
         let mut failed = None;
-        for term in terms(artist, &main, &[], album) {
+        for term in terms(artist, &main, credited, album) {
             match self.get::<Vec<serde_json::Value>>("/api/v1/album/lookup", &[("term", term.as_str())]).await {
                 Ok(found) => {
-                    if let Some(album) = pick(&found, artist, &main, album) {
+                    if let Some(album) = pick(&found, artist, &main, credited, album) {
                         return Ok(album);
                     }
                 }
@@ -860,10 +862,10 @@ mod tests {
     #[test]
     fn the_album_is_its_name_and_its_artist_the_whole_credit_first() {
         let found = [album("At TreePeople", "Saul Williams", "main"), album("At TreePeople", "Someone Else", "other")];
-        assert_eq!(pick(&found, "Saul Williams, Carlos Niño & Friends", "Saul Williams", "At TreePeople").unwrap()["foreignAlbumId"], "main");
+        assert_eq!(pick(&found, "Saul Williams, Carlos Niño & Friends", "Saul Williams", &[], "At TreePeople").unwrap()["foreignAlbumId"], "main");
         let found = [album("Air & Beck", "Air", "main"), album("Air & Beck", "Air & Beck", "whole")];
-        assert_eq!(pick(&found, "Air & Beck", "Air", "Air & Beck").unwrap()["foreignAlbumId"], "whole");
-        assert!(pick(&[album("Cartouche", "Georges Delerue", "other")], "The Funky Lowlives", "The Funky Lowlives", "Cartouche").is_none());
+        assert_eq!(pick(&found, "Air & Beck", "Air", &[], "Air & Beck").unwrap()["foreignAlbumId"], "whole");
+        assert!(pick(&[album("Cartouche", "Georges Delerue", "other")], "The Funky Lowlives", "The Funky Lowlives", &[], "Cartouche").is_none());
     }
 
     #[tokio::test]
@@ -873,7 +875,7 @@ mod tests {
             Some(if term == "Grouch Rare Specimens" { json!([other, album("Rare Specimens", "Grouch", "rg-rare")]) } else { json!([other]) })
         }
         let (lidarr, calls) = lidarr_at(look, json!([{ "id": 7, "monitored": false }])).await;
-        let handed = lidarr.want(&AddWith::default(), None, "Grouch / Grouch In Dub", "Rare Specimens").await.unwrap();
+        let handed = lidarr.want(&AddWith::default(), None, "Grouch / Grouch In Dub", &[], "Rare Specimens").await.unwrap();
         assert_eq!(handed, Handed { said: "Lidarr is looking for it".into(), release_group: "rg-rare".into() });
         assert_eq!(*calls.lock().unwrap(), ["lookup Grouch / Grouch In Dub Rare Specimens", "lookup Grouch Rare Specimens", "albums rg-rare", "monitor", "search"]);
     }
@@ -884,7 +886,7 @@ mod tests {
             (!term.contains("Ross From Friends")).then(|| json!([album("Love Divide / The Knife", "Ross From Friends", "rg-love")]))
         }
         let (lidarr, calls) = lidarr_at(look, json!([])).await;
-        let handed = lidarr.want(&AddWith::default(), None, "Ross From Friends", "Love Divide / The Knife").await.unwrap();
+        let handed = lidarr.want(&AddWith::default(), None, "Ross From Friends", &[], "Love Divide / The Knife").await.unwrap();
         assert_eq!(handed, Handed { said: "Lidarr added it and is looking for it".into(), release_group: "rg-love".into() });
         assert_eq!(*calls.lock().unwrap(), ["lookup Ross From Friends Love Divide / The Knife", "lookup Love Divide / The Knife", "albums rg-love", "add"]);
     }
@@ -895,11 +897,11 @@ mod tests {
             Some(json!([album("Cartouche", "Georges Delerue", "rg-other")]))
         }
         let (lidarr, calls) = lidarr_at(another, json!([])).await;
-        let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", "Cartouche").await.unwrap_err();
+        let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", &[], "Cartouche").await.unwrap_err();
         assert_eq!(e.to_string(), "Lidarr does not know Cartouche by The Funky Lowlives");
         assert!(!calls.lock().unwrap().iter().any(|c| c == "add"), "another artist's album of that name is not added");
         let (lidarr, _) = lidarr_at(|_| None, json!([])).await;
-        let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", "Cartouche").await.unwrap_err();
+        let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", &[], "Cartouche").await.unwrap_err();
         assert_eq!(e.to_string(), "Lidarr answered 503 Service Unavailable");
     }
 
@@ -936,7 +938,7 @@ mod tests {
             Some(json!([album("Moon Safari", "Air", "rg-1")]))
         }
         let (lidarr, calls) = lidarr_at(look, json!([])).await;
-        let handed = lidarr.want(&AddWith::default(), Some("rg-1"), "Air", "Moon Safari").await.unwrap();
+        let handed = lidarr.want(&AddWith::default(), Some("rg-1"), "Air", &[], "Moon Safari").await.unwrap();
         assert_eq!(handed, Handed { said: "Lidarr added it and is looking for it".into(), release_group: "rg-1".into() });
         assert_eq!(*calls.lock().unwrap(), ["albums rg-1", "lookup lidarr:rg-1", "add"]);
     }

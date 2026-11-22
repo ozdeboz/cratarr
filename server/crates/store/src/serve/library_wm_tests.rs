@@ -12,7 +12,7 @@ const STAMP: &str = "www.electronicfresh.com";
 fn read(r: &ServedRow, folder: i64) -> (String, String, bool, String, Vec<String>, Option<String>, Vec<String>, String) {
     let s = song(r, folder, &FolderRules::default());
     let t = TrackFacts::of(&Tags(r.tags.clone()), &r.rel, r.duration_ms);
-    (s.title, s.album, s.album_named, s.album_artist, s.artists, s.artist_credit, s.album_artists, t.shown().to_string())
+    (s.title, s.album, s.album_named, s.album_artist, s.files_credit.names, s.artist_credit, s.album_artists, t.shown().to_string())
 }
 
 /// What an album gives its record, its hashes left out (T-WM-2: those read the raw tags).

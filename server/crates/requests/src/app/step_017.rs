@@ -1009,7 +1009,7 @@ mod tests {
     }
 
     /// P3.1 (W3): after the step, before any build, every record a present file holds is credited as its files credit it (`files`):
-    /// its album artists in tag order, Various Artists for a compilation, the untagged one by name to the first artist of that name
+    /// its album artists in tag order, a "Various Artists" record by NAMES.20, the untagged one by name to the first artist of that name
     /// (a second of the name made apart), the record of two copies once per artist and place; the two labelled their labels; the
     /// part marked with how many records it credited; and Discover's missing list not empty. No had record with an album artist
     /// in its files goes uncredited.
@@ -1032,7 +1032,9 @@ mod tests {
             (2, vec!["Noor Field", "Orbit Lane"]),
             (3, vec!["Kite Theory"]),
             (4, vec!["Kite Theory"]),
-            (5, vec!["Various Artists"]),
+            // Changed by design (DC3a, NAMES.18, NAMES.20 row 3): Late Train OST, "Various Artists" over three track artists, is
+            // theirs in track order; COMPILATION=1 counts nowhere alone (COU.10 (d)).
+            (5, vec!["Glass Harbour", "Orbit Lane", "Tape Club"]),
             (7, vec!["Noor Field"]),
             (8, vec!["Glass Harbour"]),
         ]

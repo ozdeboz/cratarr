@@ -300,7 +300,11 @@ fn files_said(
                 Some(("TIPL" | "TMCL", key)) if name == "performer" => format!("performer:{}", key.trim().to_lowercase()),
                 _ => name.clone(),
             };
-            out.push(Said { source: source.clone(), person: None, name: value.clone(), credited_as: None, word, attributes: Vec::new(), on: on.clone() });
+            // CRED.19 (c): a role value names each person its library's separators part ("Kerys Lae / Yann Tiersen"), and never more:
+            // the library's rule, read as an artist list is (F54: no split of CRED's own).
+            for person in rules.values(folder, "artist", std::slice::from_ref(value)) {
+                out.push(Said { source: source.clone(), person: None, name: person, credited_as: None, word: word.clone(), attributes: Vec::new(), on: on.clone() });
+            }
         }
         let line = all_of("artist").into_iter().next().unwrap_or_default();
         let listed = all_of("artists");
@@ -469,8 +473,44 @@ pub fn credits_read_in(
             on,
         });
     }
+    let said = split_by_sources(said);
     let here = here_in(tx, record, &said)?;
     Ok(Credits { said, here, all })
+}
+
+/// CRED.19 (b), through F54's one rule (`credit_parts`): a files' role value naming several people as one ("Kerys Lae & Yann Tiersen")
+/// is each of them where a source names each on the same track in that role, their names joined the value; else it stays one. Never a
+/// cut of CRED's own.
+fn split_by_sources(said: Vec<cratarr_domain::credits::Said>) -> Vec<cratarr_domain::credits::Said> {
+    use cratarr_domain::credits::{On, Said, role_of};
+    let on_track = |on: &On, n: u32| match on {
+        On::Every => true,
+        On::Tracks(t) => t.contains(&n),
+        On::Unplaced(_) => false,
+    };
+    let mut out: Vec<Said> = Vec::with_capacity(said.len());
+    for s in &said {
+        let (On::Tracks(t), true, Some(role)) = (&s.on, s.source.starts_with("files") && s.person.is_none(), role_of(&s.source, &s.word)) else {
+            out.push(s.clone());
+            continue;
+        };
+        let Some(&n) = t.first() else {
+            out.push(s.clone());
+            continue;
+        };
+        let parted = said
+            .iter()
+            .filter(|x| !x.source.starts_with("files") && role_of(&x.source, &x.word) == Some(role) && on_track(&x.on, n))
+            .map(|x| cratarr_rules::names::Part { name: x.name.clone(), id: x.person.as_ref().map(|p| p.id.clone()), phrase: None })
+            .collect::<Vec<_>>();
+        let parts = cratarr_rules::names::credit_parts(&[cratarr_rules::names::Part { name: s.name.clone(), ..Default::default() }], &[], &parted).parts;
+        if parts.len() > 1 {
+            out.extend(parts.into_iter().map(|p| Said { name: p.name, ..s.clone() }));
+        } else {
+            out.push(s.clone());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -590,7 +630,8 @@ mod tests {
     /// CRED.22 (kind 8), the limits a record's read holds: a box set of 3 discs and 60 tracks, MusicBrainz naming 140 players on each
     /// recording, a Discogs credit on "1 to 60" placed through its kept list, a COMPOSER of 193 characters. The answer's credits come
     /// grouped, each person once per role and detail, on every track with no tracks named ("1 to 60" reads as all of them), the long
-    /// value kept whole as the files' words. One read: `credits_read` is one reader's transaction of a fixed set of queries, whatever
+    /// name kept whole as the files' words (its spaced slash two people's since CRED.19 (c)). One read: `credits_read` is one reader's
+    /// transaction of a fixed set of queries, whatever
     /// the tracks or the people (by its shape: the store counts no statements). Never a name cut short in the store.
     #[test]
     fn a_records_credits_come_in_one_read() {
@@ -633,7 +674,9 @@ mod tests {
         let conductor = roles.iter().find(|r| r.role == "conductor").expect("the conductor");
         assert!(conductor.people[0].tracks.is_none() && conductor.people[0].at.is_none(), "\"1 to 60\" reads as all of them: {:?}", conductor.people[0]);
         let composer = roles.iter().find(|r| r.role == "composer").expect("the long composer value");
-        assert_eq!(composer.people[0].name, long, "the long value kept whole as the files' words");
+        // Changed by design (CRED.19 (c), DC3a 3a-1): the library's spaced slash names two composers; the long one kept whole.
+        let (first, second) = long.split_once(" / ").unwrap();
+        assert_eq!(composer.people.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), [first, second], "the long name kept whole as the files' words");
     }
 
     /// CRED.17's re-read, T-CRED-26: reader 10 marks every read file due a re-read apart from its state (no column a change log reads),

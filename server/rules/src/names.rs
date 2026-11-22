@@ -172,11 +172,98 @@ pub struct Parts {
 
 /// F54: a credit splits only where the files or a source name each artist (SCENARIOS-DC3 F54.1; the one splitter, used everywhere a
 /// credit string becomes artists). `parts`: the credit as the files name it apart (a list tag, else its line as the library's
-/// separators split it), each with the id the files pair it with and the phrase after it; `whole`: the names the same record's files
-/// name whole (T-DC3-9); `source`: a source's credit for the same record. Red first (3a-1): no rule yet, the parts as given.
+/// separators split it: the library's rule, never F54's own), each with the id the files pair it with and the phrase after it; `whole`:
+/// the names the same record's files name whole (T-DC3-9: never a name across records); `source`: a source's credit for the same
+/// record, its names with their ids.
+/// - **A placeholder part** ("Friends", `crates::placeholder`) makes the credit one, never an artist, id or not (OQ-DC3-5 (a)): the
+///   whole line as one artist (F54.1 (n), (n2)); where the one other part has the files' id, that id's holder, the whole line its text
+///   (T-DC3-31, (n4)). A whole credit that is a placeholder word is a band's name, its artist (T-DC3-38, (z2)).
+/// - **One part** splits where a source names each of it in order, its names joined the part (F54.1 (x), CRED.19 (b)): the source's
+///   names with their ids; else where the record's files name each of it whole (F54.1 (m)); each joined by a phrase ("&", "and", ",",
+///   "x", "with", "vs."), kept as the line prints it. Else it is one ((o)-(r), (z1), (y)).
+/// - **Parts the files name apart** stay as they are ((n3), (t), (u)).
 pub fn credit_parts(parts: &[Part], whole: &[&str], source: &[Part]) -> Parts {
-    let _ = (whole, source);
-    Parts { parts: parts.to_vec(), text: None }
+    let placeholder = crate::crates::placeholder;
+    let print = |parts: &[Part]| credit_text(&parts.iter().map(|p| (p.name.as_str(), p.phrase.as_deref())).collect::<Vec<_>>());
+    if parts.len() > 1 {
+        if !parts.iter().any(|p| placeholder(&p.name)) {
+            return Parts { parts: parts.to_vec(), text: None };
+        }
+        let text = print(parts);
+        let others: Vec<&Part> = parts.iter().filter(|p| !placeholder(&p.name)).collect();
+        return match others.as_slice() {
+            [one] if one.id.is_some() => Parts { parts: vec![Part { name: one.name.clone(), id: one.id.clone(), phrase: None }], text: Some(text) },
+            _ => Parts { parts: vec![Part { name: text, id: None, phrase: None }], text: None },
+        };
+    }
+    let Some(one) = parts.first() else { return Parts::default() };
+    let names: Vec<&str> = source.iter().map(|p| p.name.as_str()).collect();
+    if names.len() > 1
+        && let Some(tiles) = tiled(&one.name, &names, true)
+    {
+        let parts = tiles.into_iter().map(|(k, _, phrase)| Part { name: source[k].name.clone(), id: source[k].id.clone(), phrase }).collect();
+        return Parts { parts, text: None };
+    }
+    if let Some(tiles) = tiled(&one.name, whole, false).filter(|t| !t.iter().any(|(_, n, _)| placeholder(n))) {
+        let parts = tiles.into_iter().map(|(_, name, phrase)| Part { name, id: None, phrase }).collect();
+        return Parts { parts, text: None };
+    }
+    Parts { parts: vec![one.clone()], text: None }
+}
+
+/// Whether the text between two names is a phrase joining two artists (F54): a comma, or "&", "and", "x", "with", "vs." (never a
+/// separator, never a featuring marker: the list's and the role's own).
+fn joins(text: &str) -> bool {
+    let t = text.trim();
+    let bare = t.trim_start_matches(',').trim();
+    !t.is_empty() && (bare.is_empty() || matches!(bare.to_lowercase().as_str(), "&" | "and" | "x" | "×" | "with" | "vs." | "vs" | "+"))
+}
+
+/// `line` as `names` joined by phrases: each tile's name (its index in `names`), as the line writes it, and the phrase after it (none
+/// after the last), case and accents aside. `all`: every one of `names` once, in any order (a source's credit); else any of them,
+/// each a whole name (the record's files').
+fn tiled(line: &str, names: &[&str], all: bool) -> Option<Vec<(usize, String, Option<String>)>> {
+    let chars: Vec<char> = line.trim().chars().collect();
+    let names: Vec<(usize, Vec<char>)> = names.iter().map(|n| (n.trim().chars().count(), name_key(n.trim()))).collect();
+    fn walk(chars: &[char], at: usize, names: &[(usize, Vec<char>)], all: bool, out: &mut Vec<(usize, usize, usize)>) -> bool {
+        for (k, (n, key)) in names.iter().enumerate() {
+            if *n == 0 || (all && out.iter().any(|(used, _, _)| *used == k)) {
+                continue;
+            }
+            if at + n > chars.len() || name_key(&chars[at..at + n].iter().collect::<String>()) != *key {
+                continue;
+            }
+            let end = at + n;
+            out.push((k, at, end));
+            // Done at the line's end: every name once (a source's), or at least two (the files'), never the line as its own one name.
+            if end == chars.len() && if all { out.len() == names.len() } else { out.len() > 1 } {
+                return true;
+            }
+            for next in end + 1..chars.len() {
+                let between: String = chars[end..next].iter().collect();
+                if joins(&between) && !chars[next].is_whitespace() && walk(chars, next, names, all, out) {
+                    return true;
+                }
+            }
+            out.pop();
+        }
+        false
+    }
+    let mut spans = Vec::new();
+    if !walk(&chars, 0, &names, all, &mut spans) {
+        return None;
+    }
+    Some(
+        spans
+            .iter()
+            .enumerate()
+            .map(|(i, (k, from, to))| {
+                let name: String = chars[*from..*to].iter().collect();
+                let phrase = spans.get(i + 1).map(|(_, next, _)| chars[*to..*next].iter().collect::<String>().trim().to_string());
+                (*k, name, phrase)
+            })
+            .collect(),
+    )
 }
 
 /// A track's title as a row shows it beside its credit (CRED.28; the owner, ~14:38, "Trim the title on screen"): its "(feat. X)"

@@ -50,8 +50,16 @@ CREATE INDEX IF NOT EXISTS labels_by_key ON labels (key);
 -- each build replaces) or `listing` (a discography's or a label's list, which no build touches).
 CREATE TABLE IF NOT EXISTS record_artists (
   record INTEGER NOT NULL, artist INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, how TEXT NOT NULL DEFAULT 'files',
+  phrase TEXT,
   PRIMARY KEY (record, artist)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS record_artists_by_artist ON record_artists (artist, record);
+-- DC3a (NAMES.20, CRED.27, T-DC3-31): what a record's credit prints that is no main artist, the record pass's alone: its own
+-- featuring (`artist` here, else a Listed `name` with `ref` 'source:id') and the text a placeholder keeps whole (`printed`), each
+-- after the main artist at position `after`. `record_artists` stays the one store of its main artists; their phrases are its
+-- `phrase`. Any other writer of a record's mains deletes its rows (`mains_changed`): the next pass writes them again.
+CREATE TABLE IF NOT EXISTS record_credit_extra (
+  record INTEGER NOT NULL, n INTEGER NOT NULL, after INTEGER NOT NULL, role TEXT NOT NULL, artist INTEGER, name TEXT NOT NULL,
+  ref TEXT, phrase TEXT, PRIMARY KEY (record, n)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS record_labels (
   record INTEGER NOT NULL, label INTEGER NOT NULL, catno TEXT NOT NULL DEFAULT '', how TEXT NOT NULL DEFAULT 'files',
   PRIMARY KEY (record, label, catno)) WITHOUT ROWID;
@@ -250,6 +258,9 @@ fn keep_rows_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &st
                     "INSERT INTO record_artists (record, artist, position, how) SELECT ?1, ?2, 0, 'listing' WHERE NOT EXISTS (SELECT 1 FROM record_artists WHERE record = ?1)",
                 )?
                 .execute(params![record, artist])?;
+            if credited > 0 {
+                mains_changed(tx, record)?;
+            }
             // Made or credited now: theirs, which a later row of the list may join.
             if credited > 0
                 && let Some(index) = theirs.as_mut()
@@ -316,7 +327,9 @@ fn give_back_where(tx: &Connection, into: i64, at: i64, give: impl Fn(&[(String,
                 .execute(params![ids::record(into), source, kind, value])?;
         }
         tx.prepare_cached("UPDATE records SET merged_into = NULL WHERE id = ?1")?.execute([record])?;
-        tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')")?.execute(params![record, artist])?;
+        if tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')")?.execute(params![record, artist])? > 0 {
+            mains_changed(tx, record)?;
+        }
         for (source, kind, value) in &brought {
             put_reference(tx, &ids::record(record), &Ref::new(source, kind, value), "link", at, false)?;
         }
@@ -636,6 +649,8 @@ pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<
     let after: i64 = tx.query_row("SELECT COALESCE(max(position) + 1, 0) FROM record_artists WHERE record = ?1", [into], |r| r.get(0))?;
     tx.execute("INSERT OR IGNORE INTO record_artists (record, artist, position, how) SELECT ?2, artist, position + ?3, how FROM record_artists WHERE record = ?1", params![from, into, after])?;
     tx.execute("DELETE FROM record_artists WHERE record = ?1", [from])?;
+    mains_changed(tx, from)?;
+    mains_changed(tx, into)?;
     tx.execute("INSERT OR IGNORE INTO record_labels (record, label, catno, how) SELECT ?2, label, catno, how FROM record_labels WHERE record = ?1", params![from, into])?;
     tx.execute("DELETE FROM record_labels WHERE record = ?1", [from])?;
     tx.execute("UPDATE records SET merged_into = ?2 WHERE id = ?1 OR merged_into = ?1", params![from, into])?;
@@ -685,6 +700,8 @@ pub struct Requested {
     pub copies: Vec<(i64, usize)>,
     pub present: usize,
     pub list: Option<usize>,
+    /// Read for requests alone: its credited artists' names, in order (Soulseek's and Lidarr's rungs, F54.4 (5)).
+    pub artists: Vec<String>,
 }
 
 /// What references name here (`Catalogue::by_reference`, C57): a record never by a name; for a row no record holds, the had record
@@ -936,21 +953,25 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
     // and the next copy in the owner's order that names it speaks.
     let named_copies: Vec<Option<i64>> = albums.iter().zip(records).map(|(a, r)| r.filter(|_| !a.facts.title.is_empty())).collect();
     let titled = first_ranked(albums, &named_copies);
-    // R1 (A2.1, A2.2): an album artist the files give a MusicBrainz id for is the artist who holds it (`artist_of_files_id`); one they
-    // give none for, the first artist of the name (C55), as before. The names most files pair with each id in this pass (R6).
-    let mut paired: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>> = std::collections::BTreeMap::new();
-    for a in first.values() {
-        for (name, id) in files_ids(a) {
-            *paired.entry(id).or_default().entry(name.to_string()).or_default() += 1;
+    // DC3a (NAMES.20, F54, CRED.25): each record's credit, worked out once from its deciding copy's files and its sources' credits.
+    let mut credits: std::collections::BTreeMap<i64, cratarr_domain::credited::RecordCredit> = std::collections::BTreeMap::new();
+    for (record, a) in &first {
+        if !a.silent {
+            credits.insert(*record, credit_of(tx, *record, a)?);
         }
     }
-    let names: std::collections::BTreeSet<String> = first
-        .values()
-        .flat_map(|a| {
-            let ided: Vec<&str> = files_ids(a).into_iter().map(|(n, _)| n).collect();
-            a.artists.iter().filter(|n| !ided.contains(&n.as_str())).cloned().collect::<Vec<_>>()
-        })
-        .collect();
+    // R1 (A2.1, A2.2): an artist the credit gives a MusicBrainz id for is the artist who holds it (`artist_of_files_id`); one it gives
+    // none for, the first artist of the name (C55), as before. The names most credits pair with each id in this pass (R6).
+    let mbid_of = |e: &cratarr_domain::credits::Entry| e.person.as_ref().filter(|p| p.source == "musicbrainz").map(|p| p.id.trim().to_lowercase()).filter(|id| is_mbid(id));
+    let mut paired: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>> = std::collections::BTreeMap::new();
+    for c in credits.values() {
+        for e in c.mains() {
+            if let Some(id) = mbid_of(e) {
+                *paired.entry(id).or_default().entry(e.name.clone()).or_default() += 1;
+            }
+        }
+    }
+    let names: std::collections::BTreeSet<String> = credits.values().flat_map(|c| c.mains().filter(|e| mbid_of(e).is_none()).map(|e| e.name.clone())).collect();
     let artists = super::artists::artists_in(tx, &names, at)?;
     let mut by_id: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut apart: Vec<String> = Vec::new();
@@ -983,15 +1004,18 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
              WHERE id = ?1 AND ?2 <> '' AND ?4 >= COALESCE(named_rank, 0) AND (title IS NOT ?2 OR artist IS NOT ?3 OR named_rank IS NOT ?4)",
         )?
         .execute(params![record, titled.get(&record).map_or("", |t| t.title.as_str()), a.artist, a.rank])?;
+        let Some(credit) = credits.get(&record) else { continue };
+        // Its main artists by id, each with the phrase printed after it (CRED.27), and the entries it prints that are no main artist:
+        // its own featuring, the text a placeholder keeps whole (`record_credit_extra`).
         let mut ids: Vec<i64> = Vec::new();
-        let ided = files_ids(a);
-        for name in &a.artists {
-            let id = match ided.iter().find(|(n, _)| *n == name.as_str()) {
-                Some((_, mbid)) => match by_id.get(mbid) {
+        let mut phrases: Vec<Option<String>> = Vec::new();
+        for e in credit.mains() {
+            let id = match mbid_of(e) {
+                Some(mbid) => match by_id.get(&mbid) {
                     Some(artist) => Some(*artist),
                     None => {
-                        let named = paired.get(mbid).and_then(|names| names.iter().max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a)))).map_or(name.as_str(), |(n, _)| n.as_str());
-                        let artist = artist_of_files_id(tx, mbid, named, at, &mut apart)?;
+                        let named = paired.get(&mbid).and_then(|names| names.iter().max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a)))).map_or(e.name.as_str(), |(n, _)| n.as_str());
+                        let artist = artist_of_files_id(tx, &mbid, named, at, &mut apart)?;
                         by_id.insert(mbid.clone(), artist);
                         Some(artist)
                     }
@@ -999,7 +1023,7 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
                 // T-COU-2 (NAMES.25 (e)): the absence of an id is no evidence. A credit by id (a source's reference, the hand's) of an
                 // artist of this name stays while the files name that name with no id; else the first artist of the name (C55).
                 None => {
-                    let key = ids::artist_key(name);
+                    let key = ids::artist_key(&e.name);
                     let held: Option<i64> = tx
                         .prepare_cached("SELECT ra.artist FROM record_artists ra JOIN artists a ON a.id = ra.artist WHERE ra.record = ?1 AND a.key = ?2 ORDER BY ra.position LIMIT 1")?
                         .query_row(params![record, key], |r| r.get(0))
@@ -1011,8 +1035,11 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
                 && !ids.contains(&id)
             {
                 ids.push(id);
+                phrases.push(e.phrase.clone());
             }
         }
+        let extras = extras_of(tx, credit, ids.len())?;
+        tx.prepare_cached("UPDATE records SET credit_by = ?2 WHERE id = ?1 AND credit_by IS NOT ?2")?.execute(params![record, credit.by.join(",")])?;
         // Credited as its files say once it holds them (R17, F7): the artists a listing credited it (a request's names, a
         // discography's) give way wherever the files credit one; a listing's row of a label gives way to the files' own row of
         // that label. A label the files do not name stays, as a merge brought it (R9).
@@ -1025,14 +1052,19 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         if held_artists.get(&record).map_or(&[][..], Vec::as_slice) != ids.as_slice() {
             tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND how = 'files'")?.execute([record])?;
             uncredited.extend(held_artists.get(&record).into_iter().flatten());
-            for (position, artist) in ids.iter().enumerate() {
+            for (position, (artist, phrase)) in ids.iter().zip(&phrases).enumerate() {
                 tx.prepare_cached(
-                    "INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'files')
-                     ON CONFLICT (record, artist) DO UPDATE SET position = excluded.position, how = 'files'",
+                    "INSERT INTO record_artists (record, artist, position, how, phrase) VALUES (?1, ?2, ?3, 'files', ?4)
+                     ON CONFLICT (record, artist) DO UPDATE SET position = excluded.position, how = 'files', phrase = excluded.phrase",
                 )?
-                .execute(params![record, artist, position as i64])?;
+                .execute(params![record, artist, position as i64, phrase])?;
+            }
+        } else {
+            for (artist, phrase) in ids.iter().zip(&phrases) {
+                tx.prepare_cached("UPDATE record_artists SET phrase = ?3 WHERE record = ?1 AND artist = ?2 AND phrase IS NOT ?3")?.execute(params![record, artist, phrase])?;
             }
         }
+        keep_extras(tx, record, &extras)?;
         let mut named: Vec<(i64, String)> = a
             .labels
             .iter()
@@ -1056,6 +1088,112 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![artist, at])?;
     }
     Ok(apart)
+}
+
+/// An entry a record's credit prints that is no main artist (`record_credit_extra`), the record pass's alone: its own featuring (a
+/// single's "A feat. B": an artist here by the id it is credited by, else the one live artist of its name, else a Listed name with
+/// its source's id, `source:id`), or the text a placeholder keeps whole (`printed`: the whole credit prints as it, T-DC3-31). Each
+/// after the main artist at position `after`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Extra {
+    pub after: i64,
+    pub role: String,
+    pub artist: Option<i64>,
+    pub name: String,
+    pub reference: Option<String>,
+    pub phrase: Option<String>,
+}
+
+/// A record's credit worked out (`cratarr_domain::credited`, NAMES.20): its deciding copy's files (a copy made apart from files: its
+/// album artists as given) and the credits its sources kept for the record's releases (CRED.24's lists, a guess's never).
+fn credit_of(tx: &Connection, record: i64, a: &super::AlbumCopy) -> Result<cratarr_domain::credited::RecordCredit> {
+    use cratarr_domain::credited::{FilesCredit, RecordSaid, credited_artists};
+    let (album, tracks) = if a.album_credit.is_none() && a.track_credits.is_empty() {
+        let line = if a.artist.trim().is_empty() { cratarr_rules::names::credit_text(&a.artists.iter().map(|n| (n.as_str(), None)).collect::<Vec<_>>()) } else { a.artist.clone() };
+        (Some(FilesCredit { line, names: a.artists.clone(), ids: a.artist_ids.clone(), title: None }), Vec::new())
+    } else {
+        (a.album_credit.clone(), a.track_credits.clone())
+    };
+    Ok(credited_artists(&RecordSaid { album, tracks, sources: release_credits(tx, record)?, whole: a.keep.clone() }))
+}
+
+/// Each source's credit of a record's release as an ordered list (CRED.24): the rows a source kept on every track with the words
+/// `artist` and `featuring`, a guess's never; the sources in the order asked.
+fn release_credits(tx: &Connection, record: i64) -> Result<Vec<cratarr_domain::credited::SourceCredit>> {
+    use cratarr_domain::credits::{Entry, ListRole, Listed};
+    let mut by: std::collections::BTreeMap<(usize, String, String), Vec<Entry>> = std::collections::BTreeMap::new();
+    for k in super::credits::credits_in(tx, record)? {
+        if k.guess || !k.row.track.is_empty() || !matches!(k.row.word.as_str(), "artist" | "featuring") {
+            continue;
+        }
+        let role = if k.row.word == "featuring" { ListRole::Featuring } else { ListRole::Main };
+        let person = k.row.person.clone().map(|id| Listed { source: k.source.clone(), id });
+        by.entry((cratarr_domain::facts::asked_at(&k.source), k.source.clone(), k.of.clone())).or_default().push(Entry { name: k.row.name, person, role, phrase: k.row.phrase });
+    }
+    Ok(by.into_iter().map(|((_, source, _), entries)| cratarr_domain::credited::SourceCredit { source, entries }).collect())
+}
+
+/// The entries a record's worked-out credit prints that are no main artist, each after the main artist it follows (`mains`: how
+/// many it holds).
+fn extras_of(tx: &Connection, credit: &cratarr_domain::credited::RecordCredit, mains: usize) -> Result<Vec<Extra>> {
+    let mut out = Vec::new();
+    let mut seen = 0i64;
+    let last = mains.saturating_sub(1) as i64;
+    for e in &credit.entries {
+        if e.role == cratarr_domain::credits::ListRole::Main {
+            seen += 1;
+            continue;
+        }
+        // T-CRED-4: the artist here who holds its id; else the one live artist of its name (never one among namesakes); else Listed.
+        let held = match &e.person {
+            Some(p) => subjects_in(tx, &Ref::new(&p.source, "artist", &p.id))?.iter().find_map(|s| ids::artist_number(s)),
+            None => None,
+        };
+        let artist = match held {
+            Some(a) => Some(a),
+            None => one_live_artist_in(tx, &e.name)?,
+        };
+        out.push(Extra {
+            after: (seen - 1).clamp(0, last),
+            role: "featuring".into(),
+            artist,
+            name: e.name.clone(),
+            reference: e.person.as_ref().map(|p| format!("{}:{}", p.source, p.id)),
+            phrase: e.phrase.clone(),
+        });
+    }
+    if let Some(text) = &credit.text {
+        out.push(Extra { after: 0, role: "printed".into(), artist: None, name: text.clone(), reference: None, phrase: None });
+    }
+    Ok(out)
+}
+
+/// A record's extras as kept, in order.
+pub(super) fn extras_in(tx: &Connection, record: i64) -> Result<Vec<Extra>> {
+    let mut st = tx.prepare_cached("SELECT after, role, artist, name, ref, phrase FROM record_credit_extra WHERE record = ?1 ORDER BY n")?;
+    let rows = st.query_map([record], |r| Ok(Extra { after: r.get(0)?, role: r.get(1)?, artist: r.get(2)?, name: r.get(3)?, reference: r.get(4)?, phrase: r.get(5)? }))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Its extras written where they differ, so a pass over a record as it was writes nothing.
+fn keep_extras(tx: &Connection, record: i64, extras: &[Extra]) -> Result<()> {
+    if extras_in(tx, record)? == extras {
+        return Ok(());
+    }
+    tx.prepare_cached("DELETE FROM record_credit_extra WHERE record = ?1")?.execute([record])?;
+    for (n, x) in extras.iter().enumerate() {
+        tx.prepare_cached("INSERT INTO record_credit_extra (record, n, after, role, artist, name, ref, phrase) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?
+            .execute(params![record, n as i64, x.after, x.role, x.artist, x.name, x.reference, x.phrase])?;
+    }
+    Ok(())
+}
+
+/// The rule every writer of a record's mains but the pass keeps (the coordinator, 2026-11-22): a write that inserts, deletes, re-keys
+/// or reorders a record's main artists takes its extras away in the same transaction, as they are the pass's output and would print
+/// after the wrong artist; the next pass writes them again. A missing featuring until then is safe, a misplaced one isn't.
+pub(super) fn mains_changed(tx: &Connection, record: i64) -> Result<()> {
+    tx.prepare_cached("DELETE FROM record_credit_extra WHERE record = ?1")?.execute([record])?;
+    Ok(())
 }
 
 /// Each record's tracks' places (`tracks.disc`, `tracks.number`) from its deciding copy (`first_ranked`: a main library's first; FA2,
@@ -1134,12 +1272,6 @@ pub(super) fn record_places(tx: &Connection, albums: &[super::AlbumCopy], record
 
 /// An album's artists the files give a MusicBrainz id for, each with it (lower case), where they give as many ids as artists (R6's
 /// pairing).
-fn files_ids(a: &super::AlbumCopy) -> Vec<(&str, String)> {
-    if a.artist_ids.len() != a.artists.len() {
-        return Vec::new();
-    }
-    a.artists.iter().zip(&a.artist_ids).map(|(n, id)| (n.as_str(), id.trim().to_lowercase())).filter(|(_, id)| is_mbid(id)).collect()
-}
 
 /// R1 (A2.1, A2.2): the artist an album artist the files give MusicBrainz id `id` for is, in the record pass's transaction: the artist
 /// who holds it, however they came by it; else the one live artist of `name` (the name most files pair with it, R6) who holds no
@@ -1247,7 +1379,9 @@ fn credit_release_in(tx: &Connection, record: i64, artists: &[(Ref, String, bool
             super::artists::Opening::Decides(only) if *by_name => only,
             _ => super::artists::by_reference_in(tx, r, name.trim(), "link", false, at)?,
         };
-        tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, artist, position as i64])?;
+        if tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, artist, position as i64])? > 0 {
+            mains_changed(tx, record)?;
+        }
     }
     Ok(())
 }
@@ -1307,8 +1441,14 @@ pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, 
             if giving.contains(&holder)
                 && let (Some(from), Some(to)) = (ids::artist_number(&holder), ids::artist_number(subject))
             {
+                // Re-keyed in place, positions kept: a record's extras may stay; one whose credit the taker held already loses a
+                // main, and its extras with it.
                 tx.prepare_cached("UPDATE OR IGNORE record_artists SET artist = ?2 WHERE artist = ?1 AND how = 'listing'")?.execute(params![from, to])?;
-                tx.prepare_cached("DELETE FROM record_artists WHERE artist = ?1 AND how = 'listing'")?.execute([from])?;
+                let left: Vec<i64> =
+                    tx.prepare_cached("DELETE FROM record_artists WHERE artist = ?1 AND how = 'listing' RETURNING record")?.query_map([from], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+                for record in left {
+                    mains_changed(tx, record)?;
+                }
                 tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![from, at])?;
             }
             taken.push(holder);
@@ -1416,6 +1556,16 @@ pub(super) fn requested_in(db: &Connection, records: &[i64]) -> Result<std::coll
     for q in by_id.values_mut() {
         if let Some(holder) = q.holder {
             (q.copies, q.present, q.list) = holding_in(db, q.row.id, holder)?;
+        }
+    }
+    // Its credited artists' names, in one query (F54.4 (5)).
+    if !wanted.is_empty() {
+        let mut st = db.prepare(&format!("SELECT ra.record, a.name FROM record_artists ra JOIN artists a ON a.id = ra.artist WHERE ra.record IN ({}) ORDER BY ra.record, ra.position", id_list(&wanted)))?;
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+            let (record, name) = row?;
+            if let Some(q) = by_id.get_mut(&record) {
+                q.artists.push(name);
+            }
         }
     }
     Ok(ends.into_iter().filter_map(|(id, end)| Some((id, by_id.get(&end)?.clone()))).collect())
@@ -1948,7 +2098,7 @@ pub(super) fn read_records_in(db: &Connection, records: &[i64], names: &mut Fold
             let own = refs.remove(&row.id).unwrap_or_default();
             let groups = own.iter().filter(|(s, k, _)| s == "musicbrainz" && k == "release-group").map(|(.., v)| v.clone()).collect();
             let bandcamp = own.iter().find(|(s, k, _)| s == "bandcamp" && k == "album").map(|(.., v)| v.clone());
-            Requested { holder: holders.get(&row.id).copied(), groups, bandcamp, refs: own, row, copies: Vec::new(), present: 0, list: None }
+            Requested { holder: holders.get(&row.id).copied(), groups, bandcamp, refs: own, row, copies: Vec::new(), present: 0, list: None, artists: Vec::new() }
         })
         .collect())
 }
@@ -2399,6 +2549,9 @@ impl Catalogue {
                 && !tx.prepare_cached("SELECT 1 FROM records WHERE merged_into = ?1")?.exists([record])?
             {
                 let gone = tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND artist = ?2 AND how = 'listing'")?.execute(params![record, artist])?;
+                if gone > 0 {
+                    mains_changed(&tx, record)?;
+                }
                 if gone > 0 && !tx.prepare_cached("SELECT 1 FROM record_artists WHERE artist = ?1")?.exists([artist])? {
                     tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![artist, at])?;
                 }
@@ -2477,8 +2630,10 @@ impl Catalogue {
             None if by_name => one_live_artist_in(&tx, name)?,
             None => None,
         };
-        if let Some(artist) = credited {
-            tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')")?.execute(params![record, artist])?;
+        if let Some(artist) = credited
+            && tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')")?.execute(params![record, artist])? > 0
+        {
+            mains_changed(&tx, record)?;
         }
         tx.commit()?;
         Ok(credited)
@@ -3179,7 +3334,9 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
             let listing = Listing { title: w.title.clone(), artist: w.artist.clone(), year: w.year, cover: w.cover.clone(), refs: group.clone().into_iter().collect(), ..Listing::default() };
             let record = keep_rows_in(tx, artist, &[listing], "link", at, Some(at), None)?[0];
             for (position, name) in names.iter().enumerate().skip(1) {
-                tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, credited[&ids::artist_key(name)], position as i64])?;
+                if tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, credited[&ids::artist_key(name)], position as i64])? > 0 {
+                    mains_changed(tx, record)?;
+                }
             }
             // The first request by these names alone to meet their clash: the next takes this record (X9).
             if shared && alone {
@@ -3387,32 +3544,14 @@ pub struct CarriedDiscography {
 }
 
 /// The words that join two artists in one credit ("A & B", "A feat. B"), lower case: a credit with one is no one artist's
-/// name, and the artists it names are what lies between them (`credited_apart`).
+/// name (0.17's step gives such a credit no artist's id). Never a splitter: a credit splits by F54's rule alone (`credit_parts`).
 pub const JOINS: [&str; 11] = [" & ", ", ", " feat. ", " feat ", " featuring ", " ft. ", " ft ", " with ", " x ", " vs. ", " vs "];
 
-/// The artists a credit names, apart: split at the words that join two (`JOINS`), each as written. One artist's credit is
-/// itself; a band whose name holds such a word ("Earth, Wind & Fire") splits too, so a caller pairs the parts with something
-/// that counts them.
-pub fn credited_apart(credit: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = credit.trim();
-    loop {
-        // ASCII lower case keeps every byte where it was, so a place found in it is the same place in `rest`.
-        let lower = rest.to_ascii_lowercase();
-        let Some((at, len)) = JOINS.iter().filter_map(|j| lower.find(j).map(|at| (at, j.len()))).min() else { break };
-        out.push(rest[..at].trim().to_string());
-        rest = rest[at + len..].trim_start();
-    }
-    out.push(rest.trim().to_string());
-    out.retain(|n| !n.is_empty());
-    out
-}
-
 /// What the files call each MusicBrainz artist id (R6): each file's album artists (the `albumartists` it lists, else its
-/// `albumartist` apart, `credited_apart`) paired in order with its album artist ids, where there are as many of each, as the
-/// record pass pairs them (`record_credits`); for each id, the name most files pair with it, the lower where as many. A
-/// collaboration names each of its artists by their own id, never the two names together, and a file whose names and ids do
-/// not pair names no one.
+/// `albumartist` whole, through F54's rule: SCENARIOS-DC3 F54.4 (4)) paired in order with its album artist ids, where there are as
+/// many of each, as the record pass pairs them (`record_credits`); for each id, the name most files pair with it, the lower where as
+/// many. A collaboration's list names each of its artists by their own id; a line with no list is one name, never cut on a bare
+/// "&"; a file whose names and ids do not pair names no one.
 fn files_artists(tx: &Connection) -> Result<std::collections::HashMap<String, String>> {
     let mut st = tx.prepare(
         "SELECT g.folder, g.rel, g.name, g.value FROM tags g JOIN files f ON f.folder = g.folder AND f.rel = g.rel
@@ -3422,7 +3561,13 @@ fn files_artists(tx: &Connection) -> Result<std::collections::HashMap<String, St
     let rows: Vec<(i64, String, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
     let mut said: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>> = std::collections::BTreeMap::new();
     let mut pair = |artist: Option<&str>, artists: &[&str], ids: &[String]| {
-        let names: Vec<String> = if artists.is_empty() { artist.map(credited_apart).unwrap_or_default() } else { artists.iter().map(|a| a.trim().to_string()).collect() };
+        // F54.4 (4): the names apart only as the list tag names them, through F54's one rule; a line alone is one name.
+        let parts: Vec<cratarr_rules::names::Part> = if artists.is_empty() { artist.into_iter().collect::<Vec<_>>() } else { artists.to_vec() }
+            .into_iter()
+            .map(|a| cratarr_rules::names::Part { name: a.trim().to_string(), ..Default::default() })
+            .filter(|p| !p.name.is_empty())
+            .collect();
+        let names: Vec<String> = cratarr_rules::names::credit_parts(&parts, &[], &[]).parts.into_iter().map(|p| p.name).collect();
         if names.len() == ids.len() {
             for (id, name) in ids.iter().zip(names) {
                 if is_mbid(id) {
@@ -4671,6 +4816,7 @@ impl Catalogue {
             for artist in credits.query_map([record], |r| r.get::<_, i64>(0))? {
                 uncredited.insert(artist?);
             }
+            mains_changed(&tx, record)?;
             for table in ["record_labels", "reference_tracks", "lists_to_read", "facts"] {
                 tx.prepare_cached(&format!("DELETE FROM {table} WHERE record = ?1"))?.execute([record])?;
             }
@@ -5919,26 +6065,125 @@ mod tests {
         cat.references_carried().unwrap().unwrap()
     }
 
-    /// R6 (N1): a collaboration's files ("A & B", two ids) name each artist by their own id, as a solo album's do; no artist of
-    /// the two names together is made, and each discography's records not had are credited to its own artist.
+    /// R6 (N1): a collaboration's files, their list tag naming each ("A & B", ALBUMARTISTS [A, B], two ids), name each artist by
+    /// their own id, as a solo album's do; no artist of the two names together is made, and each discography's records not had are
+    /// credited to its own artist. Changed by design (SCENARIOS-DC3 F54.4 (4), 3a-1): a line alone ("Low Tide & Kite Rooms", two ids,
+    /// no list) is one name, never cut on a bare "&", so it pairs with neither id: the cut named Tape Club here before.
     #[test]
     fn a_collaboration_names_each_artist_by_their_own_id() {
-        let cat = crate::catalogue::tests::tracks(3);
+        let cat = crate::catalogue::tests::tracks(4);
         let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
-        for (track, rel, artist, ids) in [(1, "A/01.flac", "Glass Harbour & Tape Club", format!("{}; {}", mbid(201), mbid(204))), (2, "B/01.flac", "Glass Harbour", mbid(201)), (3, "C/01.flac", "Earth, Wind & Fire", mbid(209))] {
+        let both = format!("{}; {}", mbid(201), mbid(204));
+        crate::catalogue::tests::file_of_track(&cat, "A/01.flac", 1);
+        cat.tag_for_tests(0, "A/01.flac", &[("albumartist", "Glass Harbour & Tape Club"), ("albumartists", "Glass Harbour"), ("albumartists", "Tape Club"), ("musicbrainz_albumartistid", &both)]);
+        for (track, rel, artist, ids) in [(2, "B/01.flac", "Glass Harbour", mbid(201)), (3, "C/01.flac", "Earth, Wind & Fire", mbid(209)), (4, "D/01.flac", "Low Tide & Kite Rooms", format!("{}; {}", mbid(211), mbid(212)))] {
             crate::catalogue::tests::file_of_track(&cat, rel, track);
             cat.tag_for_tests(0, rel, &[("albumartist", artist), ("musicbrainz_albumartistid", &ids)]);
         }
         let discography = |n: u32, title: &str, group: u32| CarriedDiscography { mbid: mbid(n), at: 7, listings: vec![group_listing(title, &mbid(group))], names: Vec::new() };
-        let report = carry_discographies(&cat, vec![discography(204, "Lost Tapes", 115), discography(201, "Harbour Lights", 111), discography(209, "Gratitude", 120)]);
+        let report = carry_discographies(
+            &cat,
+            vec![discography(204, "Lost Tapes", 115), discography(201, "Harbour Lights", 111), discography(209, "Gratitude", 120), discography(212, "Kite Days", 121)],
+        );
         let held = |name: &str| cat.artist_of(name).unwrap().map(|id| cat.references_of(&ids::artist(id)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>());
-        assert_eq!(held("Tape Club"), Some(vec![mbid(204)]), "named by the collaboration's own pairing");
+        assert_eq!(held("Tape Club"), Some(vec![mbid(204)]), "named by the collaboration's list");
         assert_eq!(held("Glass Harbour"), Some(vec![mbid(201)]));
         assert_eq!(cat.artist_of("Glass Harbour & Tape Club").unwrap(), None, "no joint artist");
-        assert_eq!(cat.artist_of("Earth").unwrap(), None, "three names for one id pair with nothing");
+        // Changed by design (F54.1 (p), (q)): one name with one id pairs whole, where the cut made three names of it, pairing nothing.
+        assert_eq!(cat.artist_of("Earth").unwrap(), None, "never a part of a band's name");
+        assert_eq!(held("Earth, Wind & Fire"), Some(vec![mbid(209)]), "one name, one id: whole");
+        assert_eq!((cat.artist_of("Kite Rooms").unwrap(), cat.artist_of("Low Tide").unwrap()), (None, None), "a line alone is cut on no \"&\"");
         let credited = |group: u32| cat.subject_of(&Ref::new("musicbrainz", "release-group", &mbid(group))).unwrap().iter().map(|s| cat.record_artists(ids::record_number(s).unwrap()).unwrap()).collect::<Vec<_>>();
         assert_eq!(credited(115), [vec![cat.artist_of("Tape Club").unwrap().unwrap()]]);
-        assert!(credited(120).is_empty(), "{report}");
+        assert_eq!(credited(120), [vec![cat.artist_of("Earth, Wind & Fire").unwrap().unwrap()]], "{report}");
+        assert!(credited(121).is_empty(), "the line alone names no one for 212: {report}");
+    }
+
+    /// The coordinator's rule for `record_credit_extra` (2026-11-22): `record_artists` stays the one store of a record's main artists,
+    /// and what its credit prints beside them is the record pass's alone. After each of the ten writers of `record_artists`, every
+    /// extra names a position its record's mains hold; and a record whose mains a writer other than the pass inserted, deleted,
+    /// re-keyed or reordered has no extras until the pass runs again, which writes them back.
+    #[test]
+    fn a_records_extras_follow_its_mains_after_every_writer() {
+        let cat = with_tracks(4);
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let harbour = by_files("Harbour", &[1, 2], &["Rowan Fell feat. Tamsin Kell"], &[]);
+        let other = by_files("Elsewhere", &[3, 4], &["Glass Harbour"], &[]);
+        let extras = |record: i64| -> i64 { cat.db().query_row("SELECT count(*) FROM record_credit_extra WHERE record = ?1", [record], |r| r.get(0)).unwrap() };
+        let held = |what: &str| {
+            let stray: i64 = cat
+                .db()
+                .query_row("SELECT count(*) FROM record_credit_extra x WHERE NOT EXISTS (SELECT 1 FROM record_artists r WHERE r.record = x.record AND r.position = x.after)", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(stray, 0, "{what}: every extra names a main artist's position");
+        };
+        let in_tx = |f: &dyn Fn(&Connection)| {
+            let mut db = cat.db();
+            let tx = db.transaction().unwrap();
+            f(&tx);
+            tx.commit().unwrap();
+        };
+        // 1. The pass: Harbour's own featuring, after Rowan Fell.
+        pass(&cat, &[harbour.clone(), other.clone()]);
+        let (record, elsewhere) = (record_of_track(&cat, 1), record_of_track(&cat, 3));
+        assert_eq!(extras(record), 1, "the pass writes Tamsin Kell featuring");
+        held("the pass");
+        let again = |what: &str| {
+            pass(&cat, std::slice::from_ref(&harbour));
+            assert_eq!(extras(record), 1, "{what}: the next pass writes them back");
+            held(what);
+        };
+        // 2. `credit_opened` credits only a record nobody is credited on: Harbour's mains, and its extras, stay.
+        cat.credit_opened(record, Some(&Ref::new("musicbrainz", "artist", &mbid(901))), "Kite Theory", false).unwrap();
+        assert_eq!(extras(record), 1, "credit_opened changed none of its mains");
+        held("credit_opened");
+        // 3. `credit_release_in` credits only a record nobody is credited on: Harbour's stay. On a record of none, it credits a
+        // release's artists (positions from 0), and the record holds no extras to misplace.
+        in_tx(&|tx| credit_release_in(tx, record, &[(Ref::new("musicbrainz", "artist", &mbid(902)), "Low Tide Choir".into(), false)], 1).unwrap());
+        assert_eq!(extras(record), 1, "credit_release_in changed none of its mains");
+        held("credit_release_in");
+        // 4. `put_reference`: an id given way moves its records' listing credits (U4), re-keyed in place.
+        let taker = cat.artist_for("Low Tide Choir Two").unwrap();
+        in_tx(&|tx| {
+            put_reference(tx, &ids::artist(taker), &Ref::new("musicbrainz", "artist", &mbid(902)), "files", 1, true).unwrap();
+        });
+        held("put_reference");
+        // 5. `merge_records_in`: a record not had (a request's, credited by its names) merged into Harbour, its credits brought in.
+        let asked = {
+            let mut db = cat.db();
+            let tx = db.transaction().unwrap();
+            let w = Wanted { group: None, artist: "Kite Theory".into(), artists: vec!["Kite Theory".into()], title: "Harbour Sessions".into(), label: None, year: None, cover: None, page: None, page_link: false };
+            let asked = request_record_in(&tx, &w, 1).unwrap().record;
+            tx.commit().unwrap();
+            asked
+        };
+        assert_ne!(asked, elsewhere);
+        in_tx(&|tx| merge_records_in(tx, asked, record).unwrap());
+        assert_eq!(extras(record), 0, "a merge changed its mains");
+        held("merge_records_in");
+        again("merge_records_in");
+        // 6. `keep_rows_in`: a list's row of a record credited already credits nothing more; its extras stay.
+        let listing = Listing { title: "Harbour".into(), kind: Some("album".into()), refs: vec![Ref::new("musicbrainz", "release-group", &mbid(903))], ..Default::default() };
+        in_tx(&|tx| {
+            keep_rows_in(tx, Some(taker), std::slice::from_ref(&listing), "link", 1, Some(1), None).unwrap();
+        });
+        held("keep_rows_in");
+        // 7. `give_back_where`: rows joined by their names given back.
+        in_tx(&|tx| give_back_where(tx, record, 1, |_, _| true).unwrap());
+        held("give_back_where");
+        // 8. `discogs_own`: an artist's own Discogs rows, a listing credit taken away.
+        cat.discogs_own(taker, Vec::new(), 1, &Default::default()).unwrap();
+        held("discogs_own");
+        // 9. `request_record_in`: a request's record by its names, credited to each.
+        in_tx(&|tx| {
+            let w = Wanted { group: None, artist: "Kite Theory & Low Tide Choir".into(), artists: vec!["Kite Theory".into(), "Low Tide Choir".into()], title: "Sleepers".into(), label: None, year: None, cover: None, page: None, page_link: false };
+            request_record_in(tx, &w, 1).unwrap();
+        });
+        held("request_record_in");
+        // 10. `forget_quiet`: a record nobody keeps forgotten, its credits with it.
+        cat.forget_quiet(i64::MAX / 2, &Default::default()).unwrap();
+        held("forget_quiet");
+        assert_eq!(extras(record), 1, "Harbour, had, is no quiet record: its extras stay");
     }
 
     /// SCENARIOS-DC3 F54.4 (4) (its R6 half; (3), the crates' Artist filter and Out, is 3a-3's): names pair with ids only through the

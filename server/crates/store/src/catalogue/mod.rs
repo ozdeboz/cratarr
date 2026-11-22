@@ -317,6 +317,12 @@ pub struct AlbumCopy {
     /// each artist's `files` reference where there is one id for each.
     pub artists: Vec<String>,
     pub artist_ids: Vec<String>,
+    /// Its credit as its files give it, NAMES.20's inputs for the record pass (`cratarr_domain::credited`): its deciding file's album
+    /// artist (none where no file names one: COU.10), the credit of each of its files that speak, in track order, and the names its
+    /// library keeps whole. Neither given (a copy made apart from files, a test's): `artists` and `artist_ids` are its album artist.
+    pub album_credit: Option<cratarr_domain::credited::FilesCredit>,
+    pub track_credits: Vec<cratarr_domain::credited::FilesCredit>,
+    pub keep: Vec<String>,
     /// Its labels as its files name them, each with its catalogue number ('' none): its record's `record_labels`.
     pub labels: Vec<(String, String)>,
     /// As shown, for the record's own facts.
@@ -608,9 +614,12 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 47] = [
+const ADDED_COLUMNS: [(&str, &str); 48] = [
     // VR5 (H5): the administrator's pick names its reference: its kind and value, apart by U+001F, beside `counting`'s source.
     ("records", "counting_ref TEXT"),
+    // DC3a (NAMES.20, NAMES.22): what its credit is by, as the record pass decided it: `files`, each source agreeing, or the source whose
+    // credit it is (row 2), joined by ','.
+    ("records", "credit_by TEXT"),
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -1198,6 +1207,10 @@ impl Catalogue {
         // T-COU-17 (DC1a part 3b): a placed file's tags as first read, on a table part 3a made.
         if !conn.prepare("SELECT 1 FROM pragma_table_info('placements') WHERE name = 'heard'")?.exists([])? {
             conn.execute_batch("ALTER TABLE placements ADD COLUMN heard TEXT")?;
+        }
+        // DC3a (CRED.27): the phrase printed after each of a record's main artists, on a table 0.17 made.
+        if !conn.prepare("SELECT 1 FROM pragma_table_info('record_artists') WHERE name = 'phrase'")?.exists([])? {
+            conn.execute_batch("ALTER TABLE record_artists ADD COLUMN phrase TEXT")?;
         }
         lists::reshape_after(&conn, set_aside).context("keying the lists by reference")?;
         conn.execute_batch(artists::SCHEMA).context("creating the artists' numbers")?;
@@ -5173,13 +5186,21 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
         db.query_row("SELECT count(*), total(size), total(mtime) FROM cover_files", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     // A kept cover picked, reset or carried builds its album again too (COU.11): its stamp moves on every surface.
     let (kept, kept_at): (i64, f64) = db.query_row("SELECT count(*), total(at) FROM record_covers", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    // A source's credit of a release kept or changed builds again too (DC3a, NAMES.20 rows 2, F54.1 (x), NAMES.22): the record pass
+    // decides its record's credit with it, and its album prints it.
+    let (credited, credited_at, credited_said): (i64, f64, f64) = db.query_row(
+        "SELECT count(*), total(at), total(length(name) + length(coalesce(phrase, '')) + length(coalesce(person, '')))
+         FROM credits WHERE track IS NULL AND guess = 0 AND word IN ('artist', 'featuring')",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     // New analyses build the library again too (their gains and tempi are the songs').
     let (analysed, at): (i64, f64) = db.query_row("SELECT count(*), total(analysed_at) FROM analysis", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
     // How many are read goes with the analyses' tail (0.9.7): tags read again over unchanged files (a new reader's
     // reread of every file, hours on the NAS) build the library at most every so often, as new analyses do, and not
     // after every pass: each build had the radio and the crates read everything again, and the sim went past 768 MB.
     // A file Cratarr wrote changes its size and time, which still builds at once.
-    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} covers {covers}/{cover_size}/{cover_mtime}/{kept}/{kept_at} analysis {analysed}/{at}/{read}"))
+    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} covers {covers}/{cover_size}/{cover_mtime}/{kept}/{kept_at} credits {credited}/{credited_at}/{credited_said} analysis {analysed}/{at}/{read}"))
 }
 
 /// Test helpers, for this module's tests and those moved up to the crates above (SPLIT-PLAN 3.2).

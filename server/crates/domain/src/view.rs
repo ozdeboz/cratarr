@@ -226,6 +226,9 @@ pub struct RecordProperties {
     pub title: FactView<String>,
     pub artists: FactView<Vec<Named>>,
     pub credit: String,
+    /// Its printed credit as entries (DC3a, CRED.24): its artists by id with the phrases its credit prints after them, its own
+    /// featuring (a single's "A feat. B") after the artist it follows, by id or Listed: what the head's chips draw.
+    pub entries: Vec<crate::credited::CreditEntry>,
     pub year: FactView<Option<i32>>,
     pub labels: FactView<Vec<Named>>,
     pub cover: FactView<Option<String>>,

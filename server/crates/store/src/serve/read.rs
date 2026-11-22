@@ -902,12 +902,14 @@ impl Library {
     pub fn secondaries_heard(&self, id: &str) -> Result<Option<Heard>> {
         let db = self.db();
         let Some(mbid): Option<Option<String>> = db.prepare_cached("SELECT mbid FROM albums WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()? else { return Ok(None) };
-        let various: bool = db
-            .prepare_cached("SELECT EXISTS (SELECT 1 FROM album_artists WHERE album_id = ?1 AND position = 0 AND lower(name) = 'various artists')")?
-            .query_row([id], |r| r.get(0))?;
-        // Its track artists by name key, as the build counts them (`rule_secondaries`).
-        let names: Vec<String> =
-            db.prepare_cached("SELECT sa.name FROM song_artists sa JOIN songs s ON s.id = sa.song_id WHERE s.album_id = ?1")?.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        // Credited to Various Artists alone (T-NAMES-9: `various()`, the one test), as the build reads its record's credit.
+        let credited: Vec<String> = db.prepare_cached("SELECT name FROM album_artists WHERE album_id = ?1 ORDER BY position")?.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let various = credited.len() == 1 && cratarr_rules::crates::various(&credited[0]);
+        // Its main track artists by name key, as the build counts them (`rule_secondaries`; a featured artist never counts).
+        let names: Vec<String> = db
+            .prepare_cached("SELECT sa.name FROM song_artists sa JOIN songs s ON s.id = sa.song_id WHERE s.album_id = ?1 AND sa.featuring = 0")?
+            .query_map([id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
         let artists = names.iter().map(|n| crate::serve::ids::artist_key(n)).collect::<HashSet<String>>().len();
         let musicbrainz = mbid.as_ref().and_then(|m| self.release_types_of(&format!("mb:{m}"))).map(|k| k.1);
         let discogs = self.release_types_of(&format!("dc:{id}")).map(|k| k.1);

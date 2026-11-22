@@ -299,8 +299,13 @@ pub struct Quality {
 #[derive(Debug, Clone)]
 pub struct RecordRead {
     pub row: super::records::RecordRow,
-    /// Its credited artists in credit order: their ids and names.
+    /// Its credited artists in credit order: their ids and names; the phrase its credit prints after each (CRED.27), and what it prints
+    /// beside them (its own featuring, a placeholder's whole line: `record_credit_extra`).
     pub artists: Vec<(i64, String)>,
+    pub phrases: Vec<Option<String>>,
+    pub extras: Vec<super::records::Extra>,
+    /// What its credit is by, as the record pass decided it (`files`, each source agreeing, or a source's own, NAMES.20 row 2).
+    pub credit_by: Vec<String>,
     /// Its labels: each label's id, name and catalogue number here ('' none), in the order given.
     pub labels: Vec<(i64, String, String)>,
     pub copies: Copies,
@@ -343,10 +348,20 @@ impl RecordRead {
 pub fn record_read_in(tx: &Connection, id: i64, library: &dyn Fn(i64) -> Library) -> Result<Option<RecordRead>> {
     let Some(end) = super::records::merged_end(tx, id)? else { return Ok(None) };
     let Some(row) = super::records::record_in(tx, end)? else { return Ok(None) };
-    let artists = tx
-        .prepare_cached("SELECT a.id, a.name FROM record_artists r JOIN artists a ON a.id = r.artist WHERE r.record = ?1 ORDER BY r.position, a.id")?
-        .query_map([end], |r| Ok((r.get(0)?, r.get(1)?)))?
+    let credited: Vec<(i64, String, Option<String>)> = tx
+        .prepare_cached("SELECT a.id, a.name, r.phrase FROM record_artists r JOIN artists a ON a.id = r.artist WHERE r.record = ?1 ORDER BY r.position, a.id")?
+        .query_map([end], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
+    let phrases: Vec<Option<String>> = credited.iter().map(|(_, _, p)| p.clone()).collect();
+    let artists: Vec<(i64, String)> = credited.into_iter().map(|(id, name, _)| (id, name)).collect();
+    let extras = super::records::extras_in(tx, end)?;
+    let credit_by: Vec<String> = tx
+        .prepare_cached("SELECT credit_by FROM records WHERE id = ?1")?
+        .query_row([end], |r| r.get::<_, Option<String>>(0))
+        .optional()?
+        .flatten()
+        .map(|b| b.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
     let labels = tx
         .prepare_cached("SELECT l.id, l.name, r.catno FROM record_labels r JOIN labels l ON l.id = r.label WHERE r.record = ?1 ORDER BY l.id, r.catno")?
         .query_map([end], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
@@ -378,7 +393,7 @@ pub fn record_read_in(tx: &Connection, id: i64, library: &dyn Fn(i64) -> Library
         .into_iter()
         .filter(|r| !copies.confirmed.contains(r))
         .collect();
-    Ok(Some(RecordRead { row, artists, labels, copies, quality, bandcamp, lists, pick, said, guesses }))
+    Ok(Some(RecordRead { row, artists, phrases, extras, credit_by, labels, copies, quality, bandcamp, lists, pick, said, guesses }))
 }
 
 #[cfg(test)]

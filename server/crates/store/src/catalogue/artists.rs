@@ -74,6 +74,11 @@ pub struct Credits {
     /// Each record's kept cover's stamp, and whether it is a choice (above the files) or a service's first (below them): what the
     /// served album's cover names (COU.11, the one resolver).
     pub pictures: HashMap<i64, (String, bool)>,
+    /// DC3a: each credited artist's name as the catalogue keeps it; each record's phrases printed after its artists, by position; and
+    /// what its credit prints beside them (`record_credit_extra`): what the served line and the album's artists read.
+    pub names: HashMap<i64, String>,
+    pub phrases: HashMap<i64, Vec<Option<String>>>,
+    pub extras: HashMap<i64, Vec<super::records::Extra>>,
 }
 
 /// A new artist of a name, with their number (C55).
@@ -257,10 +262,19 @@ impl Catalogue {
     pub fn served_credits(&self) -> Result<Credits> {
         let read = |db: &Connection| -> Result<Credits> {
             let mut credits = Credits::default();
-            let mut st = db.prepare("SELECT ra.record, ra.artist, a.key FROM record_artists ra JOIN artists a ON a.id = ra.artist ORDER BY ra.record, ra.position")?;
-            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
-                let (record, artist, key) = row?;
+            let mut st = db.prepare("SELECT ra.record, ra.artist, a.key, a.name, ra.phrase FROM record_artists ra JOIN artists a ON a.id = ra.artist ORDER BY ra.record, ra.position")?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?)))? {
+                let (record, artist, key, name, phrase) = row?;
                 credits.records.entry(record).or_default().push((artist, key));
+                credits.phrases.entry(record).or_default().push(phrase);
+                credits.names.insert(artist, name);
+            }
+            let mut st = db.prepare("SELECT record, after, role, artist, name, ref, phrase FROM record_credit_extra ORDER BY record, n")?;
+            for row in st.query_map([], |r| {
+                Ok((r.get::<_, i64>(0)?, super::records::Extra { after: r.get(1)?, role: r.get(2)?, artist: r.get(3)?, name: r.get(4)?, reference: r.get(5)?, phrase: r.get(6)? }))
+            })? {
+                let (record, extra) = row?;
+                credits.extras.entry(record).or_default().push(extra);
             }
             let mut st = db.prepare("SELECT subject, lower(value) FROM \"references\" WHERE source = 'musicbrainz' AND kind = 'artist' AND subject LIKE 'ar-%' ORDER BY subject")?;
             for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {

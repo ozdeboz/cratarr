@@ -532,6 +532,10 @@ pub fn ladder(r: &Record) -> Vec<String> {
     });
     add(format!("{artist} {title}"));
     add(format!("{main} {title}"));
+    // F54.4 (5): a rung per credited artist of the record, by its one name, after the whole credit (never a credit of its own).
+    for one in &r.artists {
+        add(format!("{} {title}", words(one)));
+    }
     let mut chars = main.chars();
     if let Some(first) = chars.next()
         && main.chars().count() > 2
@@ -1646,7 +1650,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
         k.next += 1;
         k.items.push(Item {
             id: format!("ss-{}", k.next),
-            record: Record { record: o.record, artist: o.artist.clone(), album: o.title.clone(), year: o.year, request: r.id, artists: Vec::new() },
+            record: Record { record: o.record, artist: o.artist.clone(), album: o.title.clone(), year: o.year, request: r.id, artists: o.artists.clone() },
             state: State::Waiting,
             tracks: Vec::new(),
             untimed: Vec::new(),
@@ -3617,7 +3621,19 @@ pub mod tests {
 
     /// A request's record as `records_of` reads it: record `n`, named after its request.
     fn of(n: i64) -> Option<super::super::requests::RecordOf> {
-        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None, holding: Default::default(), released: None, gone_from_incoming: false })
+        Some(super::super::requests::RecordOf {
+            record: n,
+            groups: Vec::new(),
+            title: format!("Album {n}"),
+            artist: "Artist".into(),
+            artists: Vec::new(),
+            year: Some(2000),
+            cover: None,
+            holder: None,
+            holding: Default::default(),
+            released: None,
+            gone_from_incoming: false,
+        })
     }
 
     /// A record holding no copy, its last one deleted from Incoming (U7).

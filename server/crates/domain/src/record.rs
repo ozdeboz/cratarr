@@ -106,6 +106,12 @@ pub struct RecordFacts {
     pub libraries: Vec<LibraryOf>,
     /// What its credits are worked out from (SCENARIOS-CRED): every source's credits, the artists here they may name, its tracks.
     pub credits: crate::credits::Credits,
+    /// DC3a (NAMES.20, CRED.27): the phrase its credit prints after each of `artists`, what it prints beside them (its own featuring,
+    /// a placeholder's whole line), and what its credit is by as the record pass decided it (`files`, each source agreeing, or the
+    /// source whose credit it is).
+    pub artist_phrases: Vec<Option<String>>,
+    pub printed: Vec<crate::credited::Printed>,
+    pub credit_by: Vec<String>,
 }
 
 /// Who sees it and from where: the viewer, the place, the libraries their switch has off, the change log's rev it was read at.
@@ -595,17 +601,49 @@ fn hidden(c: &CopyOf, v: &Viewer) -> bool {
     matches!(&c.facts.library, Library::Incoming { uploader: Some(u), .. } if u != &v.account && !v.role.administers())
 }
 
+/// The record's artists' sources (NAMES.22): what its credit is by as the record pass decided it (the files by the library they lie in,
+/// each source agreeing, or the source whose credit it is), and each other source's credit of its release as a version that differs,
+/// none chosen.
+fn artists_by(r: &RecordFacts) -> (Vec<String>, Vec<crate::view::FactVersion<Vec<Named>>>) {
+    use crate::credits::On;
+    let files = r.credits.said.iter().map(|s| s.source.as_str()).find(|s| s.starts_with("files")).unwrap_or("files").to_string();
+    let by: Vec<String> = r.credit_by.iter().map(|b| if b == "files" { files.clone() } else { b.clone() }).collect();
+    let mut versions: Vec<crate::view::FactVersion<Vec<Named>>> = Vec::new();
+    let mut sources: Vec<&str> = Vec::new();
+    for s in r.credits.said.iter().filter(|s| !s.source.starts_with("files") && s.on == On::Every && s.word == "artist") {
+        if !by.contains(&s.source) && !sources.contains(&s.source.as_str()) {
+            sources.push(&s.source);
+        }
+    }
+    for source in sources {
+        let named: Vec<Named> = r
+            .credits
+            .said
+            .iter()
+            .filter(|s| s.source == source && s.on == On::Every && s.word == "artist")
+            .map(|s| {
+                let id = s.person.as_ref().and_then(|p| r.credits.here.by_ref.iter().find(|(l, _)| l == p)).map(|(_, a)| a.id.clone()).unwrap_or_default();
+                Named { id, name: s.name.clone(), catno: None }
+            })
+            .collect();
+        versions.push(crate::view::FactVersion { value: named, by: vec![source.to_string()] });
+    }
+    (by, versions)
+}
+
 fn properties(r: &RecordFacts) -> RecordProperties {
     let fact = |name: &str| if r.hand.iter().any(|h| h == name) { vec!["hand".to_string()] } else { Vec::new() };
-    let names: Vec<&str> = r.artists.iter().map(|a| a.name.as_str()).collect();
     let (year, kind) = (r.year_now(), r.kind_now());
+    let entries = crate::credited::entries_of(&r.artists.iter().map(|a| (a.id.clone(), a.name.clone())).collect::<Vec<_>>(), &r.artist_phrases, &r.printed);
+    let (by, versions) = if fact("artist").is_empty() { artists_by(r) } else { (fact("artist"), Vec::new()) };
     RecordProperties {
         type_why: crate::facts::type_why(&kind.by).to_string(),
         kind: FactView { value: kind.value, by: kind.by, versions: Vec::new() },
         secondary: Some(r.secondaries_now().into_iter().map(|s| crate::view::FactVersion { value: s.word, by: s.by }).collect::<Vec<_>>()).filter(|s| !s.is_empty()),
         title: FactView { value: r.title.clone(), by: fact("title"), versions: Vec::new() },
-        artists: FactView { value: r.artists.clone(), by: fact("artist"), versions: Vec::new() },
-        credit: credit_text(&names.iter().map(|n| (*n, None)).collect::<Vec<_>>()),
+        artists: FactView { value: r.artists.clone(), by, versions },
+        credit: crate::credited::text_of(&entries, &r.printed),
+        entries,
         year: FactView {
             value: year.value,
             by: year.by,

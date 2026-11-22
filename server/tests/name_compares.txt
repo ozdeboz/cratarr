@@ -8,6 +8,8 @@ crates/api/src/api.rs | artists::key( | 3 | goes: A23, the artist store's key, b
 crates/api/src/api.rs | credited( | 1 | not a name: whether a source credits a person, by the person's id (DC3c)
 crates/api/src/api.rs | import::key( | 1 | identity: another server's import names an artist as a bare name (ENT.3, T-DC3-2; 3a-2)
 crates/api/src/api.rs | various( | 1 | fold: `various()`, the one test of Various Artists (T-NAMES-9)
+crates/domain/src/credited.rs | credit_parts( | 1 | fold: F54's one splitter (`credit_parts`), the record's credit rule over it (3a-1)
+crates/domain/src/credited.rs | various( | 3 | fold: `various()`, the one test of Various Artists (T-NAMES-9; NAMES.20's rows 2-4)
 crates/base/src/app/requests_base.rs | import::key( | 2 | exception: a request's own key by its artist and title words where it names no release group (a request, not an artist's identity)
 crates/base/src/source/cratarr.rs | artist_for( | 1 | goes: A heart by name makes no artist (ENT.3, T-DC3-2; 3a-2)
 crates/clients/src/bandcamp.rs | eq_ignore_ascii_case | 1 | not a name: a Bandcamp page's tag words without its artist's own name (a page's words, not an identity)
@@ -64,6 +66,7 @@ crates/store/src/catalogue/artists.rs | artist_key( | 6 | exception: A1, the fil
 crates/store/src/catalogue/artists.rs | artist_of( | 1 | identity: A2, a bare name opens the artist so named (NAMES.12; 3a-2)
 crates/store/src/catalogue/artists.rs | of_one_name( | 1 | identity: A10, the namesake guard (MATCH.7; 3a-2)
 crates/store/src/catalogue/credits.rs | artist_key( | 1 | identity: T-CRED-4, a credited name to the one artist here of that shown name (DC3c; MATCH.5's judge, 3a-2)
+crates/store/src/catalogue/credits.rs | credit_parts( | 1 | fold: F54's one splitter, a role value split where a source names each person (CRED.19 (b), 3a-1)
 crates/store/src/catalogue/credits.rs | credited( | 1 | not a name: whether a source credits a person, by the person's id (DC3c)
 crates/store/src/catalogue/editions.rs | title_key( | 3 | not a name: an edition's title key (a record's title, not an artist's)
 crates/store/src/catalogue/identity.rs | guests_in( | 2 | exception: `guests_in`, a title's guests compared, never a credit cut (OQ-DC3-7 (b))
@@ -76,11 +79,11 @@ crates/store/src/catalogue/mod.rs | credited( | 1 | goes: the crates' Artist fil
 crates/store/src/catalogue/mod.rs | various( | 2 | fold: `various()`, the one test of Various Artists (T-NAMES-9)
 crates/store/src/catalogue/records.rs | artist_key( | 11 | exception: A1, A4, A5, the record pass's credits by the files' ids, else identity's one key (A2.1)
 crates/store/src/catalogue/records.rs | bare_key( | 2 | fold: `bare_key`, labels' one key (L1)
-crates/store/src/catalogue/records.rs | credited_apart( | 1 | goes: F54.4 (4), the one splitter is `credit_parts` (3a-1)
+crates/store/src/catalogue/records.rs | credit_parts( | 1 | fold: F54's one splitter, 0.17's step's names for ids (F54.4 (4), 3a-1: `credited_apart` gone)
 crates/store/src/catalogue/records.rs | eq_ignore_ascii_case | 2 | not a name: a label's references compared by value
 crates/store/src/catalogue/records.rs | library_artist_of( | 1 | identity: A9, related marks by id or MATCH.5's sure name (3a-2)
 crates/store/src/catalogue/records.rs | names::key( | 2 | identity: A6, 0.17's step's names for ids, kept as it ran
-crates/store/src/catalogue/records.rs | one_live_artist_in( | 2 | identity: A8, `credit_opened` by name only where one artist holds it (X8; MATCH.5; 3a-2)
+crates/store/src/catalogue/records.rs | one_live_artist_in( | 3 | identity: A8, `credit_opened` and a record's own featuring (T-CRED-4) by name only where one artist holds it (X8; MATCH.5; 3a-2)
 crates/store/src/catalogue/records.rs | title_key( | 16 | fold: the record matcher's title key (DOMAIN-CORE §12)
 crates/store/src/catalogue/records.rs | various( | 2 | fold: `various()`, the one test of Various Artists (T-NAMES-9)
 crates/store/src/crates.rs | artist_key( | 1 | goes: crate seeds by artist id (T-DC3-15, UPG.4; 3a-3)
@@ -89,10 +92,12 @@ crates/store/src/serve/ids.rs | artist_key( | 2 | fold: `artist_key`, the catalo
 crates/store/src/serve/index_rows.rs | artist_of( | 2 | not a name: the device index's artist row read by id
 crates/store/src/serve/library.rs | COLLATE NOCASE | 1 | goes: A20, the served `artist_by_name` (MATCH.6's named row; 3a-2)
 crates/store/src/serve/library.rs | artist_by_name( | 1 | goes: A20, the served `artist_by_name` (MATCH.6's named row; 3a-2)
-crates/store/src/serve/library.rs | artist_key( | 7 | goes: A3, the served library's artists by the catalogue's ids, never born by a key (MATCH.3; 3a-3)
-crates/store/src/serve/library.rs | eq_ignore_ascii_case | 3 | identity: L11, a copy's labels one by bare key (MATCH.10; 3a-2); the type rule's Various Artists by `various()` (T-NAMES-9; 3a-1)
+crates/store/src/serve/library.rs | artist_key( | 9 | goes: A3, the served library's artists by the catalogue's ids, never born by a key (MATCH.3; 3a-3); two in a track's credited artist, its own file's album artists by the key (T-DC3-17, 3a-1)
+crates/store/src/serve/library.rs | eq_ignore_ascii_case | 1 | identity: L11, a copy's labels one by bare key (MATCH.10; 3a-2)
+crates/store/src/serve/library.rs | various( | 1 | fold: `various()`, the one test of Various Artists (T-NAMES-9: rule 8 over the record's credit, 3a-1)
 crates/store/src/serve/read.rs | artist_key( | 1 | goes: a count of a record's artists by their ids (NAMES.25)
 crates/store/src/serve/read.rs | artist_of( | 1 | not a name: the served artist row read by id
+crates/store/src/serve/read.rs | various( | 1 | fold: `various()`, the one test of Various Artists (T-NAMES-9: the heard rule's, 3a-1)
 rules/src/crates.rs | artist_key( | 3 | not a name: an artist's key by its id in the crates' facts
 rules/src/crates.rs | eq_ignore_ascii_case | 1 | goes: the crates' Label condition by label id (LBL.7; DC3b)
 rules/src/crates.rs | excluded_artists::key( | 5 | goes: A26, Out by artist id (NAMES.17; 3a-3)
@@ -102,4 +107,5 @@ rules/src/excluded_artists.rs | credit_names( | 3 | goes: A26, the Artist filter
 rules/src/excluded_artists.rs | loose( | 1 | goes: A26, Out's loose key, by artist id (NAMES.17; 3a-3)
 rules/src/index/find.rs | credited( | 2 | not a name: the device index's credited rows, by id
 rules/src/index.rs | credited( | 1 | goes: the device's crates read the catalogue's credits by id (NAMES.11; 3a-3)
+rules/src/names.rs | credit_parts( | 1 | fold: F54's one splitter itself (SCENARIOS-DC3 F54.1, 3a-1)
 rules/src/names.rs | loose( | 1 | fold: `loose`, identity's name-penalty fold that scores and never decides alone (MATCH.5, OQ-DC3-7 (b))

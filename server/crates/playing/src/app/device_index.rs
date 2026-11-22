@@ -1048,9 +1048,27 @@ pub(super) mod tests {
         assert!(rows.artists.iter().any(|a| a.name == "Someone"), "{:?}", rows.artists);
     }
 
+    /// A compilation (NAMES.18, NAMES.20 row 4): "Various Artists" over five track artists, "Someone" on "One". Changed by design
+    /// (DC3a): "Various Artists" over one track artist is that artist's record (row 3), so a compilation takes five.
+    fn compilation(s: &Served) {
+        let tracks = [("Someone", "One"), ("Another", "Two"), ("A Third", "Three"), ("A Fourth", "Four"), ("A Fifth", "Five")];
+        let rows: Vec<(String, Vec<(&str, &str)>)> = tracks
+            .iter()
+            .enumerate()
+            .map(|(n, (artist, title))| (format!("Various/Hits/{:02}.flac", n + 1), vec![("album", "Hits"), ("albumartist", "Various Artists"), ("artist", *artist), ("title", *title)]))
+            .collect();
+        let files: Vec<(&str, &[(&str, &str)])> = rows.iter().map(|(rel, tags)| (rel.as_str(), tags.as_slice())).collect();
+        s.add(0, &files);
+        s.built();
+    }
+
     #[test]
     fn a_batch_brings_each_records_artists_who_are_no_artists_of_its_tracks() {
-        let (_s, rows, _) = one_track_logged("batch-various");
+        let s = served("batch-various", &[CopyKind::Main]);
+        compilation(&s);
+        let index = s.index();
+        let one = index.rows().tracks.iter().find(|t| t.title == "One").unwrap().id;
+        let (rows, _) = batch(&index, &BTreeMap::from([("track".to_string(), vec![one])]));
         assert!(rows.artists.iter().any(|a| a.name == "Various Artists"), "{:?}", rows.artists);
     }
 
@@ -1133,11 +1151,10 @@ pub(super) mod tests {
     #[test]
     fn a_compilations_album_artist_is_nobodys_artist_as_radio_has_it() {
         let s = served("compilation", &[CopyKind::Main]);
-        let tags = [("album", "Hits"), ("albumartist", "Various Artists"), ("artist", "Someone"), ("title", "One")];
-        s.add(0, &[("Various/Hits/01.flac", &tags)]);
-        s.built();
-        let t = s.index().rows().tracks.remove(0);
-        assert_eq!(t.artist_ids.len(), 1, "{:?}", t.artist_ids);
+        compilation(&s);
+        let tracks = s.index().rows().tracks.clone();
+        let one = tracks.iter().find(|t| t.title == "One").unwrap();
+        assert_eq!(one.artist_ids.len(), 1, "{:?}", one.artist_ids);
     }
 
     #[test]

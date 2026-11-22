@@ -888,7 +888,8 @@ async fn hand_to_as(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve,
     }
     let mut said = Vec::new();
     if let Some(f) = lidarr {
-        said.push(match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
+        let credited: Vec<String> = of.as_ref().map(|o| o.artists.clone()).unwrap_or_default();
+        said.push(match f.want(r.release_group.as_deref(), &r.artist, &credited, &r.album).await {
             Ok(handed) => {
                 fetcher_said("lidarr", true);
                 // The group it was asked with kept on the request (X1): what it is told to stop by.
@@ -1880,6 +1881,8 @@ pub struct RecordOf {
     pub groups: Vec<String>,
     pub title: String,
     pub artist: String,
+    /// Its credited artists, each by its name (`record_artists`): Soulseek's ladder tries each after the whole credit (F54.4 (5)).
+    pub artists: Vec<String>,
     pub year: Option<i32>,
     pub cover: Option<String>,
     pub holder: Option<i64>,
@@ -1976,6 +1979,7 @@ pub fn records_held(cat: &crate::catalogue::Catalogue, rs: &[Request], kinds: &[
                 groups: q.groups.clone(),
                 title: q.row.title.clone(),
                 artist: q.row.artist.clone(),
+                artists: q.artists.clone(),
                 year: q.row.year,
                 cover: q.row.cover.clone(),
                 holder: q.holder,
@@ -3316,7 +3320,7 @@ pub mod tests {
     const FOUND: &str = "00000000-0000-4000-8000-000000000131";
 
     impl Fetcher for Wanting {
-        fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> crate::source::Fut<'a, crate::lidarr::Handed> {
+        fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, _: &'a [String], album: &'a str) -> crate::source::Fut<'a, crate::lidarr::Handed> {
             self.0.lock().unwrap().push((release_group.map(str::to_string), artist.to_string(), album.to_string()));
             self.3.lock().unwrap().push("want".into());
             Box::pin(async { Ok(crate::lidarr::Handed { said: "Lidarr added it and is looking for it".into(), release_group: FOUND.into() }) })
@@ -3457,7 +3461,7 @@ pub mod tests {
     }
 
     impl Fetcher for Strict {
-        fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> crate::source::Fut<'a, crate::lidarr::Handed> {
+        fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, _: &'a [String], album: &'a str) -> crate::source::Fut<'a, crate::lidarr::Handed> {
             let Some(group) = release_group else { return self.refused(format!("want with no group: {artist} - {album}")) };
             let mut wanted = self.wanted.lock().unwrap();
             if self.wants.get(wanted.len()).map(String::as_str) != Some(group) {
