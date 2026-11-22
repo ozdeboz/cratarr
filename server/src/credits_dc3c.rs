@@ -77,6 +77,11 @@ fn viewers(a: &Accounts) -> Vec<(&'static str, (&'static str, String))> {
 /// Morvan" with ARTISTS and Yann Tiersen's id alone. Yann Tiersen and Kerys Lae hold their Discogs ids (MusicBrainz's link, as
 /// their monthly read keeps it). Its album id and its files' paths.
 fn plant_all(w: &Whole) -> (String, Vec<std::path::PathBuf>) {
+    plant_all_with(w, &[])
+}
+
+/// `plant_all`, with other files beside it in the one walk and build: each (its path in Music, its tags).
+fn plant_all_with(w: &Whole, others: &[(String, Vec<(String, String)>)]) -> (String, Vec<std::path::PathBuf>) {
     let cat = w.app.library.catalogue();
     let mut files = Vec::new();
     for t in 1..=12u32 {
@@ -86,8 +91,17 @@ fn plant_all(w: &Whole) -> (String, Vec<std::path::PathBuf>) {
         std::fs::write(&path, &rel).unwrap();
         files.push((rel, path, t));
     }
+    for (rel, _) in others {
+        let path = w.dir().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, rel).unwrap();
+    }
     cat.walk_all();
     cat.pretend_read_for_tests();
+    for (rel, tags) in others {
+        let tags: Vec<(&str, &str)> = tags.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        cat.tag_for_tests(0, rel, &tags);
+    }
     for (rel, _, t) in &files {
         let (title, number) = (format!("Track {t}"), t.to_string());
         let mut tags: Vec<(&str, &str)> = vec![
@@ -349,4 +363,424 @@ async fn all_shows_one_artist_and_every_credit_by_role() {
     for (p, b) in paths.iter().zip(&bytes) {
         assert_eq!(&std::fs::read(p).unwrap(), b, "{} unchanged", p.display());
     }
+}
+
+/// How many times a path of a source was asked.
+fn asked_path(s: &StandIns, source: &str, path: &str) -> usize {
+    s.asked().iter().filter(|a| a.source == source && a.path == path).count()
+}
+
+/// The answer's credits' roles.
+fn roles(answer: &Value) -> Vec<String> {
+    answer["properties"]["credits"].as_array().into_iter().flatten().filter_map(|r| r["role"].as_str().map(str::to_string)).collect()
+}
+
+/// CRED.11 (kind 2): Discogs' credits are shown to every account, and any account's open asks, as a job, once while fresh (the
+/// owner's rules, 2026-11-21 04:16 and 04:43). (a) alice, carol, the key and root GET ALL before anyone opens it: Discogs asked 0
+/// times, root's GET too, each answering at once with the credits stored. (b) alice's open answers at once while Discogs is held,
+/// and the job it begins reads Discogs once, by MusicBrainz's link. (c) dave's open while alice's read runs asks nothing more. (d)
+/// carol's open once it landed asks nothing (fresh), and alice, carol, the key and root see Discogs' credits ("Artwork"). (h) 31
+/// days on, Discogs switched off: bob's open asks nothing and queues nothing, the stored credits stay. (i) switched on again: carol's
+/// open asks once; `GET /api/albums/cratarr/{id}/discogs` asks nothing and answers what is stored, to alice too. Never a Discogs read
+/// started by a GET, any account's; never Discogs asked twice for one due read or while fresh; never while switched off; never a
+/// stored credit hidden from any account; never a GET or an open waiting on Discogs. Red first: no open reads Discogs; the Discogs
+/// route reads on its GET and sits in the administrators' block (api.rs:335, :377).
+#[tokio::test]
+async fn discogs_credits_show_to_all_and_ask_at_any_accounts_open() {
+    let _state = crate::app::references::TestState::set().await;
+    let w = Whole::open("cred-11").await;
+    crate::serve::set_instance(w.served.clone());
+    let a = accounts(&w);
+    let (bob, dave) = (w.session("bob"), w.session("dave"));
+    discogs_key(&w);
+    let stand_ins = StandIns::set(Arc::new(all_answers)).await;
+    let (all, _) = plant_all(&w);
+    crate::app::works::pass().await.unwrap();
+    w.served.refresh().unwrap();
+    let master = format!("/masters/{M401}");
+    let path = format!("/api/records/{all}?from=library");
+    // (a) Every viewer's GET before any open: nothing asked of Discogs.
+    stand_ins.clear();
+    for (who, by) in viewers(&a) {
+        let (status, answer) = tokio::time::timeout(std::time::Duration::from_secs(10), ask(&w, (by.0, &by.1), Method::GET, &path, Value::Null)).await.expect("a GET never waits");
+        assert_eq!(status, StatusCode::OK, "{who}: {answer}");
+        assert!(roles(&answer).contains(&"composer".to_string()), "{who}: the stored credits at once (the files', MusicBrainz's): {answer}");
+    }
+    assert_eq!(stand_ins.count("discogs"), 0, "(a) no GET starts a Discogs read, root's neither");
+    // (b) alice's open, Discogs held: answered at once; its job reads Discogs once it answers.
+    stand_ins.hold("discogs");
+    let open = json!({ "record": all });
+    let (status, opened) = tokio::time::timeout(std::time::Duration::from_secs(10), ask(&w, ("cookie", &a.alice), Method::POST, "/api/records/open", open.clone())).await.expect("the open never waits on Discogs");
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    until("alice's open's job asking Discogs", || asked_path(&stand_ins, "discogs", &master) == 1).await;
+    // (c) dave's open while it runs: nothing more.
+    let (status, _) = ask(&w, ("cookie", &dave), Method::POST, "/api/records/open", open.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    stand_ins.let_go();
+    until("alice's read landed", || idle()).await;
+    assert_eq!(asked_path(&stand_ins, "discogs", &master), 1, "(c) one read per record at a time");
+    // (d) carol's open, fresh: nothing; every viewer sees Discogs' credits.
+    let (status, _) = ask(&w, ("cookie", &a.carol), Method::POST, "/api/records/open", open.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    until("carol's open settled", || idle()).await;
+    assert_eq!(asked_path(&stand_ins, "discogs", &master), 1, "(d) fresh facts: nothing asked");
+    w.served.refresh().unwrap();
+    for (who, by) in viewers(&a) {
+        let (_, answer) = ask(&w, (by.0, &by.1), Method::GET, &path, Value::Null).await;
+        assert!(roles(&answer).contains(&"Artwork".to_string()), "(d) {who} sees Discogs' credits: {}", answer["properties"]["credits"]);
+    }
+    // (h) 31 days on, Discogs off: bob's open asks nothing and queues nothing; the stored credits stay.
+    let subject = format!("album:{all}");
+    let kept = w.served.userdata.discogs_facts(&subject).unwrap().expect("ALL's Discogs facts kept");
+    let old = crate::app::moment::now_secs() - 31 * 86_400;
+    w.served.userdata.set_discogs_facts(&subject, kept.1.as_deref(), old).unwrap();
+    crate::app::switches::set_for_tests(crate::app::switches::DISCOGS, false);
+    let (status, _) = ask(&w, ("cookie", &bob), Method::POST, "/api/records/open", open.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    until("bob's open settled", || idle()).await;
+    assert_eq!(asked_path(&stand_ins, "discogs", &master), 1, "(h) switched off: nothing asked");
+    assert!(crate::runner::runner().rows().iter().all(|r| !r.kind.contains("discogs")), "(h) nothing queued for later");
+    let (_, answer) = ask(&w, ("cookie", &bob), Method::GET, &path, Value::Null).await;
+    assert!(roles(&answer).contains(&"Artwork".to_string()), "(h) the stored credits stay and show");
+    // (i) On again: carol's open asks once; the route's GET asks nothing and answers what is stored, to alice too.
+    crate::app::switches::set_for_tests(crate::app::switches::DISCOGS, true);
+    let (status, _) = ask(&w, ("cookie", &a.carol), Method::POST, "/api/records/open", open.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    until("carol's read", || asked_path(&stand_ins, "discogs", &master) == 2 && idle()).await;
+    let before = stand_ins.count("discogs");
+    let (status, facts) = ask(&w, ("cookie", &a.alice), Method::GET, &format!("/api/albums/cratarr/{all}/discogs"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "(i) the route answers every account: {facts}");
+    assert_eq!(facts["master"], M401, "(i) the facts stored: {facts}");
+    assert_eq!(stand_ins.count("discogs"), before, "(i) the route's GET asks nothing");
+}
+
+/// Every row count CRED.21 watches: the catalogue's artists, references, lists, record artists and labels, facts and credits; the
+/// user data's Discogs facts.
+fn counts(w: &Whole) -> Vec<(&'static str, i64)> {
+    let cat = w.app.library.catalogue();
+    let db = cat.db_for_tests();
+    let mut out: Vec<(&'static str, i64)> = ["artists", "\"references\"", "reference_tracks", "record_artists", "record_labels", "facts", "credits"]
+        .into_iter()
+        .map(|t| (t, db.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap()))
+        .collect();
+    drop(db);
+    out.push(("discogs_facts", w.served.userdata.discogs_facts_of("").unwrap().len() as i64));
+    out
+}
+
+/// CRED.21: a GET makes no artist, keeps no reference, ties nothing, and asks no outside source (the owner's 04:43 rule). ALL and
+/// "Quiet Fields" (8 files, no genre, no reference; a Discogs search by its names would find a master), their Discogs facts due.
+/// Each GET that reads credits or reached `keep_discogs`: the record's answer (alice, root), the album Discogs route (alice, root),
+/// the album plan `intake:{id}` for Quiet Fields and the library plans `fix:library:genre` and `:year` (root). Before and after
+/// each, the row counts of the catalogue and the user data are the same, and the stand-ins count no Discogs or MusicBrainz ask.
+/// Never `keep_discogs` reached from a GET. Red first: three GET paths reach `discogs_facts::album` and `keep_discogs` (the album
+/// route, the album plan's `of_album`, the library plans' `fill`).
+#[tokio::test]
+async fn a_credits_get_makes_and_keeps_nothing() {
+    let _state = crate::app::references::TestState::set().await;
+    let w = Whole::open("cred-21").await;
+    crate::serve::set_instance(w.served.clone());
+    let a = accounts(&w);
+    discogs_key(&w);
+    let stand_ins = StandIns::set(Arc::new(|q: &Asked| match q.source {
+        "discogs" if q.path == "/database/search" => Some((200, json!({ "results": [{ "id": 441, "title": "Quiet Pine - Quiet Fields" }] }).to_string())),
+        _ => all_answers(q),
+    }))
+    .await;
+    // Quiet Fields: 8 files, no genre, no MusicBrainz release, no Discogs reference; planted with ALL.
+    let quiet_files: Vec<(String, Vec<(String, String)>)> = (1..=8u32)
+        .map(|t| {
+            let tags = [("album", "Quiet Fields".to_string()), ("albumartist", "Quiet Pine".into()), ("artist", "Quiet Pine".into()), ("title", format!("Field {t}")), ("tracknumber", t.to_string())];
+            (format!("Quiet Pine/Quiet Fields/{t:02} Field {t}.flac"), tags.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        })
+        .collect();
+    let (all, _) = plant_all_with(&w, &quiet_files);
+    let quiet = w.served.library.album_in(0, "Quiet Pine/Quiet Fields").unwrap().expect("Quiet Fields built");
+    crate::app::works::pass().await.unwrap();
+    w.served.refresh().unwrap();
+    stand_ins.clear();
+    let gets: Vec<(&str, String, (&str, String))> = vec![
+        ("the record's answer", format!("/api/records/{all}?from=library"), ("cookie", a.alice.clone())),
+        ("the record's answer", format!("/api/records/{all}?from=library"), ("cookie", a.root.clone())),
+        ("the album Discogs route", format!("/api/albums/cratarr/{all}/discogs"), ("cookie", a.alice.clone())),
+        ("the album Discogs route", format!("/api/albums/cratarr/{all}/discogs"), ("cookie", a.root.clone())),
+        ("the album Discogs route", format!("/api/albums/cratarr/{quiet}/discogs"), ("cookie", a.root.clone())),
+        ("the album plan", format!("/api/file-changes/plans/intake:{quiet}"), ("cookie", a.root.clone())),
+        ("the library plans", "/api/file-changes/plans/fix:library:genre".to_string(), ("cookie", a.root.clone())),
+        ("the library plans", "/api/file-changes/plans/fix:library:year".to_string(), ("cookie", a.root.clone())),
+    ];
+    for (what, path, by) in gets {
+        let before = counts(&w);
+        let (status, answer) = tokio::time::timeout(std::time::Duration::from_secs(20), ask(&w, (by.0, &by.1), Method::GET, &path, Value::Null)).await.expect("a GET never waits on a source");
+        // What the GET left behind, given the time to run (a task it began would ask now).
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert_ne!(status, StatusCode::FORBIDDEN, "{what} {path}: every account's: {answer}");
+        assert_eq!(stand_ins.count("discogs"), 0, "{what} {path}: Discogs asked by a GET: {:?}", stand_ins.asked());
+        assert_eq!(stand_ins.count("musicbrainz"), 0, "{what} {path}: MusicBrainz asked by a GET: {:?}", stand_ins.asked());
+        assert_eq!(counts(&w), before, "{what} {path}: rows written by a GET");
+    }
+}
+
+/// Northern Rooms' release (`mb:rel-nr`) and Discogs' release of it, and its people's ids (SCENARIOS-CRED's fixture).
+const REL_NR: &str = "c0000000-0000-4000-8000-000000000411";
+const OH: &str = "c0000000-0000-4000-8000-0000000a0411";
+const SV: &str = "c0000000-0000-4000-8000-0000000a0412";
+const DB1: &str = "c0000000-0000-4000-8000-0000000a0413";
+const DB2: &str = "c0000000-0000-4000-8000-0000000a0414";
+const PO: &str = "c0000000-0000-4000-8000-0000000a0415";
+const RF: &str = "c0000000-0000-4000-8000-0000000a0418";
+const ML1: &str = "c0000000-0000-4000-8000-0000000a0419";
+const ML2: &str = "c0000000-0000-4000-8000-0000000a041a";
+const R411: u64 = 4110;
+const DC_OH: u64 = 90411;
+const DC_SV: u64 = 90412;
+
+/// "Northern Rooms" as SCENARIOS-CRED's fixture: 6 FLAC files, ALBUMARTIST Rowan Fell (`mb:rf`), MUSICBRAINZ_ALBUMID `mb:rel-nr`,
+/// each track's ARTISTS ["Rowan Fell", "Pale Orchad"] (the typo) on 1–5 and ["Rowan Fell", "Pale Orchard"] on 6, with their ids;
+/// `extra` tags on every file. The artists here: `ar-411` Ólafur Hrafnsson (`mb:oh`), two Daniel Bergs (`mb:db1`, `mb:db2`), Pale
+/// Orchard (`mb:po`), Mara Lind (`mb:ml1`), Glass Harbour, two Kelpes. Its album id and record number.
+fn plant_northern_rooms(w: &Whole, extra: &[(&str, &str)]) -> (String, i64) {
+    let cat = w.app.library.catalogue();
+    let mut rels = Vec::new();
+    for t in 1..=6u32 {
+        let rel = format!("Rowan Fell/Northern Rooms/{t:02} Room {t}.flac");
+        let path = w.dir().join(&rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &rel).unwrap();
+        rels.push((rel, t));
+    }
+    cat.walk_all();
+    cat.pretend_read_for_tests();
+    for (rel, t) in &rels {
+        let (title, number) = (format!("Room {t}"), t.to_string());
+        let other = if *t == 6 { "Pale Orchard" } else { "Pale Orchad" };
+        let mut tags: Vec<(&str, &str)> = vec![
+            ("album", "Northern Rooms"),
+            ("albumartist", "Rowan Fell"),
+            ("musicbrainz_albumartistid", RF),
+            ("musicbrainz_albumid", REL_NR),
+            ("title", title.as_str()),
+            ("tracknumber", number.as_str()),
+            ("artist", "Rowan Fell / Pale Orchard"),
+            ("artists", "Rowan Fell"),
+            ("artists", other),
+            ("musicbrainz_artistid", RF),
+            ("musicbrainz_artistid", PO),
+        ];
+        tags.extend_from_slice(extra);
+        cat.tag_for_tests(0, rel, &tags);
+    }
+    cat.identify().unwrap();
+    w.served.refresh().unwrap();
+    let album = w.served.library.album_in(0, "Rowan Fell/Northern Rooms").unwrap().expect("Northern Rooms built");
+    let by = |id: &str, name: &str| cat.artist_by_reference(&Ref::new("musicbrainz", "artist", id), name, "files", true).unwrap();
+    by(OH, "Ólafur Hrafnsson");
+    by(PO, "Pale Orchard");
+    by(ML1, "Mara Lind");
+    let berg = cat.artist_for("Daniel Berg").unwrap();
+    cat.artist_apart("Daniel Berg").unwrap();
+    cat.set_reference(&crate::serve::ids::artist(berg), &Ref::new("musicbrainz", "artist", DB1), "hand").unwrap();
+    cat.artist_for("Glass Harbour").unwrap();
+    cat.artist_for("Kelpe").unwrap();
+    cat.artist_apart("Kelpe").unwrap();
+    w.served.refresh().unwrap();
+    let record = crate::serve::ids::record_number(&album).unwrap();
+    (album, record)
+}
+
+/// A service's credit as the credits store keeps it: on every track.
+fn said(person: &str, name: &str, word: &str) -> crate::catalogue::credits::CreditRow {
+    crate::catalogue::credits::CreditRow { person: Some(person.to_string()), name: name.to_string(), word: word.to_string(), ..Default::default() }
+}
+
+/// The people under one role: (person, name, number, by).
+fn people(answer: &Value, role: &str) -> Vec<(Value, String, Option<i64>, Vec<String>)> {
+    answer["properties"]["credits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["role"] == role)
+        .flat_map(|r| r["people"].as_array().cloned().unwrap_or_default())
+        .map(|p| {
+            let by = p["by"].as_array().into_iter().flatten().filter_map(|b| b.as_str()).map(|b| if b.starts_with("files@") { "files".to_string() } else { b.to_string() }).collect();
+            (p["person"].clone(), p["name"].as_str().unwrap_or_default().to_string(), p["number"].as_i64(), by)
+        })
+        .collect()
+}
+
+/// A record's rows owed to the change log now.
+fn owed(w: &Whole, record: i64) -> i64 {
+    w.app.library.catalogue().db_for_tests().query_row("SELECT count(*) FROM record_owed WHERE record = ?1", [record], |r| r.get(0)).unwrap()
+}
+
+/// CRED.8: two sources name one person by two spellings, merged by id, never by a name. Northern Rooms: (b) MusicBrainz's mastering
+/// "Ólafur Hrafnsson" (`mb:oh`, held by `ar-411`) and Discogs' "Olafur Hrafnsson" (`dc:oh`) before `ar-411` holds `dc:oh`: two
+/// credits, one per source; then `ar-411` holds it (its monthly read, a job): one, logged once; (a) one credit, mastering, by
+/// `ar-411`'s one name, by MusicBrainz and Discogs; (c) MusicBrainz's and Discogs' producer "Sanne Vos", no artist here and no link:
+/// two, each opening its own reference; (d) the files' track artists "Pale Orchad" (1–5) and "Pale Orchard" (6), each beside
+/// `mb:po`, held by Pale Orchard: one "artist" credit, by its one name, on every track. Never two people joined by a name; never one
+/// shown twice once an artist here holds both ids; never "Pale Orchad" or "Olafur Hrafnsson" shown as an artist's name. Red first:
+/// no store; Discogs' credits keep no id.
+#[tokio::test]
+async fn credits_merge_by_id_never_by_name() {
+    let _state = crate::app::references::TestState::set().await;
+    let w = Whole::open("cred-8").await;
+    crate::serve::set_instance(w.served.clone());
+    let a = accounts(&w);
+    let (album, record) = plant_northern_rooms(&w, &[]);
+    let cat = w.app.library.catalogue();
+    let now = crate::app::moment::now_secs();
+    cat.keep_credits(record, "musicbrainz", &format!("release:{REL_NR}"), Some(&[said(OH, "Ólafur Hrafnsson", "mastering"), said(SV, "Sanne Vos", "producer")]), false, now).unwrap();
+    cat.keep_credits(record, "discogs", &format!("release:{R411}"), Some(&[said(&DC_OH.to_string(), "Olafur Hrafnsson", "Mastered By"), said(&DC_SV.to_string(), "Sanne Vos", "Producer")]), false, now).unwrap();
+    w.served.refresh().unwrap();
+    let path = format!("/api/records/{album}?from=library");
+    let get = || async { ask(&w, ("cookie", &a.alice), Method::GET, &path, Value::Null).await.1 };
+    let oh = cat.artist_of("Ólafur Hrafnsson").unwrap().map(crate::serve::ids::artist).expect("ar-411");
+    // (b) Before ar-411 holds dc:oh: one credit per source.
+    let answer = get().await;
+    let mastering = people(&answer, "mastering");
+    assert_eq!(mastering.len(), 2, "(b) two, one per source, until ar-411 holds dc:oh: {mastering:?}");
+    // Its monthly read keeps dc:oh: one credit, the record's change logged once.
+    assert_eq!(owed(&w, record), 0, "nothing owed before");
+    cat.set_reference(&oh, &Ref::new("discogs", "artist", &DC_OH.to_string()), "search").unwrap();
+    assert_eq!(owed(&w, record), 1, "(b) the record's change logged once, as ar-411 came to hold dc:oh");
+    w.served.refresh().unwrap();
+    let answer = get().await;
+    // (a) One credit, by ar-411's one name, by both sources.
+    assert_eq!(people(&answer, "mastering"), [(json!({ "id": oh }), "Ólafur Hrafnsson".to_string(), None, vec!["musicbrainz".to_string(), "discogs".to_string()])], "(a)");
+    // (c) Two Sanne Vos, each Listed by its own source's id.
+    let sv: Vec<Value> = people(&answer, "producer").into_iter().map(|p| p.0).collect();
+    assert_eq!(sv, [json!({ "listed": { "source": "musicbrainz", "id": SV } }), json!({ "listed": { "source": "discogs", "id": DC_SV.to_string() } })], "(c) never joined by the name");
+    // (d) One "artist" credit, Pale Orchard by its one name, on every track.
+    let po = cat.artist_of("Pale Orchard").unwrap().map(crate::serve::ids::artist).expect("Pale Orchard");
+    assert_eq!(people(&answer, "artist"), [(json!({ "id": po }), "Pale Orchard".to_string(), None, vec!["files".to_string()])], "(d)");
+    let text = answer["properties"]["credits"].to_string();
+    assert!(!text.contains("Pale Orchad") && !text.contains("\"Olafur Hrafnsson\""), "(d), (a): a spelling is never shown as an artist's name: {text}");
+}
+
+/// CRED.9 (kind 1): namesakes are credited apart; a name the files give alone. Northern Rooms, its files saying ENGINEER "Daniel
+/// Berg", COMPOSER "Rena Abt", PRODUCER "Glass Harbour" and "Kelpe", and ENGINEER "Mara Lind". (b) with no source naming an
+/// engineer: "Daniel Berg" a name alone, text, neither artist (two here hold that name); (d) "Rena Abt" text, nothing made; (e)
+/// Glass Harbour, the one artist of that name, a chip; (f) "Kelpe", two here: text. Then MusicBrainz credits engineer `mb:db2` and
+/// engineer `mb:ml2` "Mara Lind": (c), (a) one credit, `ar-413`, "Daniel Berg" numbered 2, by the files and MusicBrainz (the same
+/// record's source names who the files' name means); (g) one credit, Listed `mb:ml2`, by the files and MusicBrainz: the same record's
+/// evidence before a library-wide name, so `ar-419` Mara Lind gets none. Never a name-only credit given to C55's first; `mb:db2`'s on
+/// `ar-412`; an artist made for "Rena Abt"; a chip for (b), (d) or (f); (g) split in two or given to `ar-419`. Red first: no store.
+#[tokio::test]
+async fn namesakes_are_credited_apart() {
+    let _state = crate::app::references::TestState::set().await;
+    let w = Whole::open("cred-9").await;
+    crate::serve::set_instance(w.served.clone());
+    let a = accounts(&w);
+    let extra = [("engineer", "Daniel Berg"), ("composer", "Rena Abt"), ("producer", "Glass Harbour"), ("producer", "Kelpe"), ("engineer", "Mara Lind")];
+    let (album, record) = plant_northern_rooms(&w, &extra);
+    let cat = w.app.library.catalogue();
+    let bergs: Vec<i64> = cat.db_for_tests().prepare("SELECT id FROM artists WHERE name = 'Daniel Berg' ORDER BY id").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(bergs.len(), 2, "the fixture: two Daniel Bergs");
+    cat.set_reference(&crate::serve::ids::artist(bergs[1]), &Ref::new("musicbrainz", "artist", DB2), "hand").unwrap();
+    let ml1 = cat.artist_of("Mara Lind").unwrap().map(crate::serve::ids::artist).expect("ar-419");
+    let path = format!("/api/records/{album}?from=library");
+    let answer = ask(&w, ("cookie", &a.alice), Method::GET, &path, Value::Null).await.1;
+    let named = |role: &str, name: &str| people(&answer, role).into_iter().find(|p| p.1 == name).unwrap_or_else(|| panic!("{role} {name}: {}", answer["properties"]["credits"]));
+    assert_eq!(named("engineer", "Daniel Berg").0, Value::Null, "(b) a name alone: text, neither artist");
+    assert_eq!(named("composer", "Rena Abt").0, Value::Null, "(d) text");
+    assert_eq!(cat.artist_of("Rena Abt").unwrap(), None, "(d) nothing made");
+    let gh = cat.artist_of("Glass Harbour").unwrap().map(crate::serve::ids::artist).expect("Glass Harbour");
+    assert_eq!(named("producer", "Glass Harbour").0, json!({ "id": gh }), "(e) the one artist of that name");
+    assert_eq!(named("producer", "Kelpe").0, Value::Null, "(f) two Kelpes: text");
+    let now = crate::app::moment::now_secs();
+    cat.keep_credits(record, "musicbrainz", &format!("release:{REL_NR}"), Some(&[said(DB2, "Daniel Berg", "engineer"), said(ML2, "Mara Lind", "engineer")]), false, now).unwrap();
+    w.served.refresh().unwrap();
+    let answer = ask(&w, ("cookie", &a.alice), Method::GET, &path, Value::Null).await.1;
+    let engineers = people(&answer, "engineer");
+    let berg2 = crate::serve::ids::artist(bergs[1]);
+    assert_eq!(
+        engineers,
+        [
+            (json!({ "id": berg2 }), "Daniel Berg".to_string(), Some(2), vec!["files".to_string(), "musicbrainz".to_string()]),
+            (json!({ "listed": { "source": "musicbrainz", "id": ML2 } }), "Mara Lind".to_string(), None, vec!["files".to_string(), "musicbrainz".to_string()]),
+        ],
+        "(a), (c), (g)"
+    );
+    assert!(!answer["properties"]["credits"].to_string().contains(&format!("\"{ml1}\"")), "(g) ar-419 credited by its name");
+}
+
+/// CRED.10: a role only one source gives shows with it. ALL with Discogs' "Artwork – Lou Kerjean" and "Liner Notes – Ana Ríos" (a
+/// word the roles table has no row for), MusicBrainz's mastering, the files' mixer: each under its role, its one source in `by`;
+/// "Liner Notes" under Discogs' own word, after the table's roles. Never a credit hidden until a second source names it, a role
+/// dropped for having no row, a credit marked as differing. Red first: AlbumAbout shows Discogs' roles only, to administrators.
+#[tokio::test]
+async fn a_credit_one_source_gives_shows_with_it() {
+    let _state = crate::app::references::TestState::set().await;
+    let w = Whole::open("cred-10").await;
+    crate::serve::set_instance(w.served.clone());
+    let a = accounts(&w);
+    let (all, _) = plant_all(&w);
+    let record = crate::serve::ids::record_number(&all).unwrap();
+    let cat = w.app.library.catalogue();
+    let now = crate::app::moment::now_secs();
+    cat.keep_credits(record, "musicbrainz", &format!("release:{REL_ALL}"), Some(&[said(NF, "Nils Fréjus", "mastering")]), false, now).unwrap();
+    cat.keep_credits(record, "discogs", &format!("release:{R401}"), Some(&[said(&DC_LK.to_string(), "Lou Kerjean", "Artwork"), said("90409", "Ana Ríos", "Liner Notes")]), false, now).unwrap();
+    w.served.refresh().unwrap();
+    let answer = ask(&w, ("cookie", &a.carol), Method::GET, &format!("/api/records/{all}?from=library"), Value::Null).await.1;
+    let r = roles(&answer);
+    let at = |role: &str| r.iter().position(|x| x == role).unwrap_or_else(|| panic!("{role} missing: {r:?}"));
+    assert!(at("mastering") < at("Artwork") && at("mastering") < at("Liner Notes"), "the words no row names after the table's roles: {r:?}");
+    for (role, by) in [("mastering", "musicbrainz"), ("Artwork", "discogs"), ("Liner Notes", "discogs"), ("mixer", "files")] {
+        let p = people(&answer, role);
+        assert_eq!(p.len(), 1, "{role}: {p:?}");
+        assert_eq!(p[0].3, [by.to_string()], "{role} with its one source");
+    }
+    assert!(!answer["properties"]["credits"].to_string().contains("versions"), "no credit marked as a version");
+}
+
+/// CRED.12: a credited person with no artist here is Listed, and made at an open. ALL's Listed persons (Maëlle Dour `mb:md`, Gwen
+/// Arzel `mb:ga`, Nils Fréjus `mb:nf`, Lou Kerjean `dc:lk`). (a) the panel's GET: each Listed with its name, and no artist, number,
+/// reference or record artist made (counted before and after). (b) alice taps Maëlle Dour (`POST /api/artists/open` with her
+/// MusicBrainz id and name; alice no administrator, Beyond never listed her: T-CRED-9, a stored credit names her): her artist is
+/// made, kept at open, and the credit names it; one `record` change-log row tells ALL's panel. (d) again: the same artist. (f) a day
+/// later the forgetting keeps her while a credit names her (T-CRED-10). Never an artist made by a GET; never two artists for
+/// `mb:md`; never an artist forgotten while a credit names it. (c), an open by Discogs' id, is DC3a's M4. Red first: there are no
+/// credits; `open_artist` refuses a non-administrator unless Beyond listed the id within a day (api.rs:6716-6719).
+#[tokio::test]
+async fn a_credited_person_is_made_at_its_open() {
+    let _state = crate::app::references::TestState::set().await;
+    let w = Whole::open("cred-12").await;
+    crate::serve::set_instance(w.served.clone());
+    let a = accounts(&w);
+    let stand_ins = StandIns::set(Arc::new(|_: &Asked| Some((404, String::new())))).await;
+    let (all, _) = plant_all(&w);
+    let record = crate::serve::ids::record_number(&all).unwrap();
+    let cat = w.app.library.catalogue();
+    let now = crate::app::moment::now_secs();
+    let mut violin = said(MD, "Maëlle Dour", "instrument");
+    violin.attributes = vec!["guest".into(), "violin".into()];
+    violin.track = vec![(1, 2), (1, 3)];
+    cat.keep_credits(record, "musicbrainz", &format!("release:{REL_ALL}"), Some(&[violin, said(GA, "Gwen Arzel", "producer"), said(NF, "Nils Fréjus", "mastering")]), false, now).unwrap();
+    cat.keep_credits(record, "discogs", &format!("release:{R401}"), Some(&[said(&DC_LK.to_string(), "Lou Kerjean", "Artwork")]), false, now).unwrap();
+    w.served.refresh().unwrap();
+    let path = format!("/api/records/{all}?from=library");
+    // (a) The panel's GET: Listed persons, nothing made.
+    let before = counts(&w);
+    let answer = ask(&w, ("cookie", &a.alice), Method::GET, &path, Value::Null).await.1;
+    assert_eq!(counts(&w), before, "(a) a GET makes nothing");
+    let md = people(&answer, "performer").into_iter().find(|p| p.1 == "Maëlle Dour").expect("Maëlle Dour");
+    assert_eq!(md.0, json!({ "listed": { "source": "musicbrainz", "id": MD } }), "(a) Listed by her MusicBrainz id");
+    // (b) alice taps her.
+    let (status, opened) = ask(&w, ("cookie", &a.alice), Method::POST, "/api/artists/open", json!({ "mbid": MD, "name": "Maëlle Dour" })).await;
+    assert_eq!(status, StatusCode::OK, "(b) alice may open a person a stored credit names: {opened}");
+    let artist = opened["artist"].as_str().expect("her artist").to_string();
+    assert_eq!(owed(&w, record), 1, "(b) one record change-log row tells ALL's panel");
+    w.served.refresh().unwrap();
+    let answer = ask(&w, ("cookie", &a.alice), Method::GET, &path, Value::Null).await.1;
+    let md = people(&answer, "performer").into_iter().find(|p| p.1 == "Maëlle Dour").expect("Maëlle Dour");
+    assert_eq!(md.0, json!({ "id": artist }), "(b) the credit now names her artist");
+    // (d) Again: the same artist.
+    let (_, again) = ask(&w, ("cookie", &a.alice), Method::POST, "/api/artists/open", json!({ "mbid": MD, "name": "Maëlle Dour" })).await;
+    assert_eq!(again["artist"], artist.as_str(), "(d) no second artist");
+    // (f) A day later, the forgetting keeps her while a credit names her.
+    let id = crate::serve::ids::artist_number(&artist).expect("an artist's id");
+    let gone = cat.forget_quiet_artists(crate::app::moment::now_secs() + 3 * 86_400, &Default::default()).unwrap();
+    assert!(!gone.contains(&id), "(f) kept while a credit names her: {gone:?}");
+    drop(stand_ins);
 }
