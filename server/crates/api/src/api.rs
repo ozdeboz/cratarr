@@ -7604,14 +7604,17 @@ struct SetCover {
     url: String,
 }
 
-/// Change cover (COU.11, FA14): one of its candidates kept as the record's chosen cover in Cratarr's store, a command on the one path:
-/// `{ result: its stamp, undo, rev }`; every surface shows it, and no file changes (GEN.58). Undo gives back the cover shown before.
-async fn set_album_cover(ctx: Ctx, headers: HeaderMap, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<Answer<Option<String>>>, ApiError> {
+/// Change cover (COU.11, COU.21, FA14): one of its candidates, or any https image an administrator gives by name (public only), kept
+/// as the record's chosen cover in Cratarr's store, a command on the one path. Answered at once with its run (202 `{ task }`): the
+/// picture is fetched inside it, never here (lookups are jobs). The run's result is the path's answer, `{ result: its stamp, undo,
+/// rev }`; a refusal is its error, in its own words. Every surface shows it, and no file changes (GEN.58). Undo gives back the cover
+/// shown before. An address not https, or by number, is refused at once, no run begun.
+async fn set_album_cover(ctx: Ctx, headers: HeaderMap, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     crate::serve::views::record::decided(&ctx, &source, &album, cratarr_domain::record::Handler::ChangeCover, None, None).await?;
     own_album(&source)?;
     let (serve, record) = (ctx.serve()?, cover_record(&album)?);
-    let pick = crate::app::covers::PickCover::chosen(serve.clone(), record, &b.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(ctx.app.commands.run(&crate::app::requests::viewer(&serve), idempotency_key(&headers), &pick).await?))
+    let key = idempotency_key(&headers).map(str::to_string);
+    started(crate::app::covers::choose(ctx.app.commands.clone(), serve.clone(), crate::app::requests::viewer(&serve), key, record, &b.url))
 }
 
 /// How MusicBrainz stands (0.9.6, Settings › Connections): when last reached, the last failure, the background pass.
