@@ -246,6 +246,43 @@ fn written(file: &str, table: &impl Serialize) {
     }
 }
 
+/// CRED.1 (T-CRED-1, T-CRED-7): the one roles table as shared JSON in its written form, for the page's and the device's tests: the
+/// roles in the one order with their shown words, each source's word and the role it is, MusicBrainz's qualifiers and the
+/// instruments a performer's detail names. Red first: no table.
+#[test]
+fn the_roles_table_is_written_and_current() {
+    use cratarr_domain::credits::{INSTRUMENTS, QUALIFIERS, ROLES, TABLE};
+    #[derive(Serialize)]
+    struct Role {
+        role: &'static str,
+        word: &'static str,
+    }
+    #[derive(Serialize)]
+    struct Said {
+        source: &'static str,
+        word: &'static str,
+        role: &'static str,
+    }
+    #[derive(Serialize)]
+    struct Roles {
+        about: &'static str,
+        roles: Vec<Role>,
+        words: Vec<Said>,
+        qualifiers: Vec<&'static str>,
+        instruments: Vec<&'static str>,
+    }
+    written(
+        "roles.json",
+        &Roles {
+            about: "The one roles table (SCENARIOS-CRED CRED.1, T-CRED-1, T-CRED-7), written by cratarr-domain's tests: the roles in the one order with their shown words; each source's word (the files' tag names, MusicBrainz's relationship types, Discogs' role strings, lower case) and the role it is; MusicBrainz's attributes that qualify and are never an instrument; the instruments a performer's detail names. A word no row names is a role of its own word, after these.",
+            roles: ROLES.iter().map(|(role, word)| Role { role, word }).collect(),
+            words: TABLE.iter().map(|(source, word, role)| Said { source, word, role }).collect(),
+            qualifiers: QUALIFIERS.to_vec(),
+            instruments: INSTRUMENTS.to_vec(),
+        },
+    );
+}
+
 /// SD1 for the requests' and Soulseek's words (DOMAIN-CORE C.6): the one wording table, as shared JSON in its written form.
 #[test]
 fn the_request_words_table_is_written_and_current() {

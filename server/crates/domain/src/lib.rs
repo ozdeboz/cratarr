@@ -7,6 +7,7 @@
 pub mod arrival;
 pub mod can;
 pub mod change;
+pub mod credits;
 pub mod facts;
 pub mod identity;
 pub mod picture;

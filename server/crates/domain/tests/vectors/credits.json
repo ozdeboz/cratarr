@@ -1,0 +1,2609 @@
+{
+  "about": "SCENARIOS-CRED's credit rows (DC3c): CRED.1's roles table (each source's word, read), CRED.2's merge by id and CRED.18's one order, on ALL and Northern Rooms. Written from the scenario; cratarr-domain's credits tests read it.",
+  "roles": [
+    {
+      "source": "files",
+      "word": "composer",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "composer",
+          "name": "Yann Tiersen"
+        }
+      ],
+      "says": "COMPOSER (ID3v2 TCOM)"
+    },
+    {
+      "source": "files",
+      "word": "lyricist",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "lyricist",
+          "name": "Kerys Lae"
+        }
+      ],
+      "says": "LYRICIST (ID3v2 TEXT, which lofty reads as Lyricist)"
+    },
+    {
+      "source": "files",
+      "word": "writer",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "writer",
+          "name": "Kerys Lae"
+        }
+      ],
+      "says": "Vorbis WRITER; ID3v2 TXXX:WRITER, named by by_raw_key"
+    },
+    {
+      "source": "files",
+      "word": "arranger",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "arranger",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "files",
+      "word": "conductor",
+      "value": "Loïc Brenn",
+      "reads": [
+        {
+          "role": "conductor",
+          "name": "Loïc Brenn"
+        }
+      ],
+      "says": "CONDUCTOR; ID3v2 TPE3"
+    },
+    {
+      "source": "files",
+      "word": "performer",
+      "value": "Kerys Lae (vocals)",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "vocals",
+          "name": "Kerys Lae"
+        }
+      ],
+      "says": "Vorbis PERFORMER, Picard's form"
+    },
+    {
+      "source": "files",
+      "word": "performer",
+      "value": "Ewen Morvan",
+      "reads": [
+        {
+          "role": "performer",
+          "name": "Ewen Morvan"
+        }
+      ],
+      "says": "no parenthesis: no instrument"
+    },
+    {
+      "source": "files",
+      "word": "performer:piano",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "piano",
+          "name": "Yann Tiersen"
+        }
+      ],
+      "says": "an ID3v2.4 TMCL pair, or an ID3v2.3 TIPL/IPLS pair (raw TIPL:piano), read by Cratarr's reader"
+    },
+    {
+      "source": "files",
+      "word": "producer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "producer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "files",
+      "word": "engineer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "engineer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "files",
+      "word": "mixer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "mixer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "files",
+      "word": "djmixer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "dj mix",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "files",
+      "word": "remixer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "remixer",
+          "name": "Gwen Arzel"
+        }
+      ],
+      "says": "REMIXER; ID3v2 TPE4"
+    },
+    {
+      "source": "files",
+      "word": "mix",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "mixer",
+          "name": "Gwen Arzel"
+        }
+      ],
+      "says": "an ID3v2 TIPL pair's role word (raw TIPL:mix)"
+    },
+    {
+      "source": "files",
+      "word": "DJ-mix",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "dj mix",
+          "name": "Gwen Arzel"
+        }
+      ],
+      "says": "an ID3v2 TIPL pair's role word (raw TIPL:DJ-mix)"
+    },
+    {
+      "source": "files",
+      "word": "artist",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "artist",
+          "name": "Yann Tiersen"
+        }
+      ],
+      "says": "ARTIST/ARTISTS of a track"
+    },
+    {
+      "source": "files",
+      "word": "featuring",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "featuring",
+          "name": "Kerys Lae"
+        }
+      ],
+      "says": "a featuring marker in the artist line or the title (CRED.24)"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "composer",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "composer",
+          "name": "Yann Tiersen"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "lyricist",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "lyricist",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "writer",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "writer",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "arranger",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "arranger",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "instrument",
+      "attributes": [
+        "piano"
+      ],
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "piano",
+          "name": "Yann Tiersen"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "vocal",
+      "attributes": [
+        "lead vocals"
+      ],
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "lead vocals",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "vocal",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "vocals",
+          "name": "Kerys Lae"
+        }
+      ],
+      "says": "a vocal with no attribute: vocals"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "performer",
+      "value": "Ewen Morvan",
+      "reads": [
+        {
+          "role": "performer",
+          "name": "Ewen Morvan"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "instrument",
+      "attributes": [
+        "guest",
+        "violin"
+      ],
+      "value": "Maëlle Dour",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "violin",
+          "qualifiers": [
+            "guest"
+          ],
+          "name": "Maëlle Dour"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "instrument",
+      "attributes": [
+        "additional",
+        "solo",
+        "piano"
+      ],
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "piano",
+          "qualifiers": [
+            "additional",
+            "solo"
+          ],
+          "name": "Yann Tiersen"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "conductor",
+      "value": "Bernard Haitink",
+      "reads": [
+        {
+          "role": "conductor",
+          "name": "Bernard Haitink"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "chorus master",
+      "value": "Bernard Haitink",
+      "reads": [
+        {
+          "role": "chorus master",
+          "name": "Bernard Haitink"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "performing orchestra",
+      "value": "Royal Concertgebouw Orchestra",
+      "reads": [
+        {
+          "role": "orchestra",
+          "name": "Royal Concertgebouw Orchestra"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "producer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "producer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "mix",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "mixer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "engineer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "engineer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "audio",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "engineer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "sound",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "engineer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "recording",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "engineer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "mastering",
+      "value": "Nils Fréjus",
+      "reads": [
+        {
+          "role": "mastering",
+          "name": "Nils Fréjus"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "remixer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "remixer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "mix-DJ",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "dj mix",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "programming",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "programming",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "musicbrainz",
+      "word": "artist",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "artist",
+          "name": "Yann Tiersen"
+        }
+      ],
+      "says": "a track's artist credit"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "featuring",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "featuring",
+          "name": "Kerys Lae"
+        }
+      ],
+      "says": "the artist after a \" feat. \", \" ft. \" or \" featuring \" joinphrase"
+    },
+    {
+      "source": "musicbrainz",
+      "word": "instrument arranger",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "instrument arranger",
+          "name": "Kerys Lae"
+        }
+      ],
+      "says": "a type no row names: its own word"
+    },
+    {
+      "source": "discogs",
+      "word": "Producer",
+      "value": "Sanne Vos",
+      "reads": [
+        {
+          "role": "producer",
+          "name": "Sanne Vos"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Mixed By",
+      "value": "Sanne Vos",
+      "reads": [
+        {
+          "role": "mixer",
+          "name": "Sanne Vos"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Mastered By",
+      "value": "Mandy Parnell (2)",
+      "reads": [
+        {
+          "role": "mastering",
+          "name": "Mandy Parnell (2)"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Written-By",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "writer",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Composed By",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "composer",
+          "name": "Yann Tiersen"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Lyrics By",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "lyricist",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Arranged By",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "arranger",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Conductor",
+      "value": "Bernard Haitink",
+      "reads": [
+        {
+          "role": "conductor",
+          "name": "Bernard Haitink"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Engineer",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "engineer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Recorded By",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "engineer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Remix",
+      "value": "Gwen Arzel",
+      "reads": [
+        {
+          "role": "remixer",
+          "name": "Gwen Arzel"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Vocals",
+      "value": "Kerys Lae",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "vocals",
+          "name": "Kerys Lae"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Piano",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "piano",
+          "name": "Yann Tiersen"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Double Bass",
+      "value": "Jonah Pike",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "double bass",
+          "name": "Jonah Pike"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Guitar [Acoustic]",
+      "value": "Jonah Pike",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "guitar",
+          "qualifiers": [
+            "acoustic"
+          ],
+          "name": "Jonah Pike"
+        }
+      ],
+      "says": "the bracket an instrument's qualifier"
+    },
+    {
+      "source": "discogs",
+      "word": "Producer, Mixed By",
+      "value": "Sanne Vos",
+      "reads": [
+        {
+          "role": "producer",
+          "name": "Sanne Vos"
+        },
+        {
+          "role": "mixer",
+          "name": "Sanne Vos"
+        }
+      ],
+      "says": "a comma list: two credits"
+    },
+    {
+      "source": "discogs",
+      "word": "Bass, Vocals",
+      "value": "Jonah Pike",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "bass",
+          "name": "Jonah Pike"
+        },
+        {
+          "role": "performer",
+          "detail": "vocals",
+          "name": "Jonah Pike"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "Engineer [Mastering]",
+      "value": "Mandy Parnell (2)",
+      "reads": [
+        {
+          "role": "mastering",
+          "name": "Mandy Parnell (2)"
+        }
+      ],
+      "says": "the bracket the role's own word"
+    },
+    {
+      "source": "discogs",
+      "word": "Mixed By [Assistant]",
+      "value": "Sanne Vos",
+      "reads": [
+        {
+          "role": "mixer",
+          "qualifiers": [
+            "assistant"
+          ],
+          "name": "Sanne Vos"
+        }
+      ],
+      "says": "the bracket a qualifier"
+    },
+    {
+      "source": "discogs",
+      "word": "Instruments [Synthesizer, Drum Machine]",
+      "value": "Mira Holt",
+      "reads": [
+        {
+          "role": "performer",
+          "detail": "synthesizer",
+          "name": "Mira Holt"
+        },
+        {
+          "role": "performer",
+          "detail": "drum machine",
+          "name": "Mira Holt"
+        }
+      ],
+      "says": "the bracket the instruments"
+    },
+    {
+      "source": "discogs",
+      "word": "Featuring",
+      "value": "Oda Brenn",
+      "reads": [
+        {
+          "role": "featuring",
+          "name": "Oda Brenn"
+        }
+      ]
+    },
+    {
+      "source": "discogs",
+      "word": "artist",
+      "value": "Yann Tiersen",
+      "reads": [
+        {
+          "role": "artist",
+          "name": "Yann Tiersen"
+        }
+      ],
+      "says": "a tracklist artist"
+    },
+    {
+      "source": "discogs",
+      "word": "Artwork",
+      "value": "Lou Kerjean",
+      "reads": [
+        {
+          "role": "Artwork",
+          "name": "Lou Kerjean"
+        }
+      ],
+      "says": "no row: Discogs' own word"
+    },
+    {
+      "source": "discogs",
+      "word": "Liner Notes",
+      "value": "Ana Ríos",
+      "reads": [
+        {
+          "role": "Liner Notes",
+          "name": "Ana Ríos"
+        }
+      ],
+      "says": "no row: Discogs' own word"
+    }
+  ],
+  "here": {
+    "by_ref": [
+      [
+        {
+          "source": "musicbrainz",
+          "id": "mb:yt"
+        },
+        {
+          "id": "ar-401",
+          "name": "Yann Tiersen"
+        }
+      ],
+      [
+        {
+          "source": "discogs",
+          "id": "dc:yt"
+        },
+        {
+          "id": "ar-401",
+          "name": "Yann Tiersen"
+        }
+      ],
+      [
+        {
+          "source": "musicbrainz",
+          "id": "mb:kl"
+        },
+        {
+          "id": "ar-402",
+          "name": "Kerys Lae"
+        }
+      ],
+      [
+        {
+          "source": "discogs",
+          "id": "dc:kl"
+        },
+        {
+          "id": "ar-402",
+          "name": "Kerys Lae"
+        }
+      ],
+      [
+        {
+          "source": "musicbrainz",
+          "id": "mb:oh"
+        },
+        {
+          "id": "ar-411",
+          "name": "Ólafur Hrafnsson"
+        }
+      ],
+      [
+        {
+          "source": "discogs",
+          "id": "dc:oh"
+        },
+        {
+          "id": "ar-411",
+          "name": "Ólafur Hrafnsson"
+        }
+      ],
+      [
+        {
+          "source": "musicbrainz",
+          "id": "mb:db1"
+        },
+        {
+          "id": "ar-412",
+          "name": "Daniel Berg",
+          "number": 1
+        }
+      ],
+      [
+        {
+          "source": "musicbrainz",
+          "id": "mb:db2"
+        },
+        {
+          "id": "ar-413",
+          "name": "Daniel Berg",
+          "number": 2
+        }
+      ]
+    ],
+    "by_name": [
+      {
+        "id": "ar-401",
+        "name": "Yann Tiersen"
+      },
+      {
+        "id": "ar-402",
+        "name": "Kerys Lae"
+      },
+      {
+        "id": "ar-403",
+        "name": "Ewen Morvan"
+      },
+      {
+        "id": "ar-411",
+        "name": "Ólafur Hrafnsson"
+      },
+      {
+        "id": "ar-412",
+        "name": "Daniel Berg",
+        "number": 1
+      },
+      {
+        "id": "ar-413",
+        "name": "Daniel Berg",
+        "number": 2
+      }
+    ],
+    "record_artists": [
+      "ar-401"
+    ]
+  },
+  "merges": [
+    {
+      "case": "(a) the files' COMPOSER on every track, no id; MusicBrainz's composer mb:yt on every work: one credit, ar-401",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Yann Tiersen",
+          "word": "composer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:yt"
+          },
+          "name": "Yann Tiersen",
+          "word": "composer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        }
+      ],
+      "credits": [
+        {
+          "role": "composer",
+          "word": "Composer",
+          "people": [
+            {
+              "person": {
+                "id": "ar-401"
+              },
+              "name": "Yann Tiersen",
+              "by": [
+                "files@MUSIC",
+                "musicbrainz"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(b) PERFORMER \"Kerys Lae (vocals)\" on 4 and 9; MusicBrainz's vocal mb:kl; Discogs' \"Vocals\" dc:kl, A4 and B3 placed on 4 and 9: one credit",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Kerys Lae (vocals)",
+          "word": "performer",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:kl"
+          },
+          "name": "Kerys Lae",
+          "word": "vocal",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        },
+        {
+          "source": "discogs",
+          "person": {
+            "source": "discogs",
+            "id": "dc:kl"
+          },
+          "name": "Kerys Lae",
+          "word": "Vocals",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        }
+      ],
+      "credits": [
+        {
+          "role": "performer",
+          "word": "Performer",
+          "people": [
+            {
+              "person": {
+                "id": "ar-402"
+              },
+              "name": "Kerys Lae",
+              "detail": "vocals",
+              "tracks": [
+                4,
+                9
+              ],
+              "by": [
+                "files@MUSIC",
+                "musicbrainz",
+                "discogs"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(c) MusicBrainz's violin, with \"guest\", mb:md on 2 and 3, nothing else naming Maëlle Dour: Listed",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:md"
+          },
+          "name": "Maëlle Dour",
+          "word": "instrument",
+          "on": {
+            "tracks": [
+              2,
+              3
+            ]
+          },
+          "attributes": [
+            "guest",
+            "violin"
+          ]
+        }
+      ],
+      "credits": [
+        {
+          "role": "performer",
+          "word": "Performer",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "musicbrainz",
+                  "id": "mb:md"
+                }
+              },
+              "name": "Maëlle Dour",
+              "detail": "violin",
+              "qualifiers": [
+                "guest"
+              ],
+              "tracks": [
+                2,
+                3
+              ],
+              "by": [
+                "musicbrainz"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(d) the files' PRODUCER \"Gwen Arzel\" on every track, no id; MusicBrainz's release-level producer mb:ga: one credit, Listed (T-CRED-4: the same record's source names the name)",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Gwen Arzel",
+          "word": "producer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ga"
+          },
+          "name": "Gwen Arzel",
+          "word": "producer",
+          "on": "every"
+        }
+      ],
+      "credits": [
+        {
+          "role": "producer",
+          "word": "Producer",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "musicbrainz",
+                  "id": "mb:ga"
+                }
+              },
+              "name": "Gwen Arzel",
+              "by": [
+                "files@MUSIC",
+                "musicbrainz"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(e) Discogs' \"Artwork – Lou Kerjean\" dc:lk: its own word, Listed",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "discogs",
+          "person": {
+            "source": "discogs",
+            "id": "dc:lk"
+          },
+          "name": "Lou Kerjean",
+          "word": "Artwork",
+          "on": "every"
+        }
+      ],
+      "credits": [
+        {
+          "role": "Artwork",
+          "word": "Artwork",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "discogs",
+                  "id": "dc:lk"
+                }
+              },
+              "name": "Lou Kerjean",
+              "by": [
+                "discogs"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(f) Northern Rooms: MusicBrainz's mastering \"Ólafur Hrafnsson\" mb:oh and Discogs' \"Olafur Hrafnsson\" dc:oh, both held by ar-411: one credit, by ar-411's one name",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "said": [
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:oh"
+          },
+          "name": "Ólafur Hrafnsson",
+          "word": "mastering",
+          "on": "every"
+        },
+        {
+          "source": "discogs",
+          "person": {
+            "source": "discogs",
+            "id": "dc:oh"
+          },
+          "name": "Olafur Hrafnsson",
+          "word": "Mastered By",
+          "on": "every"
+        }
+      ],
+      "credits": [
+        {
+          "role": "mastering",
+          "word": "Mastering",
+          "people": [
+            {
+              "person": {
+                "id": "ar-411"
+              },
+              "name": "Ólafur Hrafnsson",
+              "by": [
+                "musicbrainz",
+                "discogs"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(g) Northern Rooms: MusicBrainz's producer mb:sv and Discogs' dc:sv, both \"Sanne Vos\", no artist here, no link: two (T-CRED-5, OQ-CRED-7 (a))",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "said": [
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:sv"
+          },
+          "name": "Sanne Vos",
+          "word": "producer",
+          "on": "every"
+        },
+        {
+          "source": "discogs",
+          "person": {
+            "source": "discogs",
+            "id": "dc:sv"
+          },
+          "name": "Sanne Vos",
+          "word": "Producer",
+          "on": "every"
+        }
+      ],
+      "credits": [
+        {
+          "role": "producer",
+          "word": "Producer",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "musicbrainz",
+                  "id": "mb:sv"
+                }
+              },
+              "name": "Sanne Vos",
+              "by": [
+                "musicbrainz"
+              ]
+            },
+            {
+              "person": {
+                "listed": {
+                  "source": "discogs",
+                  "id": "dc:sv"
+                }
+              },
+              "name": "Sanne Vos",
+              "by": [
+                "discogs"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(h) Northern Rooms: the files' ENGINEER \"Daniel Berg\", no id, two artists here of that name: a name alone (X8)",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Daniel Berg",
+          "word": "engineer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          }
+        }
+      ],
+      "credits": [
+        {
+          "role": "engineer",
+          "word": "Engineer",
+          "people": [
+            {
+              "name": "Daniel Berg",
+              "by": [
+                "files@MUSIC"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(h) then with MusicBrainz's engineer mb:db2 on that record: one credit, ar-413",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Daniel Berg",
+          "word": "engineer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:db2"
+          },
+          "name": "Daniel Berg",
+          "word": "engineer",
+          "on": "every"
+        }
+      ],
+      "credits": [
+        {
+          "role": "engineer",
+          "word": "Engineer",
+          "people": [
+            {
+              "person": {
+                "id": "ar-413"
+              },
+              "name": "Daniel Berg",
+              "number": 2,
+              "by": [
+                "files@MUSIC",
+                "musicbrainz"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(i) ALL's track artists: 4 and 9 Yann Tiersen with Kerys Lae featuring (the line's \" feat. \", MusicBrainz's joinphrase), 7 Yann Tiersen and Ewen Morvan: a featuring credit and an artist credit; Yann Tiersen, a record artist, never under \"artist\"",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:yt"
+          },
+          "name": "Yann Tiersen",
+          "word": "artist",
+          "on": {
+            "tracks": [
+              4,
+              7,
+              9
+            ]
+          }
+        },
+        {
+          "source": "files@MUSIC",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:kl"
+          },
+          "name": "Kerys Lae",
+          "word": "featuring",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        },
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Ewen Morvan",
+          "word": "artist",
+          "on": {
+            "tracks": [
+              7
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:yt"
+          },
+          "name": "Yann Tiersen",
+          "word": "artist",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:kl"
+          },
+          "name": "Kerys Lae",
+          "word": "featuring",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        }
+      ],
+      "credits": [
+        {
+          "role": "artist",
+          "word": "Artist",
+          "people": [
+            {
+              "person": {
+                "id": "ar-403"
+              },
+              "name": "Ewen Morvan",
+              "tracks": [
+                7
+              ],
+              "by": [
+                "files@MUSIC"
+              ]
+            }
+          ]
+        },
+        {
+          "role": "featuring",
+          "word": "Featuring",
+          "people": [
+            {
+              "person": {
+                "id": "ar-402"
+              },
+              "name": "Kerys Lae",
+              "tracks": [
+                4,
+                9
+              ],
+              "by": [
+                "files@MUSIC",
+                "musicbrainz"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "(j), CRED.18: (a)-(e) together, with both sources' piano and the mixers the files and MusicBrainz name apart (CRED.7 (f)): the same credits, order and `by` in every order of the sources; both mixers shown; within a role by first track, then name",
+      "all": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "orders": true,
+      "said": [
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Yann Tiersen",
+          "word": "composer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:yt"
+          },
+          "name": "Yann Tiersen",
+          "word": "composer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Kerys Lae (vocals)",
+          "word": "performer",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:kl"
+          },
+          "name": "Kerys Lae",
+          "word": "vocal",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        },
+        {
+          "source": "discogs",
+          "person": {
+            "source": "discogs",
+            "id": "dc:kl"
+          },
+          "name": "Kerys Lae",
+          "word": "Vocals",
+          "on": {
+            "tracks": [
+              4,
+              9
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:md"
+          },
+          "name": "Maëlle Dour",
+          "word": "instrument",
+          "on": {
+            "tracks": [
+              2,
+              3
+            ]
+          },
+          "attributes": [
+            "guest",
+            "violin"
+          ]
+        },
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Gwen Arzel",
+          "word": "producer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ga"
+          },
+          "name": "Gwen Arzel",
+          "word": "producer",
+          "on": "every"
+        },
+        {
+          "source": "discogs",
+          "person": {
+            "source": "discogs",
+            "id": "dc:lk"
+          },
+          "name": "Lou Kerjean",
+          "word": "Artwork",
+          "on": "every"
+        },
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Tom Lerat",
+          "word": "mixer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ga"
+          },
+          "name": "Gwen Arzel",
+          "word": "mix",
+          "on": "every"
+        },
+        {
+          "source": "files@MUSIC",
+          "person": null,
+          "name": "Yann Tiersen (piano)",
+          "word": "performer",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "source": "musicbrainz",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:yt"
+          },
+          "name": "Yann Tiersen",
+          "word": "instrument",
+          "on": {
+            "tracks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          },
+          "attributes": [
+            "piano"
+          ]
+        }
+      ],
+      "credits": [
+        {
+          "role": "composer",
+          "word": "Composer",
+          "people": [
+            {
+              "person": {
+                "id": "ar-401"
+              },
+              "name": "Yann Tiersen",
+              "by": [
+                "files@MUSIC",
+                "musicbrainz"
+              ]
+            }
+          ]
+        },
+        {
+          "role": "performer",
+          "word": "Performer",
+          "people": [
+            {
+              "person": {
+                "id": "ar-401"
+              },
+              "name": "Yann Tiersen",
+              "detail": "piano",
+              "by": [
+                "files@MUSIC",
+                "musicbrainz"
+              ]
+            },
+            {
+              "person": {
+                "listed": {
+                  "source": "musicbrainz",
+                  "id": "mb:md"
+                }
+              },
+              "name": "Maëlle Dour",
+              "detail": "violin",
+              "qualifiers": [
+                "guest"
+              ],
+              "tracks": [
+                2,
+                3
+              ],
+              "by": [
+                "musicbrainz"
+              ]
+            },
+            {
+              "person": {
+                "id": "ar-402"
+              },
+              "name": "Kerys Lae",
+              "detail": "vocals",
+              "tracks": [
+                4,
+                9
+              ],
+              "by": [
+                "files@MUSIC",
+                "musicbrainz",
+                "discogs"
+              ]
+            }
+          ]
+        },
+        {
+          "role": "producer",
+          "word": "Producer",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "musicbrainz",
+                  "id": "mb:ga"
+                }
+              },
+              "name": "Gwen Arzel",
+              "by": [
+                "files@MUSIC",
+                "musicbrainz"
+              ]
+            }
+          ]
+        },
+        {
+          "role": "mixer",
+          "word": "Mixer",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "musicbrainz",
+                  "id": "mb:ga"
+                }
+              },
+              "name": "Gwen Arzel",
+              "by": [
+                "musicbrainz"
+              ]
+            },
+            {
+              "name": "Tom Lerat",
+              "by": [
+                "files@MUSIC"
+              ]
+            }
+          ]
+        },
+        {
+          "role": "Artwork",
+          "word": "Artwork",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "discogs",
+                  "id": "dc:lk"
+                }
+              },
+              "name": "Lou Kerjean",
+              "by": [
+                "discogs"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "CRED.24 (p12): Same Boat, Discogs' extraartist \"Featuring – Oda Brenn\" (dc:ob): Oda Brenn featuring, on every track",
+      "all": [
+        1,
+        2,
+        3
+      ],
+      "said": [
+        {
+          "source": "discogs",
+          "person": {
+            "source": "discogs",
+            "id": "dc:ob"
+          },
+          "name": "Oda Brenn",
+          "word": "Featuring",
+          "on": "every"
+        }
+      ],
+      "credits": [
+        {
+          "role": "featuring",
+          "word": "Featuring",
+          "people": [
+            {
+              "person": {
+                "listed": {
+                  "source": "discogs",
+                  "id": "dc:ob"
+                }
+              },
+              "name": "Oda Brenn",
+              "by": [
+                "discogs"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "lists": [
+    {
+      "row": "p1",
+      "says": "Night Signals 1: \"Rowan Fell feat. Oda Brenn\", ids [mb:rf, mb:ob]",
+      "source": "files",
+      "line": "Rowan Fell feat. Oda Brenn",
+      "parts": [
+        "Rowan Fell feat. Oda Brenn"
+      ],
+      "ids": [
+        "mb:rf",
+        "mb:ob"
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main",
+          "phrase": "feat."
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ob"
+          },
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "p2",
+      "says": "Night Signals 2: ARTIST \"Rowan Fell\", TITLE \"Harbour (feat. Tamsin Kell)\": the title stays whole",
+      "source": "files",
+      "line": "Rowan Fell",
+      "parts": [
+        "Rowan Fell"
+      ],
+      "ids": [
+        "mb:rf"
+      ],
+      "title": "Harbour (feat. Tamsin Kell)",
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main",
+          "phrase": "feat."
+        },
+        {
+          "name": "Tamsin Kell",
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "p3",
+      "says": "Night Signals 3: \"Rowan Fell / Oda Brenn\" (the library's spaced slash): a separator, no phrase",
+      "source": "files",
+      "line": "Rowan Fell / Oda Brenn",
+      "parts": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "ids": [
+        "mb:rf",
+        "mb:ob"
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main"
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ob"
+          },
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p4",
+      "says": "Night Signals 4: \"Rowan Fell ft. Oda Brenn\"",
+      "source": "files",
+      "line": "Rowan Fell ft. Oda Brenn",
+      "parts": [
+        "Rowan Fell ft. Oda Brenn"
+      ],
+      "ids": [
+        "mb:rf",
+        "mb:ob"
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main",
+          "phrase": "ft."
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ob"
+          },
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "p5",
+      "says": "Night Signals 5: \"Rowan Fell & Oda Brenn\", ARTISTS [Rowan Fell, Oda Brenn]",
+      "source": "files",
+      "line": "Rowan Fell & Oda Brenn",
+      "parts": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "ids": [
+        "mb:rf",
+        "mb:ob"
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main",
+          "phrase": "&"
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ob"
+          },
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p6",
+      "says": "Night Signals 6: \"Rowan Fell; Oda Brenn\" (a \";\" list in one value): a separator",
+      "source": "files",
+      "line": "Rowan Fell; Oda Brenn",
+      "parts": [
+        "Rowan Fell",
+        "Oda Brenn"
+      ],
+      "ids": [
+        "mb:rf",
+        "mb:ob"
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main"
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ob"
+          },
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p7",
+      "says": "Deep Harbour 3: \"Anz / Commodo / Alfa Mist\"",
+      "source": "files",
+      "line": "Anz / Commodo / Alfa Mist",
+      "parts": [
+        "Anz",
+        "Commodo",
+        "Alfa Mist"
+      ],
+      "ids": [],
+      "list": [
+        {
+          "name": "Anz",
+          "role": "main"
+        },
+        {
+          "name": "Commodo",
+          "role": "main"
+        },
+        {
+          "name": "Alfa Mist",
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p8",
+      "says": "Harbour's ALBUMARTIST \"Rowan Fell feat. Tamsin Kell\" (the record's line)",
+      "source": "files",
+      "line": "Rowan Fell feat. Tamsin Kell",
+      "parts": [
+        "Rowan Fell feat. Tamsin Kell"
+      ],
+      "ids": [],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "role": "main",
+          "phrase": "feat."
+        },
+        {
+          "name": "Tamsin Kell",
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "p9",
+      "says": "MusicBrainz, Night Signals 1: [Rowan Fell \" feat. \", Oda Brenn]",
+      "source": "musicbrainz",
+      "entries": [
+        {
+          "name": "Rowan Fell",
+          "join": " feat. ",
+          "person": "mb:rf"
+        },
+        {
+          "name": "Oda Brenn",
+          "join": "",
+          "person": "mb:ob"
+        }
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main",
+          "phrase": "feat."
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ob"
+          },
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "p10",
+      "says": "MusicBrainz, Night Signals 5: [Rowan Fell \" x \", Oda Brenn]",
+      "source": "musicbrainz",
+      "entries": [
+        {
+          "name": "Rowan Fell",
+          "join": " x ",
+          "person": "mb:rf"
+        },
+        {
+          "name": "Oda Brenn",
+          "join": "",
+          "person": "mb:ob"
+        }
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:rf"
+          },
+          "role": "main",
+          "phrase": "x"
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:ob"
+          },
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p11",
+      "says": "Discogs, Night Signals 5: [{ Rowan Fell, join \"&\" }, { Oda Brenn }]",
+      "source": "discogs",
+      "entries": [
+        {
+          "name": "Rowan Fell",
+          "join": "&",
+          "person": "dc:rf"
+        },
+        {
+          "name": "Oda Brenn",
+          "join": "",
+          "person": "dc:ob"
+        }
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "person": {
+            "source": "discogs",
+            "id": "dc:rf"
+          },
+          "role": "main",
+          "phrase": "&"
+        },
+        {
+          "name": "Oda Brenn",
+          "person": {
+            "source": "discogs",
+            "id": "dc:ob"
+          },
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p13",
+      "says": "MusicBrainz: [A \" featuring \", B]: \"featuring\" as spelled",
+      "source": "musicbrainz",
+      "entries": [
+        {
+          "name": "A",
+          "join": " featuring ",
+          "person": "mb:a"
+        },
+        {
+          "name": "B",
+          "join": "",
+          "person": "mb:b"
+        }
+      ],
+      "list": [
+        {
+          "name": "A",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:a"
+          },
+          "role": "main",
+          "phrase": "featuring"
+        },
+        {
+          "name": "B",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:b"
+          },
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "p14",
+      "says": "\"Little Feat\": \"Feat\" with no dot is no marker (T-CRED-30)",
+      "source": "files",
+      "line": "Little Feat",
+      "parts": [
+        "Little Feat"
+      ],
+      "ids": [],
+      "list": [
+        {
+          "name": "Little Feat",
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p15",
+      "says": "a library keeping \"Feat. of Clay\": the keep list protects it",
+      "source": "files",
+      "line": "Feat. of Clay",
+      "parts": [
+        "Feat. of Clay"
+      ],
+      "ids": [],
+      "whole": [
+        "Feat. of Clay"
+      ],
+      "list": [
+        {
+          "name": "Feat. of Clay",
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p16",
+      "says": "TITLE \"Song (feat. Friends)\": no featured credit, \"Friends\" is F54's placeholder (the rule handed in)",
+      "source": "files",
+      "line": "Rowan Fell",
+      "parts": [
+        "Rowan Fell"
+      ],
+      "ids": [],
+      "title": "Song (feat. Friends)",
+      "placeholder": [
+        "Friends"
+      ],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "role": "main"
+        }
+      ]
+    },
+    {
+      "row": "p17",
+      "says": "TITLE \"Embrace (feat. Kerys Lae & Loïc Brenn)\", no source naming either: one featured name (F54: no split on a bare \"&\")",
+      "source": "files",
+      "line": "Rowan Fell",
+      "parts": [
+        "Rowan Fell"
+      ],
+      "ids": [],
+      "title": "Embrace (feat. Kerys Lae & Loïc Brenn)",
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "role": "main",
+          "phrase": "feat."
+        },
+        {
+          "name": "Kerys Lae & Loïc Brenn",
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "p18",
+      "says": "\"Rowan Fell feat. Oda Brenn & Tamsin Kell\", no list, no source: the featured part one name (F54)",
+      "source": "files",
+      "line": "Rowan Fell feat. Oda Brenn & Tamsin Kell",
+      "parts": [
+        "Rowan Fell feat. Oda Brenn & Tamsin Kell"
+      ],
+      "ids": [],
+      "list": [
+        {
+          "name": "Rowan Fell",
+          "role": "main",
+          "phrase": "feat."
+        },
+        {
+          "name": "Oda Brenn & Tamsin Kell",
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "all-4",
+      "says": "ALL 4 and 9: \"Yann Tiersen feat. Kerys Lae\", ARTISTS [Yann Tiersen, Kerys Lae], both ids",
+      "source": "files",
+      "line": "Yann Tiersen feat. Kerys Lae",
+      "parts": [
+        "Yann Tiersen",
+        "Kerys Lae"
+      ],
+      "ids": [
+        "mb:yt",
+        "mb:kl"
+      ],
+      "list": [
+        {
+          "name": "Yann Tiersen",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:yt"
+          },
+          "role": "main",
+          "phrase": "feat."
+        },
+        {
+          "name": "Kerys Lae",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:kl"
+          },
+          "role": "featuring"
+        }
+      ]
+    },
+    {
+      "row": "all-7",
+      "says": "ALL 7: \"Yann Tiersen & Ewen Morvan\", ARTISTS [Yann Tiersen, Ewen Morvan], Yann Tiersen's id alone",
+      "source": "files",
+      "line": "Yann Tiersen & Ewen Morvan",
+      "parts": [
+        "Yann Tiersen",
+        "Ewen Morvan"
+      ],
+      "ids": [
+        "mb:yt"
+      ],
+      "list": [
+        {
+          "name": "Yann Tiersen",
+          "person": {
+            "source": "musicbrainz",
+            "id": "mb:yt"
+          },
+          "role": "main",
+          "phrase": "&"
+        },
+        {
+          "name": "Ewen Morvan",
+          "role": "main"
+        }
+      ]
+    }
+  ]
+}
