@@ -6429,7 +6429,8 @@ async fn picked_records_download_at_once_and_are_checked_one_at_a_time_end_to_en
         placed.push(id);
     }
     for album in &albums {
-        assert!(incoming.join("Tape Club").join(album).join("01 Slack Water.flac").exists(), "{album} in Incoming");
+        let lies = || as_it_lies(&root.join("library")).into_keys().collect::<Vec<_>>();
+        assert!(incoming.join("Tape Club").join(album).join("01 Slack Water.flac").exists(), "{album} in Incoming; the library holds {:?}", lies());
     }
     assert!(slskd.violations().is_empty(), "{:?}", slskd.violations());
     s.stop();
