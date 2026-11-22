@@ -6687,7 +6687,11 @@ async fn a_folder_with_only_clipping_a_click_and_a_pop_passes_with_notes_end_to_
     let notes = json!({ "02 Neap.flac": "Clipped at 0:01", "03 Spring Tide.flac": "A click at 0:01; a pop at the very end" });
     assert_eq!(i["notes"], notes);
     assert_eq!(s.get("/api/soulseek").await["items"].as_array().unwrap().iter().find(|x| x["id"] == "ss-1").unwrap()["notes"], notes);
-    assert!(as_it_lies(&incoming.join(TIDE)) == every_file(&peer_a.dir) && fewest.get() == Some(3), "placed whole, no note written into a file");
+    // Each half by itself, naming what it saw (e2e-020722 failed the two as one, saying neither).
+    let (placed, sent) = (as_it_lies(&incoming.join(TIDE)), every_file(&peer_a.dir));
+    let differ: Vec<&String> = placed.keys().chain(sent.keys()).filter(|k| placed.get(*k) != sent.get(*k)).collect();
+    assert!(differ.is_empty(), "placed as peer-a sent it, no note written into a file; these differ: {differ:?}");
+    assert_eq!(fewest.get(), Some(3), "placed whole, never seen partial");
     assert!(hidden_left(&incoming).is_empty());
     assert_eq!(slskd.post_users(), ["peer-a"], "peer-b never asked");
     let states = seen.states("ss-1");
