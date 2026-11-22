@@ -553,6 +553,152 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// An ID3v2 frame as a tag body holds it: its id, its size (v2.3 plain, v2.4 syncsafe), no flags, its payload.
+    fn id3_frame(version: u8, id: &str, payload: &[u8]) -> Vec<u8> {
+        let mut f = id.as_bytes().to_vec();
+        let n = payload.len() as u32;
+        let size = if version == 4 { [(n >> 21) as u8 & 0x7f, (n >> 14) as u8 & 0x7f, (n >> 7) as u8 & 0x7f, n as u8 & 0x7f] } else { n.to_be_bytes() };
+        f.extend_from_slice(&size);
+        f.extend_from_slice(&[0, 0]);
+        f.extend_from_slice(payload);
+        f
+    }
+
+    /// A Latin-1 text payload, its values NUL-separated.
+    fn latin1(values: &[&str]) -> Vec<u8> {
+        let mut v = vec![0u8];
+        v.extend(values.join("\0").chars().map(|c| c as u32 as u8));
+        v
+    }
+
+    /// An MP3 whose ID3v2 tag is this body, written by hand (the shapes lofty will not write: a broken frame).
+    fn mp3_with_tag(path: &Path, version: u8, body: &[u8]) {
+        super::fixtures::mp3(path);
+        let audio = std::fs::read(path).unwrap();
+        let mut body = body.to_vec();
+        body.extend([0u8; 64]);
+        let n = body.len() as u32;
+        let mut b = b"ID3".to_vec();
+        b.extend_from_slice(&[version, 0, 0, (n >> 21) as u8 & 0x7f, (n >> 14) as u8 & 0x7f, (n >> 7) as u8 & 0x7f, n as u8 & 0x7f]);
+        b.extend(body);
+        b.extend(audio);
+        std::fs::write(path, b).unwrap();
+    }
+
+    /// A file's named items, sorted: (raw key, name, value).
+    fn named(t: &FileTags) -> Vec<(String, String, String)> {
+        let mut v: Vec<(String, String, String)> = t.items.iter().filter_map(|(r, n, v)| n.map(|n| (r.clone(), n.to_string(), v.clone()))).collect();
+        v.sort();
+        v
+    }
+
+    fn has(got: &[(String, String, String)], raw: &str, name: &str, value: &str) -> bool {
+        got.iter().any(|x| x == &(raw.to_string(), name.to_string(), value.to_string()))
+    }
+
+    /// CRED.4 (the reader's half), T-CRED-25: every role tag the reader now names is kept, its raw key and its name (decision 0008's
+    /// two layers): composer, lyricist, writer, arranger, conductor, performer, producer, engineer, mixer, djmixer and remixer; ID3v2's
+    /// TIPL and TMCL pairs (and ID3v2.3's IPLS, which lofty reads as TIPL) read by Cratarr's reader, each kept with its role in the raw
+    /// layer (`TIPL:producer`, `TMCL:piano`, `TIPL:piano`); the tolerant reader's TCOM, TPE3, TEXT and a readable TMCL or IPLS beside a
+    /// TIPL it can't decode. A FLAC (Vorbis), an ID3v2.4 MP3, a Picard ID3v2.3 MP3 and a tolerant-path MP3. Never a pair kept under the
+    /// bare frame name, its role lost; never a role frame the tolerant reader can decode dropped. Red first: the reader names composer
+    /// and performer alone (lofty's Producer, MixEngineer, MixDj, Engineer, Arranger, Lyricist, Writer, Conductor and Remixer fall to
+    /// `None`), lofty has no item for TMCL, and the tolerant reader names TCOM alone and skips IPLS.
+    #[test]
+    fn the_files_role_tags_are_credits() {
+        use super::fixtures::*;
+        use lofty::config::WriteOptions;
+        use lofty::id3::v2::{Frame, FrameId, KeyValueFrame, TextInformationFrame};
+        use lofty::TextEncoding;
+        use std::borrow::Cow;
+        let d = dir("tags-roles");
+        // The FLAC: Vorbis comments as Picard writes them.
+        let f = flac(&d, "all");
+        let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&f).unwrap(), ParseOptions::new()).unwrap();
+        let mut vc = file.remove_vorbis_comments().unwrap_or_default();
+        let vorbis = [
+            ("COMPOSER", "composer", "Yann Tiersen"),
+            ("LYRICIST", "lyricist", "Kerys Lae"),
+            ("WRITER", "writer", "Kerys Lae"),
+            ("ARRANGER", "arranger", "Kerys Lae"),
+            ("CONDUCTOR", "conductor", "Loïc Brenn"),
+            ("PERFORMER", "performer", "Yann Tiersen (piano)"),
+            ("PRODUCER", "producer", "Gwen Arzel"),
+            ("ENGINEER", "engineer", "Gwen Arzel"),
+            ("MIXER", "mixer", "Gwen Arzel"),
+            ("DJMIXER", "djmixer", "Gwen Arzel"),
+            ("REMIXER", "remixer", "Gwen Arzel"),
+        ];
+        for (k, _, v) in vorbis {
+            vc.push(k.into(), v.into());
+        }
+        file.set_vorbis_comments(vc);
+        file.save_to_path(&f, WriteOptions::default()).unwrap();
+        let got = named(&read(&f).unwrap().0);
+        for (raw, name, value) in vorbis {
+            assert!(has(&got, raw, name, value), "the FLAC's {raw} kept as {name}: {got:?}");
+        }
+        // (a) An ID3v2.4 MP3: TIPL's producer and mix, TMCL's piano, and TXXX:WRITER.
+        let pairs = |p: &[(&str, &str)]| -> Cow<'static, [(Cow<'static, str>, Cow<'static, str>)]> {
+            Cow::Owned(p.iter().map(|(k, v)| (Cow::Owned(k.to_string()), Cow::Owned(v.to_string()))).collect())
+        };
+        let m4 = d.join("v24.mp3");
+        mp3(&m4);
+        let mut file = lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(&m4).unwrap(), ParseOptions::new()).unwrap();
+        let mut tag = file.remove_id3v2().unwrap_or_default();
+        tag.insert(Frame::KeyValue(KeyValueFrame::new(FrameId::Valid("TIPL".into()), TextEncoding::UTF8, pairs(&[("producer", "Gwen Arzel"), ("mix", "Gwen Arzel")]))));
+        tag.insert(Frame::KeyValue(KeyValueFrame::new(FrameId::Valid("TMCL".into()), TextEncoding::UTF8, pairs(&[("piano", "Yann Tiersen")]))));
+        tag.set_artist("Yann Tiersen".into());
+        tag.insert_user_text("WRITER".into(), "Kerys Lae".into());
+        file.set_id3v2(tag);
+        file.save_to_path(&m4, WriteOptions::default()).unwrap();
+        let got = named(&read(&m4).unwrap().0);
+        assert!(has(&got, "TIPL:producer", "producer", "Gwen Arzel"), "TIPL's producer pair, its role kept: {got:?}");
+        assert!(has(&got, "TIPL:mix", "mixer", "Gwen Arzel"), "TIPL's mix pair: {got:?}");
+        assert!(has(&got, "TMCL:piano", "performer", "Yann Tiersen"), "TMCL's piano pair, read by Cratarr's reader: {got:?}");
+        assert!(got.iter().any(|(r, n, v)| r.ends_with("WRITER") && n == "writer" && v == "Kerys Lae"), "TXXX:WRITER: {got:?}");
+        assert!(!got.iter().any(|(r, _, _)| r == "TIPL" || r == "TMCL" || r == "IPLS"), "never a pair under the bare frame name: {got:?}");
+        assert_eq!(got.iter().filter(|(_, n, v)| n == "producer" && v == "Gwen Arzel").count(), 1, "one producer, not lofty's item beside the pair: {got:?}");
+        // (e) Picard's ID3v2.3 MP3: TIPL written as an IPLS frame, which lofty reads as TIPL.
+        let m3 = d.join("v23.mp3");
+        mp3(&m3);
+        let mut file = lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(&m3).unwrap(), ParseOptions::new()).unwrap();
+        let mut tag = file.remove_id3v2().unwrap_or_default();
+        tag.insert(Frame::KeyValue(KeyValueFrame::new(FrameId::Valid("TIPL".into()), TextEncoding::UTF16, pairs(&[("piano", "Yann Tiersen"), ("vocals", "Kerys Lae"), ("producer", "Gwen Arzel")]))));
+        tag.insert(Frame::Text(TextInformationFrame::new(FrameId::Valid("TCOM".into()), TextEncoding::UTF16, "Yann Tiersen".to_string())));
+        file.set_id3v2(tag);
+        file.save_to_path(&m3, WriteOptions::default().use_id3v23(true)).unwrap();
+        let got = named(&read(&m3).unwrap().0);
+        assert!(has(&got, "TIPL:piano", "performer", "Yann Tiersen"), "IPLS's piano pair, as TIPL:piano: {got:?}");
+        assert!(has(&got, "TIPL:vocals", "performer", "Kerys Lae"), "IPLS's vocals pair: {got:?}");
+        assert!(has(&got, "TIPL:producer", "producer", "Gwen Arzel"), "IPLS's producer pair: {got:?}");
+        assert!(has(&got, "TCOM", "composer", "Yann Tiersen"), "TCOM: {got:?}");
+        assert!(!got.iter().any(|(r, _, _)| r == "TIPL" || r == "IPLS"), "never a pair under the bare frame name: {got:?}");
+        // (f) The 175 files' shape: a TIPL lofty rejects (a broken UTF-16 byte-order mark), so the tolerant reader reads the rest:
+        // TCOM, TPE3, TEXT and a readable TMCL; and its ID3v2.3 twin's readable IPLS beside the broken TIPL.
+        let broken = [&[1u8, 0x41, 0x00][..], &[0x42, 0x00]].concat();
+        let mut body = id3_frame(4, "TIPL", &broken);
+        body.extend(id3_frame(4, "TCOM", &latin1(&["Yann Tiersen"])));
+        body.extend(id3_frame(4, "TPE3", &latin1(&["Loïc Brenn"])));
+        body.extend(id3_frame(4, "TEXT", &latin1(&["Kerys Lae"])));
+        body.extend(id3_frame(4, "TMCL", &latin1(&["piano", "Yann Tiersen"])));
+        let mt = d.join("tolerant.mp3");
+        mp3_with_tag(&mt, 4, &body);
+        let (t, issue) = read(&mt).unwrap();
+        let got = named(&t);
+        assert!(has(&got, "TCOM", "composer", "Yann Tiersen") && has(&got, "TPE3", "conductor", "Loïc Brenn") && has(&got, "TEXT", "lyricist", "Kerys Lae"), "{got:?}");
+        assert!(has(&got, "TMCL:piano", "performer", "Yann Tiersen"), "the readable TMCL beside the broken TIPL: {got:?}");
+        assert!(issue.is_some_and(|(i, why)| i == Issue::DamagedTag && why.contains("TIPL")), "the broken frame named in the file's issue, as today");
+        let mut body = id3_frame(3, "TIPL", &broken);
+        body.extend(id3_frame(3, "TCOM", &latin1(&["Yann Tiersen"])));
+        body.extend(id3_frame(3, "IPLS", &latin1(&["piano", "Yann Tiersen", "producer", "Gwen Arzel"])));
+        let got = super::super::id3::parse(3, 0, &body).items;
+        assert!(got.contains(&("TIPL:piano".to_string(), Some("performer"), "Yann Tiersen".to_string())), "the tolerant reader reads IPLS: {got:?}");
+        assert!(got.contains(&("TIPL:producer".to_string(), Some("producer"), "Gwen Arzel".to_string())), "{got:?}");
+        assert!(got.contains(&("TCOM".to_string(), Some("composer"), "Yann Tiersen".to_string())), "{got:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn gain_tags_get_their_names_however_the_format_keys_them() {
         assert_eq!(normalised(ItemKey::ReplayGainTrackGain), Some("replaygain_track_gain"));
