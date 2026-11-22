@@ -2654,17 +2654,18 @@ mod tests {
         }
     }
 
-    /// Nothing but its sound says what a track is like here: a record's lie close, the two records far apart.
+    /// Nothing but its sound says what a track is like here: a record's lie close, records of two sounds far apart. (SL1: the
+    /// seed's own record is left out, so a third record shares its sound.)
     #[test]
     fn a_sounds_like_hears_the_sounds_kept_apart() {
         let rows = Rows {
             libraries: vec![library(0)],
             artists: vec![artist(1)],
-            records: vec![record(10, 1, &[0]), record(20, 1, &[0])],
-            tracks: (1..=8).map(|id| track(id, if id <= 4 { 10 } else { 20 }, 1, 0)).collect(),
+            records: vec![record(10, 1, &[0]), record(20, 1, &[0]), record(30, 1, &[0])],
+            tracks: (1..=12).map(|id| track(id, if id <= 4 { 10 } else if id <= 8 { 20 } else { 30 }, 1, 0)).collect(),
         };
         let near = |id: i64| 0.05 * id as f32;
-        let heard: Vec<(i64, Vec<f32>)> = (1..=8).map(|id| (id, if id <= 4 { vec![1.0, near(id), 0.0] } else { vec![0.0, near(id), 1.0] })).collect();
+        let heard: Vec<(i64, Vec<f32>)> = (1..=12).map(|id| (id, if id <= 4 { vec![1.0, near(id), 0.0] } else { vec![0.0, near(id), 1.0] })).collect();
         let index = built(&rows);
         let facts = index.facts(Some(&Sounds::build(1, &heard)));
         let (membership, off, by) = (HashMap::new(), HashSet::new(), Weights::EQUAL);
@@ -2674,7 +2675,7 @@ mod tests {
         let like = crate::crates::like_crate("like:tr-6", "Like", vec![ids::song(6)], 4);
         let mut lines = view.select(&like.conditions, false);
         lines.sort();
-        assert_eq!(lines, ["r20/5.flac", "r20/6.flac", "r20/7.flac", "r20/8.flac"]);
+        assert_eq!(lines, ["r30/10.flac", "r30/11.flac", "r30/12.flac", "r30/9.flac"]);
     }
 
     #[test]

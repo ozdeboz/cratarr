@@ -1957,7 +1957,7 @@ impl CrateService {
         crate::run::spawn_blocking(move || {
             // Its own left out as the crate leaves them (`crates::resolved`): fresh, its track and album seeds; an
             // artist seed's own tracks unless `own` keeps them.
-            let out = crates::SeedsOut::of(&of, fresh, own, lib.alike());
+            let out = crates::SeedsOut::of(&of, fresh, own, false, lib.alike());
             let w = lib.world();
             let among: Vec<&crates::Facts> = lib
                 .files()

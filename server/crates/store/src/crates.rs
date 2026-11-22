@@ -485,7 +485,7 @@ mod tests {
 
     fn seeded(of: &[&str]) -> Vec<Condition> {
         let of = of.iter().map(|s| s.to_string()).collect();
-        vec![Condition::new("like", false, Value::Like { of, count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() })]
+        vec![Condition::new("like", false, Value::Like { of, count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, records: false, avoid: Avoid::default() })]
     }
 
     /// A take names no crate, so it walks all of a store: lists, seeds, and what goes by a Sounds like's id. A stop before the mark

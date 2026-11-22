@@ -256,11 +256,11 @@ fn a_shelf_holds_to_what_was_added_to_it() {
 fn a_sounds_like_is_made_on_the_device_and_is_the_true_list() {
     let mut d = device();
     let like = tracks(&mut d, "like:tr-1@10", own_order());
-    assert_eq!(like.len(), 6, "every track, here or not: a list leaves nothing out");
-    assert_eq!(like[0], 1, "closest first");
+    assert_eq!(like.len(), 4, "every other record's track, here or not: a list leaves nothing else out");
+    assert!(!like.contains(&1) && !like.contains(&2), "its own record left out (SL1): {like:?}");
     assert_eq!(ask(&mut d, json!({ "ask": "crate", "id": "like:tr-1" }))["name"], "Sounds like one");
     let record = tracks(&mut d, "like:al-1@10", own_order());
-    assert!(record.len() >= 2 && record[..2].contains(&1) && record[..2].contains(&2), "{record:?}");
+    assert!(record.len() == 4 && !record.contains(&1) && !record.contains(&2), "only other records' (SL1): {record:?}");
     let of_record = ask(&mut d, json!({ "ask": "crate", "id": "like:al-1" }));
     assert_eq!(of_record["name"], "Sounds like First");
     assert_eq!(of_record["conditions"][0]["value"]["of"], json!(["tr-1", "tr-2"]), "all of it");
@@ -272,11 +272,12 @@ fn a_sounds_like_is_made_on_the_device_and_is_the_true_list() {
 #[test]
 fn a_sounds_like_kept_with_what_it_learned_goes_by_it_at_any_size() {
     let of = vec!["tr-1".to_string()];
-    let kept = Kept { left_out: vec![2], ..crate_of("like:tr-1", like_crate("like:tr-1", "Sounds like one", of, 3).conditions) };
+    // Turned down: another record's track (SL1: its own record's are left out anyway).
+    let kept = Kept { left_out: vec![3], ..crate_of("like:tr-1", like_crate("like:tr-1", "Sounds like one", of, 3).conditions) };
     let mut d = device_of(Own { crates: vec![kept], ..Own::default() }, &[]);
     let like = tracks(&mut d, "like:tr-1@5", own_order());
-    assert_eq!(like.len(), 5);
-    assert!(!like.contains(&2), "turned down for it: {like:?}");
+    assert_eq!(like.len(), 3, "the other records' four, less the one turned down: {like:?}");
+    assert!(!like.contains(&3), "turned down for it: {like:?}");
 }
 
 #[test]

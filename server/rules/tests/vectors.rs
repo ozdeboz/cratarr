@@ -442,7 +442,7 @@ struct Also {
 }
 
 fn like(of: &[String], count: usize, a: Also) -> Value {
-    Value::Like { of: of.to_vec(), count, min: a.min, own: a.own, mode: a.mode, fresh: a.fresh, weights: a.weights, unlisted: a.unlisted, avoid: a.avoid }
+    Value::Like { of: of.to_vec(), count, min: a.min, own: a.own, mode: a.mode, fresh: a.fresh, weights: a.weights, unlisted: a.unlisted, records: false, avoid: a.avoid }
 }
 
 /// Every axis, what the crate's own conditions add unseen, every crate made when asked for, and the ways a Sounds like reads
@@ -539,6 +539,8 @@ fn crate_cases(lib: &Shared) -> Vec<CrateCase> {
     let target = Target { energy: 30.0, mood: Some([0.2, 0.5, 0.7]) };
     for def in [
         crates::like_crate("like:one", "Like one track", one.to_vec(), 10),
+        // SL1: a record's Sounds like, its seeds its songs as the server and the device make it: none of the record's own.
+        crates::like_crate("like:al-harbour", "Like a record", lib.album("al-harbour"), 10),
         crates::playlist_crate("like:list:Mix", "Mix", mix, 10),
         crates::week_crate(crates::HOME_WEEK, week, 10),
         crates::moment_crate("like:now", "A rainy evening", target, 10),

@@ -127,6 +127,10 @@ pub enum Value {
         /// moves ahead of at most `LEAN_UNLISTED` closer ones that are in a playlist.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         unlisted: bool,
+        /// Its seeds' records left out (SL1): a Sounds like of a record, or of one of its tracks, is not that record's,
+        /// so every file of a seed's record, any copy, is left out before the closest are picked (`SeedsOut`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        records: bool,
         /// What it should not be like: the traits learned from what was turned down for it, those dismissed left out
         /// (its fit model's other side, `closest_fit`).
         #[serde(default, skip_serializing_if = "Avoid::is_empty")]
@@ -213,7 +217,7 @@ pub const WEEK_SECS: i64 = 7 * 24 * 3600;
 /// leaves out.
 pub fn week_crate(id: &str, played: Vec<(String, f32)>, count: usize) -> CrateDef {
     let (of, weights) = played.into_iter().unzip();
-    let like = Condition::new("like", false, Value::Like { of, count, min: None, own: None, mode: None, fresh: true, weights, unlisted: false, avoid: Avoid::default() });
+    let like = Condition::new("like", false, Value::Like { of, count, min: None, own: None, mode: None, fresh: true, weights, unlisted: false, records: false, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: "Sounds like your week".into(), conditions: vec![like] }
 }
 /// Home's moment (`like:now[@<count>]`, `app::moment`): the tracks nearest what the weather and the time of day ask,
@@ -241,7 +245,7 @@ pub fn like_of(id: &str) -> Option<(&str, usize)> {
 }
 
 pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() });
+    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, records: true, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
 }
 
@@ -251,7 +255,7 @@ pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> Cra
 pub const LIST: &str = "list:";
 
 pub fn playlist_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, mode: None, fresh: true, weights: Vec::new(), unlisted: true, avoid: Avoid::default() });
+    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, mode: None, fresh: true, weights: Vec::new(), unlisted: true, records: false, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: format!("Sounds like {name}"), conditions: vec![like] }
 }
 
@@ -1559,9 +1563,9 @@ pub fn resolved_in(conditions: &[Condition], alike: &Alike, among: &[&Facts], by
     conditions
         .iter()
         .map(|c| match &c.value {
-            Value::Like { of, count, min, own, mode, fresh, weights, unlisted, avoid } => {
+            Value::Like { of, count, min, own, mode, fresh, weights, unlisted, records, avoid } => {
                 // Its own left out before the closest are picked, so they take no place among them (`SeedsOut`).
-                let out = SeedsOut::of(of, *fresh, *own, alike);
+                let out = SeedsOut::of(of, *fresh, *own, *records, alike);
                 let among: Vec<&Facts> = among.iter().copied().filter(|f| !out.holds(f)).collect();
                 let picks: Vec<(&Facts, f64)> = closest_fit(of, weights, mode.unwrap_or_default(), avoid, alike, &among, by)
                     .into_iter()
@@ -1590,7 +1594,8 @@ pub fn resolved_in(conditions: &[Condition], alike: &Alike, among: &[&Facts], by
 
 /// What a Sounds like leaves out of its picks as its own (0.11, quick crates): with `fresh`, its track and album seeds'
 /// tracks (Sounds like your week: what was played is not offered again); an artist seed's own tracks, by any credit,
-/// unless `own` keeps them (a crate like Air is not Air's: they are the seed).
+/// unless `own` keeps them (a crate like Air is not Air's: they are the seed); with `records` (SL1), its track and album
+/// seeds' records, every copy (a Sounds like of a record, or of one of its tracks, is not that record's).
 pub struct SeedsOut {
     tracks: HashSet<i64>,
     albums: HashSet<String>,
@@ -1598,14 +1603,27 @@ pub struct SeedsOut {
 }
 
 impl SeedsOut {
-    pub fn of(of: &[String], fresh: bool, own: Option<bool>, alike: &Alike) -> Self {
+    pub fn of(of: &[String], fresh: bool, own: Option<bool>, records: bool, alike: &Alike) -> Self {
         let mut out = SeedsOut { tracks: HashSet::new(), albums: HashSet::new(), credits: HashSet::new() };
         for id in of {
             if let Some(k) = alike.artist_key(id) {
                 if own != Some(true) {
                     out.credits.insert(k.to_string());
                 }
-            } else if !fresh {
+                continue;
+            }
+            if records {
+                // A track's record (none built: the track itself), an album's itself.
+                if let Some(t) = crate::ids::track_of(id) {
+                    match alike.record_of_track(t) {
+                        Some(a) => out.albums.insert(a.to_string()),
+                        None => out.tracks.insert(t),
+                    };
+                } else if id.starts_with(crate::ids::ALBUM) {
+                    out.albums.insert(id.clone());
+                }
+            }
+            if !fresh {
                 continue;
             } else if let Some(t) = crate::ids::track_of(id) {
                 out.tracks.insert(t);
@@ -1647,6 +1665,8 @@ pub struct Alike {
     /// a file of those files is found where it lies, as a Sounds like reads every one of them, and looking each up cost a fifth of it.
     origin: usize,
     own_lines: Vec<Option<Box<str>>>,
+    /// Each place's record (`Facts::album`), where built: a track seed's, left out with it (SL1, `SeedsOut`).
+    record_at: Vec<Option<Arc<str>>>,
 }
 
 /// Each artist the files name, once, with their key: what a library's ids are asked for (`Alike::of`).
@@ -1716,7 +1736,13 @@ impl Alike {
         }
         let artist_keys = credited_names(all).into_iter().filter_map(|(n, k)| Some((artist_ids.get(n)?.clone(), k))).collect();
         let own_lines = all.iter().enumerate().map(|(i, f)| (place.get(&f.rel) == Some(&i)).then(|| f.rel.as_str().into())).collect();
-        Alike { lib, tracks, names, place, of_track, albums, credited, artist_keys, origin: all.as_ptr() as usize, own_lines }
+        let record_at = all.iter().map(|f| f.album.clone()).collect();
+        Alike { lib, tracks, names, place, of_track, albums, credited, artist_keys, origin: all.as_ptr() as usize, own_lines, record_at }
+    }
+
+    /// A track's record (`Facts::album`), where it is known here and its record built.
+    pub fn record_of_track(&self, track: i64) -> Option<&Arc<str>> {
+        self.record_at.get(*self.of_track.get(&track)?)?.as_ref()
     }
 
     /// The places a seed stands for (0.11, quick crates; as the radio's `of_item`): a song's (`tr-…`), an album's songs'
@@ -2739,7 +2765,7 @@ mod tests {
         assert!(alike.seed_places("ar-nobody").is_empty());
         let every: Vec<&Facts> = files.iter().collect();
         let like = |count: usize, min: Option<u8>, own: Option<bool>| {
-            vec![Condition::new("like", false, Value::Like { of: vec![ana.clone()], count, min, own, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() })]
+            vec![Condition::new("like", false, Value::Like { of: vec![ana.clone()], count, min, own, mode: None, fresh: false, weights: Vec::new(), unlisted: false, records: false, avoid: Avoid::default() })]
         };
         let picked = |conditions: Vec<Condition>| -> Vec<String> {
             match &resolved(&conditions, &alike, &every, &Weights::EQUAL)[0].value {
@@ -2760,9 +2786,9 @@ mod tests {
         assert_eq!(picked(like(10, Some(floor), None)), ["near.flac"], "below the floor: out");
         assert_eq!(picked(like(10, Some(0), None)), ["near.flac", "far.flac"]);
         // The curve leaves out what the crate does.
-        let out = SeedsOut::of(std::slice::from_ref(&ana), false, None, &alike);
+        let out = SeedsOut::of(std::slice::from_ref(&ana), false, None, false, &alike);
         assert!(out.holds(&files[2]) && !out.holds(&files[3]));
-        assert!(!SeedsOut::of(std::slice::from_ref(&ana), false, Some(true), &alike).holds(&files[0]), "kept");
+        assert!(!SeedsOut::of(std::slice::from_ref(&ana), false, Some(true), false, &alike).holds(&files[0]), "kept");
     }
 
     #[test]
@@ -2785,8 +2811,8 @@ mod tests {
         assert_eq!(alike.seed_places("al-a"), [0, 1]);
         // Fresh: an album seed's own tracks left out, as a track seed's; not fresh, kept.
         let a = ["al-a".to_string()];
-        assert!(SeedsOut::of(&a, true, None, &alike).holds(&files[1]) && !SeedsOut::of(&a, true, None, &alike).holds(&files[2]));
-        assert!(!SeedsOut::of(&a, false, None, &alike).holds(&files[0]));
+        assert!(SeedsOut::of(&a, true, None, false, &alike).holds(&files[1]) && !SeedsOut::of(&a, true, None, false, &alike).holds(&files[2]));
+        assert!(!SeedsOut::of(&a, false, None, false, &alike).holds(&files[0]));
         // The Album axis: by id; no albums listed (its chips come from search).
         let all = axes(&files, &[]);
         let album = all.iter().find(|x| x.key == "album").unwrap();
@@ -3058,9 +3084,10 @@ mod tests {
         let membership = HashMap::new();
         let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let every: Vec<&Facts> = files.iter().collect();
-        assert_eq!(select(&files, &resolved(&like.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &every, &Weights::EQUAL), &w), ["seed.flac", "near.flac"], "the closest two");
+        // SL1: the seed itself left out (no record built: the track is its own).
+        assert_eq!(select(&files, &resolved(&like.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &every, &Weights::EQUAL), &w), ["near.flac", "far.flac"], "the closest two");
         let all = like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 10);
-        assert_eq!(select(&files, &resolved(&all.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &every, &Weights::EQUAL), &w), ["seed.flac", "near.flac", "far.flac"], "every heard one");
+        assert_eq!(select(&files, &resolved(&all.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &every, &Weights::EQUAL), &w), ["near.flac", "far.flac"], "every heard one");
         // The seed left out of what the crate may show: the closest two are then the next two, still two.
         let shown: Vec<&Facts> = files.iter().filter(|f| f.rel != "seed.flac").collect();
         assert_eq!(select(&files, &resolved(&like.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &shown, &Weights::EQUAL), &w), ["near.flac", "far.flac"]);
@@ -3812,7 +3839,7 @@ mod tests {
         let min = ((near_either + near_blend) / 2.0).round() as u8;
         let every: Vec<&Facts> = files.iter().collect();
         let picked = |mode: Option<LikeMode>, count: usize| -> Vec<String> {
-            let like = Value::Like { of: of.clone(), count, min: Some(min), own: None, mode, fresh: true, weights: Vec::new(), unlisted: false, avoid: Avoid::default() };
+            let like = Value::Like { of: of.clone(), count, min: Some(min), own: None, mode, fresh: true, weights: Vec::new(), unlisted: false, records: false, avoid: Avoid::default() };
             match &resolved(&[Condition::new("like", false, like)], &alike, &every, &Weights::EQUAL)[0].value {
                 Value::Within { ranked, .. } => ranked.to_vec(),
                 _ => Vec::new(),
@@ -3894,6 +3921,7 @@ mod tests {
             fresh: false,
             weights: Vec::new(),
             unlisted: false,
+            records: false,
             avoid: Avoid::default(),
         };
         let conditions = [
@@ -3979,7 +4007,7 @@ mod tests {
     #[test]
     fn moving_named_ids_moves_what_named_ids_reads_and_nothing_else() {
         let like = |of: &[&str], weights: &[f32]| {
-            Value::Like { of: of.iter().map(|s| s.to_string()).collect(), count: 5, min: None, own: None, mode: None, fresh: false, weights: weights.to_vec(), unlisted: false, avoid: Avoid::default() }
+            Value::Like { of: of.iter().map(|s| s.to_string()).collect(), count: 5, min: None, own: None, mode: None, fresh: false, weights: weights.to_vec(), unlisted: false, records: false, avoid: Avoid::default() }
         };
         let values = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let mut conditions = vec![
@@ -4006,7 +4034,7 @@ mod tests {
     /// weights no longer line up and every seed after it counts as the one before.
     #[test]
     fn two_seeds_of_one_record_are_one_with_both_their_weights() {
-        let like = Value::Like { of: vec!["al-a".into(), "al-b".into(), "tr-1".into()], count: 5, min: None, own: None, mode: None, fresh: false, weights: vec![1.0, 2.0, 4.0], unlisted: false, avoid: Avoid::default() };
+        let like = Value::Like { of: vec!["al-a".into(), "al-b".into(), "tr-1".into()], count: 5, min: None, own: None, mode: None, fresh: false, weights: vec![1.0, 2.0, 4.0], unlisted: false, records: false, avoid: Avoid::default() };
         let mut conditions = vec![Condition::new("like", false, like)];
         move_named(&mut conditions, &mut |id| id.starts_with("al-").then(|| "al-7".to_string()));
         assert!(matches!(&conditions[0].value, Value::Like { of, weights, .. } if *of == ["al-7", "tr-1"] && *weights == [3.0, 4.0]), "{:?}", conditions[0].value);
@@ -4104,9 +4132,10 @@ mod tests {
         let keys = ["cratarr/Incoming".to_string()];
         let (lines, reasons, all, judged) = view.select_saying(&[like.clone(), vec![rock]].concat(), &causes, &keys, false);
         assert!(lines.is_empty() && judged.is_none());
-        let genre = Reason::new(Why::Filter, Some("genre".into()), "Genre", 2);
+        // SL1: the seed itself is left out (no record built), so lifting the genre brings back the one other switched on.
+        let genre = Reason::new(Why::Filter, Some("genre".into()), "Genre", 1);
         assert_eq!((reasons, all), (vec![genre, Reason::libraries_off(&keys, 0)], 2), "the closest picked again each time: no rock anywhere, so the library alone brings nothing");
         let (lines, reasons, all, _) = view.select_saying(&like, &[], &keys, false);
-        assert_eq!((lines.as_slice(), reasons, all), (["seed.flac".to_string(), "far.flac".to_string()].as_slice(), Vec::new(), 2), "what shows needs no reason");
+        assert_eq!((lines.as_slice(), reasons, all), (["far.flac".to_string()].as_slice(), Vec::new(), 1), "what shows needs no reason");
     }
 }

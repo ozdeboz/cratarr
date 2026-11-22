@@ -249,7 +249,7 @@ async fn listens(app: &Arc<App>, served: &Serve, account: &str, turn: usize, son
     }
     let calm = vec![Condition::new("energy", false, Value::Range { min: None, max: Some(60.0) })];
     let (own, _) = app.crates.crate_save(None, "Calm", calm).await.unwrap();
-    let like = Value::Like { of: vec![album.clone()], count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: crates::Avoid::default() };
+    let like = Value::Like { of: vec![album.clone()], count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, records: false, avoid: crates::Avoid::default() };
     app.crates.crate_save(None, "Like a record", vec![Condition::new("like", false, like)]).await.unwrap();
     app.crates.crate_leave_out(&own, None, &every(13), &[], true).await.unwrap();
     // Turned down for a Sounds like: what it learns to avoid. Kept for a playlist's: `crate_fits` lists both.
