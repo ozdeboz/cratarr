@@ -3077,6 +3077,72 @@ mod tests {
         assert!(select(&files, &resolved(&unheard.conditions, &Alike::of(&files, &HashMap::new(), &HashMap::new()), &every, &Weights::EQUAL), &w).is_empty());
     }
 
+    /// SL1: a Sounds like of a record, or of one of its tracks, is not that record's. Dots and Loops (12 tracks, and two more
+    /// of it in another library, the same record) sounds like itself first; three other records sound alike to it, each a
+    /// little further. Its crate holds only their tracks, most alike first, up to its count; a playlist's suggestions keep
+    /// their own rule (its own tracks left out, its records' others not).
+    #[test]
+    fn a_sounds_like_leaves_out_its_own_record() {
+        let heard = |rel: String, track: i64, album: &str, folder: i64, v: [f32; 3]| {
+            let length = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            Facts {
+                rel,
+                track: Some(track),
+                folders: vec![folder],
+                album: Some(Arc::from(album)),
+                sound: Some(v.iter().map(|x| x / length).collect()),
+                ..Facts::default()
+            }
+        };
+        let mut files = Vec::new();
+        for t in 1..=12i64 {
+            let name = if t == 3 { "Lo Boob Oscillator".to_string() } else { format!("{t:02}") };
+            files.push(heard(format!("dots/{name}.flac"), t, "al-dots", 0, [1.0, 0.01 * t as f32, 0.0]));
+        }
+        // Another library's copy of the same record.
+        for t in 13..=14i64 {
+            files.push(heard(format!("other/dots/{t:02}.flac"), t, "al-dots", 1, [1.0, 0.0, 0.01 * t as f32]));
+        }
+        let mut track = 14;
+        for (album, y) in [("al-near", 0.3f32), ("al-mid", 0.5), ("al-far", 0.8)] {
+            for t in 1..=4 {
+                track += 1;
+                files.push(heard(format!("{}/{t:02}.flac", album.trim_start_matches("al-")), track, album, 0, [1.0, y + 0.01 * t as f32, 0.0]));
+            }
+        }
+        let membership = HashMap::new();
+        let alike = Alike::of(&files, &membership, &HashMap::new());
+        let every: Vec<&Facts> = files.iter().collect();
+        let ranked = |c: &CrateDef| -> Vec<String> {
+            match &resolved(&c.conditions, &alike, &every, &Weights::EQUAL)[0].value {
+                Value::Within { ranked, .. } => ranked.to_vec(),
+                v => panic!("not worked out: {v:?}"),
+            }
+        };
+        let its_own = |l: &str| l.starts_with("dots/") || l.starts_with("other/dots/");
+        let others: Vec<&Facts> = files.iter().filter(|f| !its_own(&f.rel)).collect();
+        let closest = |seeds: &[String], count: usize| -> Vec<String> {
+            closest_weighted(seeds, &[], LikeMode::default(), &alike, &others, &Weights::EQUAL).into_iter().take(count).map(|(f, _)| f.rel.clone()).collect()
+        };
+        // A record seed: the caller turns it into its songs, the other library's copy's among them.
+        let record: Vec<String> = (1..=14).map(|t| format!("tr-{t}")).collect();
+        let like_record = ranked(&like_crate("like:al-dots@8", "Sounds like Dots and Loops", record.clone(), 8));
+        assert!(!like_record.iter().any(|l| its_own(l)), "the record's own tracks left out, every copy: {like_record:?}");
+        assert_eq!(like_record, closest(&record, 8), "only other records' tracks, most alike first, its count full");
+        // A track seed: its record left out too, not just the track.
+        let seed = vec!["tr-3".to_string()];
+        let like_track = ranked(&like_crate("like:tr-3@8", "Sounds like Lo Boob Oscillator", seed.clone(), 8));
+        assert!(!like_track.iter().any(|l| its_own(l)), "the track's own record left out: {like_track:?}");
+        assert_eq!(like_track, closest(&seed, 8), "only other records' tracks, most alike first, its count full");
+        // A playlist's suggestions, unchanged: its own tracks left out, the other tracks of their records not.
+        let tide: Vec<String> = ["tr-1", "tr-2", "tr-15", "tr-19", "tr-23"].iter().map(|s| s.to_string()).collect();
+        let suggested = ranked(&playlist_crate("like:list:Tide", "Tide", tide, 20));
+        let listed = ["dots/01.flac", "dots/02.flac", "near/01.flac", "mid/01.flac", "far/01.flac"];
+        assert!(!suggested.iter().any(|l| listed.contains(&l.as_str())), "its own tracks left out: {suggested:?}");
+        assert!(suggested.iter().any(|l| its_own(l)), "its records' other tracks still suggested: {suggested:?}");
+        assert_eq!(suggested.len(), 20);
+    }
+
     /// F-LISTS' P, Q, R and T as files (SCENARIOS-SIM): P and its kin Q heard near one sound, Ambient and drone, of the same years
     /// and tempo; R of P's years and nothing else; T heard far off, Metal, later and faster.
     fn p_q_r_t() -> Vec<Facts> {
