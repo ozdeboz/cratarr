@@ -391,20 +391,24 @@ async fn a_list_let_go_of_after_thirty_days_is_read_again_when_opened() {
     let _state = TestState::set().await;
     let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
     let record = wanted(&cat, "Answered", &[("musicbrainz", "release", "r113")]);
-    let asked = asks();
-    let read = || reader(&[("musicbrainz", &["Lamplight"])], asked.clone(), || Ok(None));
+    // Each read held at its gate until the page has answered (the read is a job begun at the open, the page built after it: a
+    // reader answering at once could keep its list first, and the page would rightly show the row).
+    let asked = Arc::new(AtomicUsize::new(0));
+    let (first, again) = (Arc::new(tokio::sync::Semaphore::new(0)), Arc::new(tokio::sync::Semaphore::new(0)));
     let t = crate::app::moment::now_secs();
-    assert!(opened(&cat, record, t, read()).await.more.looking);
+    assert!(opened(&cat, record, t, gated(&first, &asked)).await.more.looking);
+    first.add_permits(1);
     page_read_settled(&cat, record).await;
-    assert_eq!(opened(&cat, record, t + 1, read()).await.rows.len(), 1);
+    assert_eq!(opened(&cat, record, t + 1, gated(&first, &asked)).await.rows.len(), 1);
     cat.db_for_tests().execute("UPDATE reference_tracks SET at = ?1", [t - 45 * 86_400]).unwrap();
     cat.db_for_tests().execute("UPDATE records SET opened_at = ?1", [t - 45 * 86_400]).unwrap();
     assert_eq!(cat.forget_quiet_lists(t, &Default::default()).unwrap(), 1, "let go of");
-    let v = opened(&cat, record, t + 2, read()).await;
+    let v = opened(&cat, record, t + 2, gated(&again, &asked)).await;
     assert!(v.more.looking && v.rows.is_empty() && v.more.no_list.is_none(), "read again");
+    again.add_permits(1);
     page_read_settled(&cat, record).await;
-    assert_eq!(opened(&cat, record, t + 3, read()).await.rows.len(), 1);
-    assert_eq!(asked.lock().unwrap().len(), 2);
+    assert_eq!(opened(&cat, record, t + 3, gated(&again, &asked)).await.rows.len(), 1);
+    assert_eq!(asked.load(SeqCst), 2);
 }
 
 /// F1.11, Soulseek's Stuck: for a record whose sources all have none, `tracklist`'s why names the same sources as the page's
