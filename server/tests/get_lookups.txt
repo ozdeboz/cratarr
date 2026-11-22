@@ -76,7 +76,7 @@ GET /api/export/{token} | /api/export/x | 404 | - | reads only what is kept
 GET /api/favorites/{source}/albums | /api/favorites/cratarr/albums | 200 | - | reads only what is kept
 GET /api/favorites/{source}/artists | /api/favorites/cratarr/artists | 200 | - | reads only what is kept
 GET /api/favorites/{source}/tracks | /api/favorites/cratarr/tracks | 200 | - | reads only what is kept
-GET /api/file-changes/plans/{kind} | /api/file-changes/plans/fix:library:genre | 200 | waiting lane-C GEN.58 | rows 29-32: refused by GEN.58 (LK.B3, LK.C1)
+GET /api/file-changes/plans/{kind} | /api/file-changes/plans/fix:library:genre | 200 | - | rows 29-32: Discogs' facts as kept (DC3c: `fill` folded into the one scheduled Discogs job, T-CRED-28); a plan's cover look for its records stays lane C's GEN.58 (LK.B3, LK.C1)
 GET /api/file-changes/runs | /api/file-changes/runs | 200 | - | reads only what is kept
 GET /api/file-changes/runs/{id} | /api/file-changes/runs/x | 409 | - | reads only what is kept
 GET /api/file/{source}/{id} | /api/file/cratarr/{track} | 200 | - | reads only what is kept
