@@ -235,7 +235,8 @@ pub struct Handed {
 /// What to look an album up by, in turn, none twice: as asked, by its main artist, by its name alone. On a real Lidarr
 /// (2026-11-06) "Grouch / Grouch In Dub Rare Specimens" found other albums and "Grouch Rare Specimens" that one, and one
 /// term answered 503 where the album's name alone found it.
-fn terms(artist: &str, main: &str, album: &str) -> Vec<String> {
+fn terms(artist: &str, main: &str, credited: &[String], album: &str) -> Vec<String> {
+    let _ = credited;
     let mut out = vec![format!("{artist} {album}")];
     for term in [format!("{main} {album}"), album.to_string()] {
         if !out.contains(&term) {
@@ -370,7 +371,7 @@ impl Lidarr {
     async fn by_name(&self, artist: &str, album: &str) -> Result<serde_json::Value> {
         let main = main_artist(artist);
         let mut failed = None;
-        for term in terms(artist, &main, album) {
+        for term in terms(artist, &main, &[], album) {
             match self.get::<Vec<serde_json::Value>>("/api/v1/album/lookup", &[("term", term.as_str())]).await {
                 Ok(found) => {
                     if let Some(album) = pick(&found, artist, &main, album) {
@@ -838,8 +839,22 @@ mod tests {
 
     #[test]
     fn an_album_is_looked_up_as_asked_by_its_main_artist_and_by_its_name_none_twice() {
-        assert_eq!(terms("Grouch / Grouch In Dub", "Grouch", "Rare Specimens"), ["Grouch / Grouch In Dub Rare Specimens", "Grouch Rare Specimens", "Rare Specimens"]);
-        assert_eq!(terms("Air", "Air", "Moon Safari"), ["Air Moon Safari", "Moon Safari"]);
+        assert_eq!(terms("Grouch / Grouch In Dub", "Grouch", &[], "Rare Specimens"), ["Grouch / Grouch In Dub Rare Specimens", "Grouch Rare Specimens", "Rare Specimens"]);
+        assert_eq!(terms("Air", "Air", &[], "Moon Safari"), ["Air Moon Safari", "Moon Safari"]);
+    }
+
+    /// SCENARIOS-DC3 F54.4 (5), Lidarr's half (T-DC3-32, M2): its terms gain a term per credited artist of the record, by its one name,
+    /// after the whole credit and the main artist and before the album's name alone: Deep Harbour, credited Commodo and Alfa Mist,
+    /// looks up "Commodo Deep Harbour" and "Alfa Mist Deep Harbour". `main_artist` stays a term, never a credit; a record of one artist
+    /// reads as before. Red first: no term for Alfa Mist.
+    #[test]
+    fn the_terms_try_each_credited_artist() {
+        let credited = ["Commodo".to_string(), "Alfa Mist".to_string()];
+        assert_eq!(
+            terms("Commodo & Alfa Mist", &main_artist("Commodo & Alfa Mist"), &credited, "Deep Harbour"),
+            ["Commodo & Alfa Mist Deep Harbour", "Commodo Deep Harbour", "Alfa Mist Deep Harbour", "Deep Harbour"]
+        );
+        assert_eq!(terms("Air", "Air", &["Air".to_string()], "Moon Safari"), ["Air Moon Safari", "Moon Safari"], "one artist: as before");
     }
 
     #[test]
