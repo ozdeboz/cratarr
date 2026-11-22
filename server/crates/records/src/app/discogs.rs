@@ -1165,10 +1165,17 @@ pub struct Label {
 /// Who did what on a release (`role`: "Producer", "Mastered By"…), on which tracks where not all ("A1 to A3").
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Credit {
+    /// The name as Discogs writes it, its namesake mark "(n)" kept (T-CRED-16).
     pub name: String,
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracks: Option<String>,
+    /// Discogs' artist id (CRED.6: a credit keeps its person by id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    /// The name as credited on this release (Discogs' `anv`): the source's words (T-CRED-17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credited_as: Option<String>,
 }
 
 /// An artist on Discogs: the profile, plain; other names; members of a group, and the groups of a member.
@@ -1226,11 +1233,18 @@ pub fn plain_text(s: &str) -> String {
     out.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
+/// Every credit a Discogs release gives, as the credits store keeps them (CRED.6).
+pub fn release_credit_rows(v: &Value) -> Vec<crate::catalogue::credits::CreditRow> {
+    // Red first (SCENARIOS-CRED CRED.6): no credit is kept by id yet.
+    let _ = v;
+    Vec::new()
+}
+
 fn credits_of(v: &Value) -> Vec<Credit> {
     let one = |c: &Value, tracks: Option<String>| -> Option<Credit> {
         let name = c["anv"].as_str().filter(|a| !a.is_empty()).or(c["name"].as_str())?;
         let role = c["role"].as_str().unwrap_or_default().trim();
-        (!role.is_empty()).then(|| Credit { name: clean_name(name), role: role.to_string(), tracks: tracks.filter(|t| !t.is_empty()) })
+        (!role.is_empty()).then(|| Credit { name: clean_name(name), role: role.to_string(), tracks: tracks.filter(|t| !t.is_empty()), ..Credit::default() })
     };
     let mut out: Vec<Credit> = v["extraartists"].as_array().into_iter().flatten().filter_map(|c| one(c, c["tracks"].as_str().map(str::to_string))).collect();
     for t in v["tracklist"].as_array().into_iter().flatten() {
@@ -1532,14 +1546,55 @@ mod facts_tests {
     fn a_release_gives_its_labels_and_credits() {
         let v = serde_json::json!({
             "labels": [{ "name": "Studio Barnhus", "catno": "BARN 042" }, { "name": "Studio Barnhus", "catno": "BARN 042" }, { "name": "Self Released", "catno": "none" }],
-            "extraartists": [{ "name": "Axel Boman", "anv": "", "role": "Producer", "tracks": "" }, { "name": "Mandy Parnell (2)", "role": "Mastered By" }],
-            "tracklist": [{ "position": "A2", "extraartists": [{ "name": "Kornél Kovács", "anv": "Kornél", "role": "Vocals" }] }]
+            "extraartists": [{ "id": 1001, "name": "Axel Boman", "anv": "", "role": "Producer", "tracks": "" }, { "id": 1002, "name": "Mandy Parnell (2)", "role": "Mastered By" }],
+            "tracklist": [{ "position": "A2", "extraartists": [{ "id": 1003, "name": "Kornél Kovács", "anv": "Kornél", "role": "Vocals" }] }]
         });
         assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()), id: None, namesake: false }, Label { name: "Self Released".into(), catno: None, id: None, namesake: false }]);
+        // Its credits half, rewritten for CRED.6 (a pin changed by design): the person's Discogs id kept, its "(n)" kept (T-CRED-16),
+        // the `anv` the credited-as name beside the name (T-CRED-17).
         let c = credits_of(&v);
-        assert_eq!(c[0], Credit { name: "Axel Boman".into(), role: "Producer".into(), tracks: None });
-        assert_eq!(c[1].name, "Mandy Parnell");
-        assert_eq!(c[2], Credit { name: "Kornél".into(), role: "Vocals".into(), tracks: Some("A2".into()) });
+        assert_eq!(c[0], Credit { name: "Axel Boman".into(), role: "Producer".into(), tracks: None, id: Some(1001), credited_as: None });
+        assert_eq!(c[1].name, "Mandy Parnell (2)");
+        assert_eq!(c[2], Credit { name: "Kornél Kovács".into(), role: "Vocals".into(), tracks: Some("A2".into()), id: Some(1003), credited_as: Some("Kornél".into()) });
+    }
+
+    /// CRED.6, the parse: Tide Lines' main release `dc:R431`. Each extra artist kept by Discogs' artist id with its role string whole
+    /// (the roles table splits "Producer, Mixed By" and reads the brackets), its namesake mark kept ("Mandy Parnell (2)": T-CRED-16),
+    /// its `anv` the credited-as (T-CRED-17); its tracks ("A1 to A3", "B2") placed on Discogs' list (each side a disc), a release-level
+    /// one on every track; each track's `artists` its artist credit by id with the `join` as its phrase (CRED.24 (p11)). Never a
+    /// Discogs id or its "(n)" mark dropped. Red first: `credits_of` keeps name (anv first), role and tracks, drops the id and the
+    /// "(n)"; the tracklist's `artists` aren't read (rec/discogs.rs:1219-1235).
+    #[test]
+    fn discogs_credits_keep_every_role_by_id() {
+        let v = serde_json::json!({
+            "artists": [{ "id": 431, "name": "Rowan Fell", "anv": "", "join": "" }],
+            "extraartists": [
+                { "id": 9001, "name": "Sanne Vos", "anv": "", "role": "Producer, Mixed By", "tracks": "" },
+                { "id": 9002, "name": "Jonah Pike", "anv": "J. Pike", "role": "Double Bass, Vocals", "tracks": "A1 to A3" },
+                { "id": 9003, "name": "Mandy Parnell (2)", "anv": "", "role": "Engineer [Mastering]", "tracks": "" },
+                { "id": 9004, "name": "Mira Holt", "anv": "", "role": "Instruments [Synthesizer, Drum Machine]", "tracks": "B2" }
+            ],
+            "tracklist": [
+                { "position": "A1", "type_": "track", "title": "One", "duration": "3:20" },
+                { "position": "A2", "type_": "track", "title": "Two", "duration": "3:20" },
+                { "position": "A3", "type_": "track", "title": "Three", "duration": "3:20" },
+                { "position": "B1", "type_": "track", "title": "Four", "duration": "3:20",
+                  "artists": [{ "id": 431, "name": "Rowan Fell", "anv": "", "join": "&" }, { "id": 9005, "name": "Oda Brenn", "anv": "", "join": "" }] },
+                { "position": "B2", "type_": "track", "title": "Five", "duration": "3:20",
+                  "extraartists": [{ "id": 9006, "name": "Lou Kerjean", "anv": "", "role": "Artwork" }] }
+            ]
+        });
+        let rows = release_credit_rows(&v);
+        let row = |person: &str, word: &str| rows.iter().find(|r| r.person.as_deref() == Some(person) && r.word == word).unwrap_or_else(|| panic!("{person} {word}: {rows:?}"));
+        assert!(row("9001", "Producer, Mixed By").track.is_empty(), "release-level: every track");
+        let pike = row("9002", "Double Bass, Vocals");
+        assert_eq!((pike.track.clone(), pike.tracks_said.as_deref(), pike.credited_as.as_deref()), (vec![(1, 1), (1, 2), (1, 3)], Some("A1 to A3"), Some("J. Pike")));
+        assert_eq!(row("9003", "Engineer [Mastering]").name, "Mandy Parnell (2)", "the namesake mark kept");
+        assert_eq!(row("9004", "Instruments [Synthesizer, Drum Machine]").track, [(2, 2)], "B2: the second side's second track");
+        assert_eq!(row("9006", "Artwork").track, [(2, 2)], "a track's own extra artist on that track");
+        let b1: Vec<(&str, Option<&str>, Option<&str>)> = rows.iter().filter(|r| r.track == [(2, 1)]).map(|r| (r.word.as_str(), r.person.as_deref(), r.phrase.as_deref())).collect();
+        assert_eq!(b1, [("artist", Some("431"), Some("&")), ("artist", Some("9005"), None)], "B1's artists, by id, with the join as the phrase");
+        assert!(row("431", "artist").track.is_empty(), "the release's artists, on every track");
     }
 
     #[test]
