@@ -1,0 +1,444 @@
+{
+  "about": "The record's one credit rule (SCENARIOS-NAMES NAMES.20, written from the scenarios for DC3a 3a-1): NAMES.20's rows (h)-(l) and (ft1)-(ft3), NAMES.18's (a)-(g), SCENARIOS-DC3 F54.1's (m)-(z2), SCENARIOS-COUPLING COU.10 (a), (b), SCENARIOS-CRED CRED.25's record half and CRED.27 (q2), (q3), NAMES.22's and NAMES.24's source rows; and `parts`, CRED.19's role values through F54's `credit_parts`. A file's credit: its line as written, its names apart (its list tag, else the line as its library's separators split it: the caller's, here given), its MusicBrainz ids in order ('' none), its title. `artists`: the record's credit, in order, each with its role (main unless said) and the phrase printed after it; `text`: what the credit prints. Read by cratarr-domain's credited tests.",
+  "records": [
+    {
+      "row": "h", "scenario": "NAMES.20", "says": "Deep Harbour: tracks [Commodo, Alfa Mist] x2, [Anz, Commodo, Alfa Mist] x2: Commodo, Alfa Mist; Anz a track credit on 3 and 4",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [
+        { "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] },
+        { "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] },
+        { "line": "Anz / Commodo / Alfa Mist", "names": ["Anz", "Commodo", "Alfa Mist"] },
+        { "line": "Anz / Commodo / Alfa Mist", "names": ["Anz", "Commodo", "Alfa Mist"] }
+      ],
+      "artists": [{ "name": "Commodo" }, { "name": "Alfa Mist" }], "text": "Commodo & Alfa Mist", "rule": 1, "compilation": false, "by": ["files"],
+      "track_artists": [["Commodo", "Alfa Mist"], ["Commodo", "Alfa Mist"], ["Anz", "Commodo", "Alfa Mist"], ["Anz", "Commodo", "Alfa Mist"]]
+    },
+    {
+      "row": "i", "scenario": "NAMES.20", "says": "every track [Commodo, Alfa Mist, Anz]: all three",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [
+        { "line": "Commodo / Alfa Mist / Anz", "names": ["Commodo", "Alfa Mist", "Anz"] },
+        { "line": "Commodo / Alfa Mist / Anz", "names": ["Commodo", "Alfa Mist", "Anz"] }
+      ],
+      "artists": [{ "name": "Commodo" }, { "name": "Alfa Mist" }, { "name": "Anz" }], "text": "Commodo, Alfa Mist & Anz", "rule": 1, "compilation": false
+    },
+    {
+      "row": "j", "scenario": "NAMES.20", "says": "tracks [Commodo], [Commodo, Alfa Mist]: Commodo alone, Alfa Mist is on only some tracks",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [
+        { "line": "Commodo", "names": ["Commodo"] },
+        { "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }
+      ],
+      "artists": [{ "name": "Commodo" }], "text": "Commodo", "rule": 1, "compilation": false
+    },
+    {
+      "row": "k", "scenario": "NAMES.20", "says": "one track [Alfa Mist] alone, the rest [Commodo, Alfa Mist]: the album artist stays the record's, and Alfa Mist is on every track",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [
+        { "line": "Alfa Mist", "names": ["Alfa Mist"] },
+        { "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] },
+        { "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }
+      ],
+      "artists": [{ "name": "Commodo" }, { "name": "Alfa Mist" }], "text": "Commodo & Alfa Mist", "rule": 1, "compilation": false
+    },
+    {
+      "row": "l", "scenario": "NAMES.20", "says": "every track and the album \"Commodo & Friends\": one artist, no split on a bare \"&\"",
+      "album": { "line": "Commodo & Friends", "names": ["Commodo & Friends"] },
+      "tracks": [
+        { "line": "Commodo & Friends", "names": ["Commodo & Friends"] },
+        { "line": "Commodo & Friends", "names": ["Commodo & Friends"] }
+      ],
+      "artists": [{ "name": "Commodo & Friends" }], "text": "Commodo & Friends", "rule": 1, "compilation": false
+    },
+    {
+      "row": "ft1", "scenario": "NAMES.20", "says": "every track \"Commodo feat. Anz\", album \"Commodo\": Commodo alone; Anz a Featuring credit of each track, never a record artist",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [
+        { "line": "Commodo feat. Anz", "names": ["Commodo feat. Anz"] },
+        { "line": "Commodo feat. Anz", "names": ["Commodo feat. Anz"] }
+      ],
+      "artists": [{ "name": "Commodo" }], "text": "Commodo", "rule": 1, "compilation": false,
+      "track_credits": [
+        [{ "name": "Commodo", "phrase": "feat." }, { "name": "Anz", "role": "featuring" }],
+        [{ "name": "Commodo", "phrase": "feat." }, { "name": "Anz", "role": "featuring" }]
+      ]
+    },
+    {
+      "row": "ft2", "scenario": "NAMES.20", "says": "the album artist \"Commodo feat. Anz\" (the release's own credit, a single): Commodo, with Anz featuring on the record; it prints \"Commodo feat. Anz\", and Anz is no record artist",
+      "album": { "line": "Commodo feat. Anz", "names": ["Commodo feat. Anz"] },
+      "tracks": [{ "line": "Commodo feat. Anz", "names": ["Commodo feat. Anz"] }],
+      "artists": [{ "name": "Commodo", "phrase": "feat." }, { "name": "Anz", "role": "featuring" }], "text": "Commodo feat. Anz", "rule": 1, "compilation": false
+    },
+    {
+      "row": "ft3", "scenario": "NAMES.20", "says": "every track \"Commodo / Alfa Mist\": Commodo, Alfa Mist; \"/\" is a list separator, never a phrase",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [
+        { "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] },
+        { "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }
+      ],
+      "artists": [{ "name": "Commodo" }, { "name": "Alfa Mist" }], "text": "Commodo & Alfa Mist", "rule": 1, "compilation": false
+    },
+    {
+      "row": "a", "scenario": "NAMES.18", "says": "Perspeeks: Various Artists, Secede on 1, 2, 5, 7 and Kettel on 3, 4, 6, 8, no reference: Secede, Kettel in track order; no compilation",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [
+        { "line": "Secede", "names": ["Secede"] }, { "line": "Secede", "names": ["Secede"] },
+        { "line": "Kettel", "names": ["Kettel"] }, { "line": "Kettel", "names": ["Kettel"] },
+        { "line": "Secede", "names": ["Secede"] }, { "line": "Kettel", "names": ["Kettel"] },
+        { "line": "Secede", "names": ["Secede"] }, { "line": "Kettel", "names": ["Kettel"] }
+      ],
+      "artists": [{ "name": "Secede" }, { "name": "Kettel" }], "text": "Secede & Kettel", "rule": 3, "compilation": false
+    },
+    {
+      "row": "b", "scenario": "NAMES.18", "says": "Various Artists, 4 track artists, no reference: the four, in track order; no compilation",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [
+        { "line": "Kite Theory", "names": ["Kite Theory"] }, { "line": "Glass Harbour", "names": ["Glass Harbour"] },
+        { "line": "Low Tide Choir", "names": ["Low Tide Choir"] }, { "line": "Night Ferry", "names": ["Night Ferry"] },
+        { "line": "Kite Theory", "names": ["Kite Theory"] }
+      ],
+      "artists": [{ "name": "Kite Theory" }, { "name": "Glass Harbour" }, { "name": "Low Tide Choir" }, { "name": "Night Ferry" }],
+      "text": "Kite Theory, Glass Harbour, Low Tide Choir & Night Ferry", "rule": 3, "compilation": false
+    },
+    {
+      "row": "c", "scenario": "NAMES.18", "says": "Various Artists, 5 track artists, no reference: Various Artists, a compilation",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [
+        { "line": "Kite Theory", "names": ["Kite Theory"] }, { "line": "Glass Harbour", "names": ["Glass Harbour"] },
+        { "line": "Low Tide Choir", "names": ["Low Tide Choir"] }, { "line": "Night Ferry", "names": ["Night Ferry"] },
+        { "line": "Salt Lines", "names": ["Salt Lines"] }
+      ],
+      "artists": [{ "name": "Various Artists" }], "text": "Various Artists", "rule": 4, "compilation": true
+    },
+    {
+      "row": "d", "scenario": "NAMES.18", "says": "Perspeeks with a MusicBrainz release crediting \"Secede & Kettel\" by two ids: Secede and Kettel by the credit's ids",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [
+        { "line": "Secede", "names": ["Secede"] }, { "line": "Kettel", "names": ["Kettel"] },
+        { "line": "Secede", "names": ["Secede"] }, { "line": "Kettel", "names": ["Kettel"] }
+      ],
+      "sources": [{ "source": "musicbrainz", "entries": [
+        { "name": "Secede", "person": { "source": "musicbrainz", "id": "mb:secede" }, "role": "main", "phrase": "&" },
+        { "name": "Kettel", "person": { "source": "musicbrainz", "id": "mb:kettel" }, "role": "main" }
+      ] }],
+      "artists": [{ "name": "Secede", "id": "mb:secede", "phrase": "&" }, { "name": "Kettel", "id": "mb:kettel" }], "text": "Secede & Kettel", "rule": 2, "compilation": false, "by": ["musicbrainz"]
+    },
+    {
+      "row": "e", "scenario": "NAMES.18", "says": "Various Artists, 3 track artists, its MusicBrainz release crediting Various Artists (89ad4ac3...): Various Artists by the reference's credit, a compilation",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [
+        { "line": "Kite Theory", "names": ["Kite Theory"] }, { "line": "Glass Harbour", "names": ["Glass Harbour"] }, { "line": "Low Tide Choir", "names": ["Low Tide Choir"] }
+      ],
+      "sources": [{ "source": "musicbrainz", "entries": [
+        { "name": "Various Artists", "person": { "source": "musicbrainz", "id": "89ad4ac3-39f7-470e-963a-56509c546377" }, "role": "main" }
+      ] }],
+      "artists": [{ "name": "Various Artists" }], "text": "Various Artists", "rule": 2, "compilation": true, "by": ["musicbrainz"]
+    },
+    {
+      "row": "e2", "scenario": "NAMES.18", "says": "(e)'s twin, credited \"Various\" on Discogs: Various Artists by the reference's credit, a compilation",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [
+        { "line": "Kite Theory", "names": ["Kite Theory"] }, { "line": "Glass Harbour", "names": ["Glass Harbour"] }, { "line": "Low Tide Choir", "names": ["Low Tide Choir"] }
+      ],
+      "sources": [{ "source": "discogs", "entries": [{ "name": "Various", "person": { "source": "discogs", "id": "194" }, "role": "main" }] }],
+      "artists": [{ "name": "Various Artists" }], "text": "Various Artists", "rule": 2, "compilation": true, "by": ["discogs"]
+    },
+    {
+      "row": "f", "scenario": "NAMES.18", "says": "as (b), its album artist spelled \"VA\"",
+      "album": { "line": "VA", "names": ["VA"] },
+      "tracks": [
+        { "line": "Kite Theory", "names": ["Kite Theory"] }, { "line": "Glass Harbour", "names": ["Glass Harbour"] },
+        { "line": "Low Tide Choir", "names": ["Low Tide Choir"] }, { "line": "Night Ferry", "names": ["Night Ferry"] }
+      ],
+      "artists": [{ "name": "Kite Theory" }, { "name": "Glass Harbour" }, { "name": "Low Tide Choir" }, { "name": "Night Ferry" }],
+      "text": "Kite Theory, Glass Harbour, Low Tide Choir & Night Ferry", "rule": 3, "compilation": false
+    },
+    {
+      "row": "g", "scenario": "NAMES.18", "says": "Various Artists, every track Kettel alone, no reference: Kettel (T-NAMES-10)",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [{ "line": "Kettel", "names": ["Kettel"] }, { "line": "Kettel", "names": ["Kettel"] }],
+      "artists": [{ "name": "Kettel" }], "text": "Kettel", "rule": 3, "compilation": false
+    },
+    {
+      "row": "cou10a", "scenario": "COU.10", "says": "Harbour Sampler: twelve track artists, no ALBUMARTIST, no reference: Various Artists, a compilation (row 4)",
+      "album": null,
+      "tracks": [
+        { "line": "A1", "names": ["A1"] }, { "line": "A2", "names": ["A2"] }, { "line": "A3", "names": ["A3"] }, { "line": "A4", "names": ["A4"] },
+        { "line": "A5", "names": ["A5"] }, { "line": "A6", "names": ["A6"] }, { "line": "A7", "names": ["A7"] }, { "line": "A8", "names": ["A8"] },
+        { "line": "A9", "names": ["A9"] }, { "line": "A10", "names": ["A10"] }, { "line": "A11", "names": ["A11"] }, { "line": "A12", "names": ["A12"] }
+      ],
+      "artists": [{ "name": "Various Artists" }], "text": "Various Artists", "rule": 4, "compilation": true
+    },
+    {
+      "row": "cou10a2", "scenario": "COU.10", "says": "Harbour Sampler with R331 picked: its credit is R331's, by musicbrainz (row 2; COU.13 (b)'s credit half)",
+      "album": null,
+      "tracks": [
+        { "line": "A1", "names": ["A1"] }, { "line": "A2", "names": ["A2"] }, { "line": "A3", "names": ["A3"] }, { "line": "A4", "names": ["A4"] },
+        { "line": "A5", "names": ["A5"] }, { "line": "A6", "names": ["A6"] }
+      ],
+      "sources": [{ "source": "musicbrainz", "entries": [{ "name": "Harbour Collective", "person": { "source": "musicbrainz", "id": "mb:r331-credit" }, "role": "main" }] }],
+      "artists": [{ "name": "Harbour Collective", "id": "mb:r331-credit" }], "text": "Harbour Collective", "rule": 2, "compilation": false, "by": ["musicbrainz"]
+    },
+    {
+      "row": "cou10b", "scenario": "COU.10", "says": "Kelpe Rooms: no ALBUMARTIST, its tracks \"Kelpe feat. Anz\": Kelpe alone by row 3, Anz a Featuring credit of his tracks (the coordinator's correction, 08:4x)",
+      "album": null,
+      "tracks": [{ "line": "Kelpe feat. Anz", "names": ["Kelpe feat. Anz"] }, { "line": "Kelpe feat. Anz", "names": ["Kelpe feat. Anz"] }],
+      "artists": [{ "name": "Kelpe" }], "text": "Kelpe", "rule": 3, "compilation": false,
+      "track_credits": [
+        [{ "name": "Kelpe", "phrase": "feat." }, { "name": "Anz", "role": "featuring" }],
+        [{ "name": "Kelpe", "phrase": "feat." }, { "name": "Anz", "role": "featuring" }]
+      ]
+    },
+    {
+      "row": "cou10b2", "scenario": "COU.10", "says": "(b)'s twin with ALBUMARTIST \"Various Artists\": the same",
+      "album": { "line": "Various Artists", "names": ["Various Artists"] },
+      "tracks": [{ "line": "Kelpe feat. Anz", "names": ["Kelpe feat. Anz"] }, { "line": "Kelpe feat. Anz", "names": ["Kelpe feat. Anz"] }],
+      "artists": [{ "name": "Kelpe" }], "text": "Kelpe", "rule": 3, "compilation": false
+    },
+    {
+      "row": "same-boat", "scenario": "CRED.25", "says": "Same Boat: Rowan Fell alone; Oda Brenn features on each of the three tracks and is never a record artist",
+      "album": { "line": "Rowan Fell", "names": ["Rowan Fell"], "ids": ["mb:rf"] },
+      "tracks": [
+        { "line": "Rowan Fell feat. Oda Brenn", "names": ["Rowan Fell feat. Oda Brenn"] },
+        { "line": "Rowan Fell feat. Oda Brenn", "names": ["Rowan Fell feat. Oda Brenn"] },
+        { "line": "Rowan Fell feat. Oda Brenn", "names": ["Rowan Fell feat. Oda Brenn"] }
+      ],
+      "artists": [{ "name": "Rowan Fell", "id": "mb:rf" }], "text": "Rowan Fell", "rule": 1, "compilation": false
+    },
+    {
+      "row": "harbour", "scenario": "CRED.25", "says": "Harbour: the release's own credit features Tamsin Kell (the files' ALBUMARTIST and MusicBrainz's release credit, T-CRED-33): Rowan Fell, Tamsin Kell featuring on the record; it prints \"Rowan Fell feat. Tamsin Kell\"",
+      "album": { "line": "Rowan Fell feat. Tamsin Kell", "names": ["Rowan Fell feat. Tamsin Kell"], "ids": ["mb:rf"] },
+      "tracks": [{ "line": "Rowan Fell", "names": ["Rowan Fell"], "title": "Harbour (feat. Tamsin Kell)" }],
+      "sources": [{ "source": "musicbrainz", "entries": [
+        { "name": "Rowan Fell", "person": { "source": "musicbrainz", "id": "mb:rf" }, "role": "main", "phrase": "feat." },
+        { "name": "Tamsin Kell", "person": { "source": "musicbrainz", "id": "mb:tk" }, "role": "featuring" }
+      ] }],
+      "artists": [{ "name": "Rowan Fell", "id": "mb:rf", "phrase": "feat." }, { "name": "Tamsin Kell", "role": "featuring" }],
+      "text": "Rowan Fell feat. Tamsin Kell", "rule": 1, "compilation": false, "by": ["files", "musicbrainz"]
+    },
+    {
+      "row": "all", "scenario": "CRED.25", "says": "ALL: Yann Tiersen; Kerys Lae features on tracks 4 and 9",
+      "album": { "line": "Yann Tiersen", "names": ["Yann Tiersen"] },
+      "tracks": [
+        { "line": "Yann Tiersen", "names": ["Yann Tiersen"] }, { "line": "Yann Tiersen", "names": ["Yann Tiersen"] },
+        { "line": "Yann Tiersen", "names": ["Yann Tiersen"] }, { "line": "Yann Tiersen feat. Kerys Lae", "names": ["Yann Tiersen feat. Kerys Lae"] },
+        { "line": "Yann Tiersen", "names": ["Yann Tiersen"] }, { "line": "Yann Tiersen", "names": ["Yann Tiersen"] },
+        { "line": "Yann Tiersen", "names": ["Yann Tiersen"] }, { "line": "Yann Tiersen", "names": ["Yann Tiersen"] },
+        { "line": "Yann Tiersen feat. Kerys Lae", "names": ["Yann Tiersen feat. Kerys Lae"] }, { "line": "Yann Tiersen", "names": ["Yann Tiersen"] }
+      ],
+      "artists": [{ "name": "Yann Tiersen" }], "text": "Yann Tiersen", "rule": 1, "compilation": false
+    },
+    {
+      "row": "night-signals", "scenario": "CRED.25", "says": "Night Signals: Rowan Fell; Oda Brenn a main artist of 3, 5 and 6 and featuring on 1 and 4, a track credit (CRED.27 (q2), (q3): 3 and 6 split by the library's separator, printed by credit_text's own join)",
+      "album": { "line": "Rowan Fell", "names": ["Rowan Fell"], "ids": ["mb:rf"] },
+      "tracks": [
+        { "line": "Rowan Fell feat. Oda Brenn", "names": ["Rowan Fell feat. Oda Brenn"] },
+        { "line": "Rowan Fell", "names": ["Rowan Fell"], "title": "Harbour (feat. Tamsin Kell)" },
+        { "line": "Rowan Fell / Oda Brenn", "names": ["Rowan Fell", "Oda Brenn"] },
+        { "line": "Rowan Fell ft. Oda Brenn", "names": ["Rowan Fell ft. Oda Brenn"] },
+        { "line": "Rowan Fell & Oda Brenn", "names": ["Rowan Fell", "Oda Brenn"] },
+        { "line": "Rowan Fell; Oda Brenn", "names": ["Rowan Fell", "Oda Brenn"] }
+      ],
+      "artists": [{ "name": "Rowan Fell", "id": "mb:rf" }], "text": "Rowan Fell", "rule": 1, "compilation": false,
+      "track_credits": [
+        [{ "name": "Rowan Fell", "phrase": "feat." }, { "name": "Oda Brenn", "role": "featuring" }],
+        [{ "name": "Rowan Fell", "phrase": "feat." }, { "name": "Tamsin Kell", "role": "featuring" }],
+        [{ "name": "Rowan Fell" }, { "name": "Oda Brenn" }],
+        [{ "name": "Rowan Fell", "phrase": "ft." }, { "name": "Oda Brenn", "role": "featuring" }],
+        [{ "name": "Rowan Fell", "phrase": "&" }, { "name": "Oda Brenn" }],
+        [{ "name": "Rowan Fell" }, { "name": "Oda Brenn" }]
+      ],
+      "track_texts": ["Rowan Fell feat. Oda Brenn", "Rowan Fell feat. Tamsin Kell", "Rowan Fell & Oda Brenn", "Rowan Fell ft. Oda Brenn", "Rowan Fell & Oda Brenn", "Rowan Fell & Oda Brenn"]
+    },
+    {
+      "row": "m", "scenario": "F54.1", "says": "Chicago Waves: ALBUMARTIST \"Carlos Niño & Miguel Atwood-Ferguson\"; ARTIST \"Carlos Niño\" on 10 files, \"Miguel Atwood-Ferguson\" on 1: record Carlos Niño, Miguel Atwood-Ferguson, in the line's order",
+      "album": { "line": "Carlos Niño & Miguel Atwood-Ferguson", "names": ["Carlos Niño & Miguel Atwood-Ferguson"] },
+      "tracks": [
+        { "line": "Carlos Niño", "names": ["Carlos Niño"] }, { "line": "Carlos Niño", "names": ["Carlos Niño"] }, { "line": "Carlos Niño", "names": ["Carlos Niño"] },
+        { "line": "Carlos Niño", "names": ["Carlos Niño"] }, { "line": "Carlos Niño", "names": ["Carlos Niño"] }, { "line": "Carlos Niño", "names": ["Carlos Niño"] },
+        { "line": "Carlos Niño", "names": ["Carlos Niño"] }, { "line": "Carlos Niño", "names": ["Carlos Niño"] }, { "line": "Carlos Niño", "names": ["Carlos Niño"] },
+        { "line": "Carlos Niño", "names": ["Carlos Niño"] }, { "line": "Miguel Atwood-Ferguson", "names": ["Miguel Atwood-Ferguson"] }
+      ],
+      "artists": [{ "name": "Carlos Niño", "phrase": "&" }, { "name": "Miguel Atwood-Ferguson" }], "text": "Carlos Niño & Miguel Atwood-Ferguson", "rule": 1, "compilation": false
+    },
+    {
+      "row": "n", "scenario": "F54.1", "says": "Going Home: ALBUMARTIST \"Carlos Niño & Friends\", ALBUMARTISTS and ARTISTS [Carlos Niño, Friends], no ids: one, \"Carlos Niño & Friends\" (Friends is a placeholder)",
+      "album": { "line": "Carlos Niño & Friends", "names": ["Carlos Niño", "Friends"] },
+      "tracks": [{ "line": "Carlos Niño & Friends", "names": ["Carlos Niño", "Friends"] }, { "line": "Carlos Niño & Friends", "names": ["Carlos Niño", "Friends"] }],
+      "artists": [{ "name": "Carlos Niño & Friends" }], "text": "Carlos Niño & Friends", "rule": 1, "compilation": false,
+      "track_artists": [["Carlos Niño & Friends"], ["Carlos Niño & Friends"]]
+    },
+    {
+      "row": "n2", "scenario": "F54.1", "says": "as (n), the files pairing \"Friends\" with an id of its own: still one; a placeholder is never an artist, id or not",
+      "album": { "line": "Carlos Niño & Friends", "names": ["Carlos Niño", "Friends"], "ids": ["", "mb:fr"] },
+      "tracks": [{ "line": "Carlos Niño & Friends", "names": ["Carlos Niño", "Friends"], "ids": ["", "mb:fr"] }],
+      "artists": [{ "name": "Carlos Niño & Friends" }], "text": "Carlos Niño & Friends", "rule": 1, "compilation": false
+    },
+    {
+      "row": "n3", "scenario": "F54.1", "says": "ARTISTS [Nicola Conte, Rosalia De Souza], no ids: two (a guard: a list part that is no placeholder is an artist)",
+      "album": { "line": "Nicola Conte & Rosalia De Souza", "names": ["Nicola Conte", "Rosalia De Souza"] },
+      "tracks": [{ "line": "Nicola Conte & Rosalia De Souza", "names": ["Nicola Conte", "Rosalia De Souza"] }],
+      "artists": [{ "name": "Nicola Conte", "phrase": "&" }, { "name": "Rosalia De Souza" }], "text": "Nicola Conte & Rosalia De Souza", "rule": 1, "compilation": false,
+      "track_artists": [["Nicola Conte", "Rosalia De Souza"]]
+    },
+    {
+      "row": "n4", "scenario": "F54.1", "says": "Going Home, production's shape (H7): as (n) with MUSICBRAINZ_ALBUMARTISTID mb:cn for Carlos Niño and mb:fr for Friends: one, the holder of mb:cn, its text the files' whole line (T-DC3-31)",
+      "album": { "line": "Carlos Niño & Friends", "names": ["Carlos Niño", "Friends"], "ids": ["mb:cn", "mb:fr"] },
+      "tracks": [{ "line": "Carlos Niño & Friends", "names": ["Carlos Niño", "Friends"], "ids": ["mb:cn", "mb:fr"] }],
+      "artists": [{ "name": "Carlos Niño", "id": "mb:cn" }], "text": "Carlos Niño & Friends", "rule": 1, "compilation": false,
+      "track_artists": [["Carlos Niño"]]
+    },
+    {
+      "row": "z1", "scenario": "F54.1", "says": "ALBUMARTIST \"Bob Marley & The Wailers\"; one track's ARTIST \"Bob Marley\", the rest the whole line: one (a guard: \"The Wailers\" isn't named whole)",
+      "album": { "line": "Bob Marley & The Wailers", "names": ["Bob Marley & The Wailers"] },
+      "tracks": [
+        { "line": "Bob Marley", "names": ["Bob Marley"] }, { "line": "Bob Marley & The Wailers", "names": ["Bob Marley & The Wailers"] }, { "line": "Bob Marley & The Wailers", "names": ["Bob Marley & The Wailers"] }
+      ],
+      "artists": [{ "name": "Bob Marley & The Wailers" }], "text": "Bob Marley & The Wailers", "rule": 1, "compilation": false
+    },
+    {
+      "row": "z2", "scenario": "F54.1", "says": "ALBUMARTIST \"Friends\" on every file, with its own MusicBrainz id (a band): one artist, \"Friends\" (a guard, T-DC3-38: the placeholder rule is for a credit's parts only)",
+      "album": { "line": "Friends", "names": ["Friends"], "ids": ["mb:friends-band"] },
+      "tracks": [{ "line": "Friends", "names": ["Friends"], "ids": ["mb:friends-band"] }, { "line": "Friends", "names": ["Friends"], "ids": ["mb:friends-band"] }],
+      "artists": [{ "name": "Friends", "id": "mb:friends-band" }], "text": "Friends", "rule": 1, "compilation": false
+    },
+    {
+      "row": "o", "scenario": "F54.1", "says": "Bookends: \"Simon & Garfunkel\" on every file, mb:sg: one (a guard)",
+      "album": { "line": "Simon & Garfunkel", "names": ["Simon & Garfunkel"], "ids": ["mb:sg"] },
+      "tracks": [{ "line": "Simon & Garfunkel", "names": ["Simon & Garfunkel"], "ids": ["mb:sg"] }, { "line": "Simon & Garfunkel", "names": ["Simon & Garfunkel"], "ids": ["mb:sg"] }],
+      "artists": [{ "name": "Simon & Garfunkel", "id": "mb:sg" }], "text": "Simon & Garfunkel", "rule": 1, "compilation": false
+    },
+    {
+      "row": "p", "scenario": "F54.1", "says": "All 'N All: \"Earth, Wind & Fire\": one (a guard)",
+      "album": { "line": "Earth, Wind & Fire", "names": ["Earth, Wind & Fire"] },
+      "tracks": [{ "line": "Earth, Wind & Fire", "names": ["Earth, Wind & Fire"] }, { "line": "Earth, Wind & Fire", "names": ["Earth, Wind & Fire"] }],
+      "artists": [{ "name": "Earth, Wind & Fire" }], "text": "Earth, Wind & Fire", "rule": 1, "compilation": false
+    },
+    {
+      "row": "q", "scenario": "F54.1", "says": "ALBUMARTIST \"Melanie Charles & The Journey\" with one MusicBrainz id: one (a guard; one name with one id pairs whole)",
+      "album": { "line": "Melanie Charles & The Journey", "names": ["Melanie Charles & The Journey"], "ids": ["mb:mcj"] },
+      "tracks": [{ "line": "Melanie Charles & The Journey", "names": ["Melanie Charles & The Journey"], "ids": ["mb:mcj"] }],
+      "artists": [{ "name": "Melanie Charles & The Journey", "id": "mb:mcj" }], "text": "Melanie Charles & The Journey", "rule": 1, "compilation": false
+    },
+    {
+      "row": "r", "scenario": "F54.1", "says": "ALBUMARTIST \"Kruder & Dorfmeister\"; no track names either alone: one (a guard)",
+      "album": { "line": "Kruder & Dorfmeister", "names": ["Kruder & Dorfmeister"] },
+      "tracks": [{ "line": "Kruder & Dorfmeister", "names": ["Kruder & Dorfmeister"] }, { "line": "Kruder & Dorfmeister", "names": ["Kruder & Dorfmeister"] }],
+      "artists": [{ "name": "Kruder & Dorfmeister" }], "text": "Kruder & Dorfmeister", "rule": 1, "compilation": false
+    },
+    {
+      "row": "s", "scenario": "F54.1", "says": "album artist \"Air\"; a track's ARTIST \"Air feat. Beck\", no list tag: Air, main, with the phrase \"feat.\"; Beck a Featuring credit of that track, never a record artist",
+      "album": { "line": "Air", "names": ["Air"] },
+      "tracks": [{ "line": "Air", "names": ["Air"] }, { "line": "Air feat. Beck", "names": ["Air feat. Beck"] }],
+      "artists": [{ "name": "Air" }], "text": "Air", "rule": 1, "compilation": false,
+      "track_credits": [[{ "name": "Air" }], [{ "name": "Air", "phrase": "feat." }, { "name": "Beck", "role": "featuring" }]]
+    },
+    {
+      "row": "t", "scenario": "F54.1", "says": "as (s), ARTISTS [Air, Beck] on that track: Air and Beck, the files name each (a guard)",
+      "album": { "line": "Air", "names": ["Air"] },
+      "tracks": [{ "line": "Air", "names": ["Air"] }, { "line": "Air & Beck", "names": ["Air", "Beck"] }],
+      "artists": [{ "name": "Air" }], "text": "Air", "rule": 1, "compilation": false,
+      "track_credits": [[{ "name": "Air" }], [{ "name": "Air", "phrase": "&" }, { "name": "Beck" }]]
+    },
+    {
+      "row": "u", "scenario": "F54.1", "says": "Deep Harbour's ARTIST \"Commodo / Alfa Mist\" (a spaced slash, the library's separator): Commodo, Alfa Mist (a pin)",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [{ "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }],
+      "artists": [{ "name": "Commodo" }, { "name": "Alfa Mist" }], "text": "Commodo & Alfa Mist", "rule": 1, "compilation": false,
+      "track_credits": [[{ "name": "Commodo" }, { "name": "Alfa Mist" }]]
+    },
+    {
+      "row": "v", "scenario": "F54.1", "says": "\"AC/DC\" and \"30/70\": one each, an unspaced slash is a name (a guard)",
+      "album": { "line": "AC/DC", "names": ["AC/DC"] },
+      "tracks": [{ "line": "30/70", "names": ["30/70"] }, { "line": "AC/DC", "names": ["AC/DC"] }],
+      "artists": [{ "name": "AC/DC" }], "text": "AC/DC", "rule": 1, "compilation": false,
+      "track_credits": [[{ "name": "30/70" }], [{ "name": "AC/DC" }]]
+    },
+    {
+      "row": "w1", "scenario": "F54.1", "says": "(w), corrected for GEN.63 (the coordinator, 08:42): a library whose separators are [\"/\"] reads \"Kruder; Dorfmeister\" as one credit (the caller's split, its names here)",
+      "album": { "line": "Kruder; Dorfmeister", "names": ["Kruder; Dorfmeister"] },
+      "tracks": [{ "line": "Kruder; Dorfmeister", "names": ["Kruder; Dorfmeister"] }],
+      "artists": [{ "name": "Kruder; Dorfmeister" }], "text": "Kruder; Dorfmeister", "rule": 1, "compilation": false
+    },
+    {
+      "row": "w2", "scenario": "F54.1", "says": "(w): one whose separators are [\"/\", \";\"] reads it as two, \";\" a separator never printed",
+      "album": { "line": "Kruder; Dorfmeister", "names": ["Kruder", "Dorfmeister"] },
+      "tracks": [{ "line": "Kruder; Dorfmeister", "names": ["Kruder", "Dorfmeister"] }],
+      "artists": [{ "name": "Kruder" }, { "name": "Dorfmeister" }], "text": "Kruder & Dorfmeister", "rule": 1, "compilation": false
+    },
+    {
+      "row": "x", "scenario": "F54.1", "says": "as (m)'s album line with no track naming either, a MusicBrainz release credit naming Carlos Niño and Miguel Atwood-Ferguson by id, whose names joined are the files' line: two, by the source's ids",
+      "album": { "line": "Carlos Niño & Miguel Atwood-Ferguson", "names": ["Carlos Niño & Miguel Atwood-Ferguson"] },
+      "tracks": [{ "line": "Carlos Niño & Miguel Atwood-Ferguson", "names": ["Carlos Niño & Miguel Atwood-Ferguson"] }, { "line": "Carlos Niño & Miguel Atwood-Ferguson", "names": ["Carlos Niño & Miguel Atwood-Ferguson"] }],
+      "sources": [{ "source": "musicbrainz", "entries": [
+        { "name": "Carlos Niño", "person": { "source": "musicbrainz", "id": "mb:cn" }, "role": "main", "phrase": "&" },
+        { "name": "Miguel Atwood-Ferguson", "person": { "source": "musicbrainz", "id": "mb:maf" }, "role": "main" }
+      ] }],
+      "artists": [{ "name": "Carlos Niño", "id": "mb:cn", "phrase": "&" }, { "name": "Miguel Atwood-Ferguson", "id": "mb:maf" }], "text": "Carlos Niño & Miguel Atwood-Ferguson", "rule": 1, "compilation": false,
+      "by": ["files", "musicbrainz"]
+    },
+    {
+      "row": "y", "scenario": "F54.1", "says": "as (x), the release credit naming Carlos Niño alone: one, the files' line; the source's credit a version that differs (NAMES.22)",
+      "album": { "line": "Carlos Niño & Miguel Atwood-Ferguson", "names": ["Carlos Niño & Miguel Atwood-Ferguson"] },
+      "tracks": [{ "line": "Carlos Niño & Miguel Atwood-Ferguson", "names": ["Carlos Niño & Miguel Atwood-Ferguson"] }],
+      "sources": [{ "source": "musicbrainz", "entries": [{ "name": "Carlos Niño", "person": { "source": "musicbrainz", "id": "mb:cn" }, "role": "main" }] }],
+      "artists": [{ "name": "Carlos Niño & Miguel Atwood-Ferguson" }], "text": "Carlos Niño & Miguel Atwood-Ferguson", "rule": 1, "compilation": false,
+      "by": ["files"], "versions": ["musicbrainz"]
+    },
+    {
+      "row": "22a", "scenario": "NAMES.22", "says": "Deep Harbour with a MusicBrainz release crediting \"Commodo & Alfa Mist\": confirmed, by the files and MusicBrainz",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [{ "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }, { "line": "Anz / Commodo / Alfa Mist", "names": ["Anz", "Commodo", "Alfa Mist"] }],
+      "sources": [{ "source": "musicbrainz", "entries": [{ "name": "Commodo", "role": "main", "phrase": "&" }, { "name": "Alfa Mist", "role": "main" }] }],
+      "artists": [{ "name": "Commodo", "phrase": "&" }, { "name": "Alfa Mist" }], "text": "Commodo & Alfa Mist", "rule": 1, "compilation": false, "by": ["files", "musicbrainz"]
+    },
+    {
+      "row": "22b", "scenario": "NAMES.22", "says": "a MusicBrainz release crediting \"Commodo\" alone: the record's artists stay Commodo and Alfa Mist; MusicBrainz's a version that differs, none chosen",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [{ "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }, { "line": "Anz / Commodo / Alfa Mist", "names": ["Anz", "Commodo", "Alfa Mist"] }],
+      "sources": [{ "source": "musicbrainz", "entries": [{ "name": "Commodo", "role": "main" }] }],
+      "artists": [{ "name": "Commodo" }, { "name": "Alfa Mist" }], "text": "Commodo & Alfa Mist", "rule": 1, "compilation": false, "by": ["files"], "versions": ["musicbrainz"]
+    },
+    {
+      "row": "22c", "scenario": "NAMES.22", "says": "a Discogs release naming Anz, Commodo and Alfa Mist: Anz stays a track credit; Discogs' three a version that differs",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [{ "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }, { "line": "Anz / Commodo / Alfa Mist", "names": ["Anz", "Commodo", "Alfa Mist"] }],
+      "sources": [{ "source": "discogs", "entries": [{ "name": "Anz", "role": "main" }, { "name": "Commodo", "role": "main" }, { "name": "Alfa Mist", "role": "main" }] }],
+      "artists": [{ "name": "Commodo" }, { "name": "Alfa Mist" }], "text": "Commodo & Alfa Mist", "rule": 1, "compilation": false, "by": ["files"], "versions": ["discogs"]
+    },
+    {
+      "row": "24x", "scenario": "NAMES.24", "says": "Deep Harbour with a confirming MusicBrainz credit whose own phrase is \"Commodo x Alfa Mist\": the text is that phrase",
+      "album": { "line": "Commodo", "names": ["Commodo"] },
+      "tracks": [{ "line": "Commodo / Alfa Mist", "names": ["Commodo", "Alfa Mist"] }, { "line": "Anz / Commodo / Alfa Mist", "names": ["Anz", "Commodo", "Alfa Mist"] }],
+      "sources": [{ "source": "musicbrainz", "entries": [{ "name": "Commodo", "role": "main", "phrase": "x" }, { "name": "Alfa Mist", "role": "main" }] }],
+      "artists": [{ "name": "Commodo", "phrase": "x" }, { "name": "Alfa Mist" }], "text": "Commodo x Alfa Mist", "rule": 1, "compilation": false, "by": ["files", "musicbrainz"]
+    }
+  ],
+  "parts": [
+    { "row": "a", "scenario": "CRED.19", "says": "COMPOSER \"Kerys Lae & Yann Tiersen\", no list, no source naming the composers: one name-only credit (a guard)",
+      "parts": [{ "name": "Kerys Lae & Yann Tiersen" }], "then": [{ "name": "Kerys Lae & Yann Tiersen" }] },
+    { "row": "b", "scenario": "CRED.19", "says": "the same with MusicBrainz's work composers Kerys Lae (mb:kl) and Yann Tiersen (mb:yt), their names joined the files' line: two, by MusicBrainz's ids (F54.1 (x))",
+      "parts": [{ "name": "Kerys Lae & Yann Tiersen" }], "source": [{ "name": "Kerys Lae", "id": "mb:kl" }, { "name": "Yann Tiersen", "id": "mb:yt" }],
+      "then": [{ "name": "Kerys Lae", "id": "mb:kl", "phrase": "&" }, { "name": "Yann Tiersen", "id": "mb:yt" }] },
+    { "row": "c", "scenario": "CRED.19", "says": "COMPOSER \"Kerys Lae / Yann Tiersen\" (the library's spaced slash): two",
+      "parts": [{ "name": "Kerys Lae" }, { "name": "Yann Tiersen" }], "then": [{ "name": "Kerys Lae" }, { "name": "Yann Tiersen" }] },
+    { "row": "d", "scenario": "CRED.19", "says": "PERFORMER \"Carlos Niño & Friends (percussion)\": one performer credit, \"Carlos Niño & Friends\" (a guard)",
+      "parts": [{ "name": "Carlos Niño & Friends" }], "whole": ["Carlos Niño"], "then": [{ "name": "Carlos Niño & Friends" }] },
+    { "row": "e", "scenario": "CRED.19", "says": "Discogs' extraartists \"Written-By - Kerys Lae\" and \"Written-By - Yann Tiersen\": two, Discogs names each",
+      "parts": [{ "name": "Kerys Lae", "id": "dc:kl" }, { "name": "Yann Tiersen", "id": "dc:yt" }], "then": [{ "name": "Kerys Lae", "id": "dc:kl" }, { "name": "Yann Tiersen", "id": "dc:yt" }] },
+    { "row": "f1", "scenario": "CRED.19", "says": "(f), corrected for GEN.63: PRODUCER \"Kruder; Dorfmeister\" where the deciding copy's library splits on \"/\" alone: one",
+      "parts": [{ "name": "Kruder; Dorfmeister" }], "then": [{ "name": "Kruder; Dorfmeister" }] },
+    { "row": "f2", "scenario": "CRED.19", "says": "(f): where its library splits on \"/\" and \";\": two",
+      "parts": [{ "name": "Kruder" }, { "name": "Dorfmeister" }], "then": [{ "name": "Kruder" }, { "name": "Dorfmeister" }] },
+    { "row": "m", "scenario": "F54.1", "says": "(m)'s album line, its record's files naming each part whole: split, the line's phrase kept",
+      "parts": [{ "name": "Carlos Niño & Miguel Atwood-Ferguson" }], "whole": ["Carlos Niño", "Miguel Atwood-Ferguson"],
+      "then": [{ "name": "Carlos Niño", "phrase": "&" }, { "name": "Miguel Atwood-Ferguson" }] },
+    { "row": "z1", "scenario": "F54.1", "says": "(z1): \"The Wailers\" isn't named whole: one",
+      "parts": [{ "name": "Bob Marley & The Wailers" }], "whole": ["Bob Marley", "Bob Marley & The Wailers"], "then": [{ "name": "Bob Marley & The Wailers" }] },
+    { "row": "n4", "scenario": "F54.1", "says": "(n4): the files name a placeholder part: one credit, the holder of the other part's id, its text the files' whole line",
+      "parts": [{ "name": "Carlos Niño", "id": "mb:cn", "phrase": "&" }, { "name": "Friends", "id": "mb:fr" }],
+      "then": [{ "name": "Carlos Niño", "id": "mb:cn" }], "text": "Carlos Niño & Friends" },
+    { "row": "n", "scenario": "F54.1", "says": "(n): no ids: one credit, the whole line",
+      "parts": [{ "name": "Carlos Niño", "phrase": "&" }, { "name": "Friends" }], "then": [{ "name": "Carlos Niño & Friends" }] }
+  ]
+}

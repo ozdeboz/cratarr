@@ -151,6 +151,34 @@ pub fn phrase_of<'a>(hand: Option<&'a str>, files: Option<&'a str>, files_name_t
     hand.filter(real).or(files.filter(|_| files_name_the_same).filter(real)).or_else(|| sources.iter().copied().find(real))
 }
 
+/// One artist of a credit as F54's rule names it (SCENARIOS-DC3 F54.1): its name, the id the files or a source pair it with, and
+/// the phrase printed after it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Part {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phrase: Option<String>,
+}
+
+/// A credit's artists as F54 works them out, and the text it prints where that is not its artists' own: the files' whole line, kept
+/// whole by the placeholder rule over a part's id (T-DC3-31).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Parts {
+    pub parts: Vec<Part>,
+    pub text: Option<String>,
+}
+
+/// F54: a credit splits only where the files or a source name each artist (SCENARIOS-DC3 F54.1; the one splitter, used everywhere a
+/// credit string becomes artists). `parts`: the credit as the files name it apart (a list tag, else its line as the library's
+/// separators split it), each with the id the files pair it with and the phrase after it; `whole`: the names the same record's files
+/// name whole (T-DC3-9); `source`: a source's credit for the same record. Red first (3a-1): no rule yet, the parts as given.
+pub fn credit_parts(parts: &[Part], whole: &[&str], source: &[Part]) -> Parts {
+    let _ = (whole, source);
+    Parts { parts: parts.to_vec(), text: None }
+}
+
 /// A track's title as a row shows it beside its credit (CRED.28; the owner, ~14:38, "Trim the title on screen"): its "(feat. X)"
 /// ("ft.", "featuring", in round or square brackets) taken off where the credit names that guest X (by name, case and accents
 /// aside), and that part alone; every other part kept ("[Live]", "(Remix)"); a guest the credit doesn't name, kept. The stored
