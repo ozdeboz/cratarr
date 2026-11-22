@@ -2623,7 +2623,9 @@ async fn the_card_hears_the_incoming_copy_end_to_end() {
     let listed: Vec<String> = card["tracks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect();
     assert_eq!(listed, waiting, "its tracks are the copy's files");
 
-    // Heard once, in the background, by its own files' names.
+    // Heard once, in the background, by its own files' names: begun by an administrator's open of the arrival, never by the card's
+    // GET (LOOKUPS LK.B1).
+    ann.ok(reqwest::Method::POST, "/api/records/open", json!({ "record": id, "from": "incoming" })).await;
     s.until("the copy heard", Duration::from_secs(120), || async {
         let card = ann.get(&format!("/api/albums/cratarr/{id}/card?from={from}")).await;
         card["checks"].as_array().unwrap().iter().any(|c| c["key"] == "sound" && c["state"] != "waiting")

@@ -1,4 +1,5 @@
 # Every non-GET route for SCENARIOS-LOOKUPS LK.0b: ROUTE | PATH | ROOT'S ANSWER | STATE | NOTE | BODY
+DELETE /api/albums/{source}/{album}/covers | /api/albums/cratarr/{had}/covers | 200 | - | the chosen cover let go, in the record's store (DC1a.3c) | {}
 DELETE /api/auth/keys/{id} | /api/auth/keys/x | 404 | - | writes only what is kept | {}
 DELETE /api/auth/sessions/{id} | /api/auth/sessions/x | 404 | - | writes only what is kept | {}
 DELETE /api/catalogue/problems | /api/catalogue/problems | 405 | - | writes only what is kept | {}

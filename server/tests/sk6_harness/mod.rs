@@ -250,9 +250,11 @@ pub fn hidden_left(library: &Path) -> Vec<String> {
 }
 
 /// The intake card of `album` (as Incoming lists it) in `library`, once its sound is heard (as
-/// `the_card_hears_the_incoming_copy_end_to_end` waits for it), read as the server's acting account.
+/// `the_card_hears_the_incoming_copy_end_to_end` waits for it), read as the server's acting account. Its hearing begun as an
+/// administrator's open of the arrival begins it (LOOKUPS LK.B1: the card's GET hears nothing).
 pub async fn heard_card(s: &Server, album: &Value, library: &Path) -> Value {
     let path = format!("/api/albums/cratarr/{}/card?from={}", album["id"].as_str().unwrap(), library.to_string_lossy().replace('/', "%2F"));
+    s.ok(reqwest::Method::POST, "/api/records/open", serde_json::json!({ "record": album["id"], "from": "incoming" })).await;
     let start = Instant::now();
     loop {
         let card = s.get(&path).await;
