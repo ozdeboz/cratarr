@@ -82,6 +82,13 @@ pub fn set_instance(serve: Arc<Serve>) {
     }));
 }
 
+/// Tests: the process's one library unset again, as a test that set it ends (SCENARIOS-CRED's router tests): a test that reads
+/// the process as having none (`home_assistant`'s) never sees another test's.
+#[cfg(any(test, feature = "test-support"))]
+pub fn clear_instance() {
+    *INSTANCE.write().unwrap_or_else(|p| p.into_inner()) = None;
+}
+
 /// The server, for what has no handle to it. A request's code takes it from its `Ctx` (api.rs) or the service it holds
 /// (the app's `served`, `PlaylistService::served`); this stays for what is not handed one: the built-in Cratarr source
 /// (sources are made from their settings alone), work of its own started at boot (the passes that read the web, the

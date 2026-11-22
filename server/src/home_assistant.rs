@@ -139,6 +139,9 @@ const HOOK: &str = "/hook";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn home_assistant_still_reads_every_field_it_uses() {
+    // It reads the process as having no library of its own (`serve::set_instance`; Cratarr's source names a track by it): it waits
+    // while a test that sets one runs (they hold the test state), and each such test unsets it at its end.
+    let _quiet = crate::app::switches::TEST_STATE.read().await;
     let w = Whole::open("home-assistant").await;
     let key = w.key("me", "control");
     let key = key.as_str();
