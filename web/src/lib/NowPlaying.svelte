@@ -548,7 +548,9 @@
           </button>
         {/key}
       {/if}
-      <span class="cover-wait" class:on={coverSlow} aria-hidden="true"><ProgressRing progress={null} size={56} spin /></span>
+      <!-- The ring exists only while the cover is slow (as in CoverWait): an always-mounted spinning SVG, even at opacity
+           0, makes Chromium repaint every frame, ~45% CPU on the ThinkPad with nothing playing (2026-11-23). -->
+      <span class="cover-wait" class:on={coverSlow} aria-hidden="true">{#if coverSlow}<ProgressRing progress={null} size={56} spin />{/if}</span>
     </div>
     <div
       class="controls"
