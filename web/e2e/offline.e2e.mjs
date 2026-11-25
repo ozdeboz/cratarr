@@ -119,7 +119,7 @@ test('Cratarr gone, search finds the library in what the device keeps, says noth
 
   await page.locator('input[type=search]').fill('ana bell');
   await page.getByRole('button', { name: 'Open Ana Bell' }).first().click({ timeout: 20_000 });
-  await page.getByText(/^\d+ albums • \d+ tracks/).first().waitFor({ timeout: 20_000 });
+  await page.getByText(/^\d+ (albums|records|EPs|singles) • \d+ tracks/).first().waitFor({ timeout: 20_000 });
   assert.deepEqual(await page.locator('[role=alert], .toast').allInnerTexts(), [], 'nothing said of what could not be asked');
 });
 
