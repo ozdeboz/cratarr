@@ -15,6 +15,7 @@ doctest = false
 test-support = ["cratarr-listening/test-support", "dep:ts-rs"]
 
 [dependencies]
+cratarr-domain.workspace = true
 cratarr-listening.workspace = true
 cratarr-rules.workspace = true
 anyhow.workspace = true

@@ -9,6 +9,7 @@ pub mod can;
 pub mod change;
 pub mod credited;
 pub mod credits;
+pub mod discover;
 pub mod facts;
 pub mod identity;
 pub mod picture;

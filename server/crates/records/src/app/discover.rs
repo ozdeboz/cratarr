@@ -1209,8 +1209,33 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
     }
     let mut out: Vec<Suggestion> = order.into_iter().filter_map(|k| by.remove(&k).map(|e| e.0)).collect();
     out.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.artist.cmp(&b.artist)));
+    cap_gaps(&mut out);
     out.truncate(MOST);
     out
+}
+
+/// Leaves out of a kept list what the library has now, by name (`Matcher::find_album`).
+fn leave_out_had(albums: &mut Vec<Suggestion>, had: &Matcher) {
+    albums.retain(|s| had.find_album(&s.album, Some(&s.artist)).is_none());
+}
+
+/// No one artist's missing albums take the list's places (0069 amended, 2026-11-25): of the suggestions whose only reason is
+/// a gap in an artist's albums, each artist keeps its newest few (`cratarr_domain::discover`). Before the list is cut to
+/// its length at a look, and as a kept list is read, so a list kept before stops showing them at once.
+fn cap_gaps(albums: &mut Vec<Suggestion>) {
+    let keep = {
+        let cards: Vec<cratarr_domain::discover::Card> = albums
+            .iter()
+            .map(|s| cratarr_domain::discover::Card {
+                artist: &s.artist_key,
+                gap_only: !s.why.is_empty() && s.why.iter().all(|w| w.starts_with("Missing from ")),
+                released: s.released.as_deref(),
+            })
+            .collect();
+        cratarr_domain::discover::gaps_kept(&cards, cratarr_domain::discover::GAPS_PER_ARTIST)
+    };
+    let mut keep = keep.into_iter();
+    albums.retain(|_| keep.next().unwrap_or(true));
 }
 
 /// How well an artist's record fits by how much the account plays them: from 0.4 to 0.9 by how much (the most played
@@ -2822,6 +2847,16 @@ pub fn kept(serve: &crate::serve::Serve, account: &str) -> Result<Option<Found>>
     let mut found: Found = serde_json::from_str(&json).unwrap_or_default();
     let (answered, no_artists, everywhere) = leaves_out(&serve.userdata, account)?;
     found.albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key) && !excluded_everywhere(s, &everywhere));
+    // What the library has now goes at once, not at the next look (0069 amended, 2026-11-25: records imported after the
+    // night's look stayed suggested a day). By name, through the library's shared matcher, which is read again only when
+    // the library is built again; the look compares release groups too.
+    if let Some(dir) = serve.data_dir.as_deref() {
+        match Matcher::library_albums(&dir.join("library.sqlite"), Some(serve.built_at())) {
+            Ok(had) => leave_out_had(&mut found.albums, &had),
+            Err(e) => tracing::info!("discover: the library could not be read to leave out what it has: {e:#}"),
+        }
+    }
+    cap_gaps(&mut found.albums);
     // A look kept before 0.9 said ", which you play" after each reason: read without it.
     for w in found.albums.iter_mut().flat_map(|s| s.why.iter_mut()) {
         if let Some(short) = w.strip_suffix(", which you play") {
@@ -4531,6 +4566,39 @@ mod tests {
         let tw = list.iter().find(|s| s.album == "Talkie Walkie").unwrap();
         assert_eq!(tw.sources, ["MusicBrainz"], "a discography is MusicBrainz's");
         assert_eq!(tw.why, ["Missing from Air's albums"]);
+    }
+
+    /// 0069 amended, 2026-11-25: one artist's missing albums keep their newest few of the list's places; what another source
+    /// named, and other artists' gaps, stay.
+    #[test]
+    fn one_artists_gaps_keep_their_newest_few() {
+        let mut candidates: Vec<Candidate> = (0..12)
+            .map(|n| Candidate {
+                released: Some(format!("{}-01-01", 1970 + n)),
+                ..c(&format!("Dub {n}"), "Lee Perry", Some(&format!("rg-p{n}")), "discography", "Missing from Lee Perry's albums", 0.9)
+            })
+            .collect();
+        candidates.push(c("Super Ape", "Lee Perry", Some("rg-ape"), "lastfm", "Like King Tubby", 0.2));
+        candidates.push(c("Talkie Walkie", "Air", Some("rg-tw"), "discography", "Missing from Air's albums", 0.5));
+        let list = listed(candidates);
+        let perry_gaps: Vec<&str> = list.iter().filter(|s| s.artist == "Lee Perry" && s.why[0].starts_with("Missing")).map(|s| s.album.as_str()).collect();
+        assert_eq!(perry_gaps.len(), cratarr_domain::discover::GAPS_PER_ARTIST);
+        assert!(perry_gaps.contains(&"Dub 11") && !perry_gaps.contains(&"Dub 0"), "the newest stay: {perry_gaps:?}");
+        assert!(list.iter().any(|s| s.album == "Super Ape"), "another source's card is never capped");
+        assert!(list.iter().any(|s| s.album == "Talkie Walkie"), "each artist counts alone");
+    }
+
+    /// 0069 amended, 2026-11-25: a kept list leaves out what the library has now, imported after the look that found it.
+    #[test]
+    fn a_kept_list_leaves_out_what_the_library_has_now() {
+        let mut list = listed(vec![
+            c("10,000 Hz Legend", "Air", Some("rg-l"), "discography", "Missing from Air's albums", 0.9),
+            c("Talkie Walkie", "Air", Some("rg-tw"), "discography", "Missing from Air's albums", 0.9),
+        ]);
+        let mut had = Matcher::default();
+        had.add_album("al-1", "10,000 Hz Legend", Some("AIR"));
+        leave_out_had(&mut list, &had);
+        assert_eq!(list.iter().map(|s| s.album.as_str()).collect::<Vec<_>>(), ["Talkie Walkie"]);
     }
 
     #[test]

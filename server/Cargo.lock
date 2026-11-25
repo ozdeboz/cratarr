@@ -703,6 +703,7 @@ version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
+ "cratarr-domain",
  "cratarr-listening",
  "cratarr-rules",
  "image",
