@@ -7,7 +7,7 @@
 // leaves the page's history as it is, and the page's Back leaves the panel as it is; full screen, over the page, one
 // step of the page's history stands for the trail, so Back (the device's, the browser's) steps back through it.
 
-import { leaveOnArrival } from './navStep.svelte';
+import { clearSearchNow, leaveOnArrival } from './navStep.svelte';
 import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
 import { prefs } from './prefs.svelte';
 import { LABEL } from './labelPage';
@@ -141,7 +141,23 @@ export const panel = $state({
   /** The track a link to `subject` came for (a track's Go to album, a track found by global search): its list scrolls
    *  to it and marks it (lib/reveal). `n` counts the links, so the same one again scrolls to it again. */
   mark: null as { subject: string; track: string; n: number } | null,
+  /** Found deep by these words (a playlist, a crate or an album found by its tracks, decision 0072): the search is emptied as
+   *  it opens (the owner, 2026-11-25: "when following any search result, the search terms should also be removed"), and its
+   *  list marks the tracks the words find, scrolled to the first, as `mark` does one. Its subject is the next one viewed. */
+  found: null as { subject: string | null; q: string; n: number } | null,
 });
+
+/** The next subject viewed was found deep by `q` (lib/globalSearch's leaveSearch). */
+export function markFound(q: string) {
+  panel.found = { subject: null, q, n: (panel.found?.n ?? 0) + 1 };
+}
+/** `found` taken by the subject now viewed, or let go of where another one is. */
+function foundFor(subject: string | null) {
+  const f = panel.found;
+  if (!f) return;
+  if (f.subject === null && subject !== null) panel.found = { ...f, subject };
+  else if (f.subject !== subject) panel.found = null;
+}
 
 const query = () => wordsIn();
 /** The page's address, its own words kept (lib/addresses: the Library's composer, Discover's Spotify playlist…). */
@@ -251,7 +267,10 @@ function guard() {
     // Over the player's own step (App: the player over everything, which a panel opened from it leaves): in its place,
     // not on it, so the player closing takes no step back over the panel (the owner, 2026-11-03: Go to album from the
     // player closed the album it opened, and showed the page).
-    const { player, ...rest } = (history.state ?? {}) as Record<string, unknown>;
+    // Nor the search saved on the step below (lib/globalSearch's rememberSearch): carried here, any move onto the panel's step
+    // brought those words back as if Back had gone to the results (the owner, 2026-11-25: "search terms coming back by another
+    // route than using back").
+    const { player, search: _search, ...rest } = (history.state ?? {}) as Record<string, unknown>;
     const st = { ...rest, panelGuard: true, trail, pk: at };
     if (player) history.replaceState(st, '', location.href);
     else history.pushState(st, '', location.href);
@@ -350,6 +369,7 @@ function swap(names: string[], tab: Tab, how: Step['how'] = 'view') {
  *  page open is a step"), which Back returns from. */
 export function viewSelection(names: string[], tab: Tab = 'tracks', how: 'swap' | 'step' = 'swap') {
   panel.mark = null;
+  foundFor(names[0] ?? null);
   if (!names.length) return closePlaylist();
   const t = isSingleSubject(names[0]) ? 'tracks' : tab;
   panel.playerTop = false;
@@ -421,6 +441,8 @@ export const opening = (subject: string) => panel.viewed === subject && panel.sh
  *  over the navigation (the owner, 2026-10-24). */
 export function goHome() {
   panel.playerTop = false;
+  // On Home already the address does not move, so the page's own emptying never comes: emptied here (the owner, 2026-11-25).
+  if (pageHere() === HOME) clearSearchNow();
   location.hash = hrefOf(HOME);
   // Home's button starts it at its top, from Home itself too (the owner, 2026-10-25); back brings back where it was.
   window.scrollTo(0, 0);
@@ -446,6 +468,7 @@ export const isStep = () => steps.how === 'thing' && steps.n > 1;
 /** Closes the panel, its whole history with it; `then` once the page's history is settled. */
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
+  panel.found = null;
   leave();
   trail = [];
   reached = 'forward';

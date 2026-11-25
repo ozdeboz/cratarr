@@ -2,6 +2,7 @@
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the built-in ones,
   // Unlisted and Home's New for you, Sounds like your week and Grave digging, 0.9.3; and one's own), each a big card (lib/CrateCard, decided 2026-10-16) with its picture and what it holds;
   // a tap views it in the panel (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
+  import { leaveSearch } from './lib/globalSearch.svelte';
   import { panelBeside } from './lib/glass.svelte';
   import { prefs, type CrateOrder } from './lib/prefs.svelte';
   import type { Crate } from './lib/api';
@@ -43,6 +44,12 @@
   // The pill's search (the owner, 2026-10-25): a crate whose name holds every word, or one the server finds by its tracks.
   // Words that make a crate lead with its card, as on every page (App, lib/SearchCrateCard).
   const deepOf = deepMatches('crate', 'crate:');
+  // Opened from a search, the words go, but where it was found by its tracks (lib/globalSearch's leaveSearch), as the
+  // Library's (the owner, 2026-11-25: "when following any search result, the search terms should also be removed").
+  const opened = (id: string) => {
+    if (pageView.query.trim()) leaveSearch(!!deepOf(id));
+    viewPlaylist(CRATE + id);
+  };
   const sorted = $derived.by(() => {
     // The filter's Hide built-in crates (0.9.3): only one's own.
     const noBuiltIn = switchOn('crates', 'no-built-in');
@@ -81,7 +88,7 @@
     <ul class="grid">
       {#each listed.list as c (c.id)}
         <li data-subject={CRATE + c.id}>
-          <CrateCard crate={c} active={panelBeside() && (panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id)} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
+          <CrateCard crate={c} active={panelBeside() && (panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id)} onclick={() => opened(c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
         </li>
       {/each}
     </ul>

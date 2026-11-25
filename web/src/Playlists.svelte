@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { leaveSearch } from './lib/globalSearch.svelte';
   import { playlistLayoutShown } from './lib/layouts';
   import { port } from './lib/player/port.svelte';
   import { askIfMany } from './lib/many.svelte';
@@ -93,6 +94,12 @@
   // The playlists the server finds by their tracks, with why (the owner, 2026-10-25: "Gardner" found none of those
   // holding his tracks).
   const deepOf = deepMatches('playlist', 'playlist:');
+  // Opened from a search, the words go, but where it was found by its tracks (lib/globalSearch's leaveSearch), as the
+  // Library's (the owner, 2026-11-25: "when following any search result, the search terms should also be removed").
+  const opened = (id: string) => {
+    if (pageView.query.trim()) leaveSearch(!!deepOf(id));
+    viewPlaylist(id);
+  };
   // Their facts (length, genres, last played…; GET /api/playlists/stats): asked for while the table shows or the order goes
   // by one (Length, Last played), again when the playlists change; `statsIn` once answered (or failed: none, by name).
   let stats = $state<Record<string, PlaylistStats>>({});
@@ -335,7 +342,7 @@ ${prefs.playlistOrder}`,
             action={quick ? addTo : undefined}
             active={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
             label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `View ${p.name}`}
-            onclick={() => (select.on ? tick(p.id) : viewPlaylist(p.id))}
+            onclick={() => (select.on ? tick(p.id) : opened(p.id))}
             attach={fromAction(longpress, () => () => {
               // In Select it asks what to tick (lib/SelectSheet); else the playlist's menu (decision 0058).
               if (select.on) return void (selectSheet = true);

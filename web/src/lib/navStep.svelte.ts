@@ -30,6 +30,17 @@ function run() {
 
 /** A step: what it leaves let go of when where it goes shows. Called before the move (a tap's), or with `moved` after
  *  it (a page changed, back taken); `until`: the address it goes to, when it takes more than one move. */
+/** The search emptied now, not on arrival (Home on Home, the owner 2026-11-25: "when I press home, I expect the search input
+ *  field to be emptied and collapsed"): the search's part of any step on its way let go of first, so a restore that has not
+ *  shown yet cannot bring the words back over it. Who empties it is lib/globalSearch's `onArrival`. */
+export function clearSearchNow() {
+  if (pending) {
+    const { restore: _r, search: _s, ...rest } = pending.leave;
+    pending = { ...pending, leave: rest };
+  }
+  for (const f of letGo) f({ search: 'clear' });
+}
+
 export function leaveOnArrival(leave: Leave, moved = false, until?: string) {
   pending = arm(pending, leave, untrack(asked), Date.now(), moved, until);
   navPlace.layerHeld = !!pending.leave.layer;

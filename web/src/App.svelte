@@ -72,7 +72,7 @@
   import { chooseType, loadTypes, typeNow, typesOffered } from './lib/recordTypes.svelte';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
   import { globalSearch, pageKinds, readingPending } from './lib/globalSearch.svelte';
-  import { leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
+  import { clearSearchNow, leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
@@ -166,6 +166,9 @@
   // A link in it: the player closes once the page gone to shows (lib/navStep: it covered it meanwhile); anything else
   // there, at once.
   const collapse = (e?: MouseEvent) => {
+    // Only while the player is over the page: a link's step armed with nothing to close raced the page's own emptying of the
+    // search, and the words stayed (the owner, 2026-11-25: Library to Playlists by the side menu kept them).
+    if (!player.full) return;
     if ((e?.target as Element | null)?.closest?.('a[href]')) leavePlayer();
     else player.full = false;
   };
@@ -187,6 +190,8 @@
   function samePage(e: MouseEvent, id: string) {
     if (id !== page) return;
     e.preventDefault();
+    // Home always starts empty, from Home itself too (the owner, 2026-11-25).
+    if (id === HOME.id) clearSearchNow();
     pageEl?.scrollTo({ top: 0, behavior: 'smooth' });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }

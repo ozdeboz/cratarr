@@ -212,7 +212,7 @@
   import { answers, pointAt, type Answer } from './attribution';
   import { lastOf } from './lastChange.svelte';
   import { explainHidden, matchesSearch, pageView, searchLines, searchNone, trackOrders, type TrackOrder } from './pageView.svelte';
-  import { words } from './search';
+  import { matches as matchesWords, words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
   import { swipe } from './swipe';
@@ -1369,6 +1369,19 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // Opened for one of its tracks (lib/reveal; a track's Go to album, a track found by global search, the player's
   // album): the list scrolls to it, in the middle, and marks it as the page marks what the panel shows.
   const marked = $derived(panel.mark?.subject === id ? panel.mark.track : null);
+  // Found deep (lib/panel's `found`): the tracks its words find, marked, the list scrolled to the first (the search itself
+  // emptied as it opened).
+  const foundWords = $derived(panel.found?.subject === id ? words(panel.found.q) : null);
+  const foundHere = (r: PlaylistRow) => !!foundWords && !!r.id && matchesWords(foundWords, r.name ?? r.file, r.artist, r.album);
+  $effect(() => {
+    const f = panel.found;
+    if (!f || f.subject !== id || !listed) return;
+    void f.n;
+    const first = untrack(() => shown?.find((x) => foundHere(x.r))?.r.id);
+    if (!first) return;
+    const sc = scroller;
+    return reveal(() => sc?.querySelector(`[data-track="${CSS.escape(first)}"]`), { block: 'center' });
+  });
   const listed = $derived(!!shown);
   $effect(() => {
     const m = panel.mark;
@@ -2986,7 +2999,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <Row
       size="large"
       title={r.name ?? r.file}
-      active={ok && !selecting && marked === r.id}
+      active={ok && !selecting && (marked === r.id || foundHere(r))}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       cells={columns ? cellsOf(r) : undefined}
       off={!ok || awayDim(r, src)}
@@ -3063,7 +3076,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <Row
       size="large"
       title={movement ?? r.name ?? r.file}
-      active={ok && !selecting && marked === r.id}
+      active={ok && !selecting && (marked === r.id || foundHere(r))}
       sub={albumRowSub(r, notHad, albumHead?.artist)}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}

@@ -12,6 +12,7 @@ import { isSpotifyView } from './discoverModes';
 import { prefs } from './prefs.svelte';
 import { byRelevance, provided, relevance, words, type SearchResult } from './search';
 import { leaveOnArrival, onArrival } from './navStep.svelte';
+import { markFound } from './panel.svelte';
 import { keep } from './searchKept';
 import { beyondFound, beyondSubject, knownOf } from './beyondRows';
 import { untrack } from 'svelte';
@@ -343,12 +344,15 @@ export function rememberSearch() {
 /** The page this one is (lib/panel's key for its step in the history), as last seen here. */
 let page: string | null = null;
 /** A found one opened (a result, a page's own list): kept for back, then the words gone (the owner, 2026-10-25: "When
- *  clicking on a search result, the search input field should always go back to zero"), but where it was found deep, in
- *  its contents: it opens narrowed to them (decision 0072). Gone once what it opened shows (lib/navStep; the owner,
- *  2026-10-30: the results vanished and the page flashed before the panel came). */
+ *  clicking on a search result, the search input field should always go back to zero"; 2026-11-25: "when following any search
+ *  result, the search terms should also be removed and the input field should be collapsed"). Where it was found deep, in
+ *  its contents, its list marks the tracks the words find instead of narrowing to them (lib/panel's `found`). Gone once what
+ *  it opened shows (lib/navStep; the owner, 2026-10-30: the results vanished and the page flashed before the panel came). */
 export function leaveSearch(deep: boolean) {
+  const q = pageView.query.trim();
   rememberSearch();
-  leaveOnArrival({ search: deep ? 'page' : 'clear' });
+  if (deep && q) markFound(q);
+  leaveOnArrival({ search: 'clear' });
 }
 onArrival((l) => {
   if (l.restore) {

@@ -359,9 +359,10 @@
               onkeyup={follow}
               onselect={follow}
               onkeydown={(e) => {
-                // Esc folds it; Enter too, the words kept and the magnifier lit while they apply (the owner, 2026-11-02:
+                // Esc empties and folds it, as ✕ (the owner, 2026-11-25: "Escape should always empty and collapse the search
+                // field"); Enter folds it, the words kept and the magnifier lit while they apply (the owner, 2026-11-02:
                 // "The search input field should auto-close on pressing enter"), the keyboard going with it.
-                if (e.key === 'Escape') searching = false;
+                if (e.key === 'Escape') clear();
                 else if (e.key === 'Enter' && !e.isComposing) {
                   e.preventDefault();
                   field?.blur();
